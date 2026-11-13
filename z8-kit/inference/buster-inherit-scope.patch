@@ -1,0 +1,12 @@
+diff --git a/tools/buster/buster-engine.sh b/tools/buster/buster-engine.sh
+--- a/tools/buster/buster-engine.sh
++++ b/tools/buster/buster-engine.sh
+@@ -25,5 +25,8 @@
+ [ -x "$BUILD_DIR/ds41_generate" ] || BUILD_DIR="$PWD/build-xolotl"
+ LOCK="${BUSTER_GPU_LOCK:-$HOME/.cache/xolotl/buster-gpu.lock}"
+ mkdir -p "$(dirname "$LOCK")"
++if [[ "${Z8_BUSTER_INHERIT_SCOPE:-0}" == 1 ]]; then
++    exec flock "$LOCK" "$BUILD_DIR/ds41_generate" "$@"
++fi
+ exec flock "$LOCK" systemd-run --user --scope -q --unit="buster-ds41-$$" -p MemoryMax=140G -p MemorySwapMax=0 \
+   "$BUILD_DIR/ds41_generate" "$@"

@@ -1,0 +1,26 @@
+services:
+  prepare-store:
+    image: docker.io/library/alpine:3.22
+    pull_policy: missing
+    network_mode: none
+    command: ["mkdir", "-p", "/store/cs/persistent_state", "/store/cms/persistent_state", "/store/ac/persistent_state"]
+    volumes:
+      - mac-store:/store
+    restart: "no"
+
+  cache:
+    image: ghcr.io/buildbarn/bb-storage@sha256:d68594f94f8daeb563dff842b722222add233a0b304e7e7a036950f7d992faeb
+    pull_policy: missing
+    depends_on:
+      prepare-store:
+        condition: service_completed_successfully
+    command: ["/config/cache.jsonnet"]
+    ports:
+      - "127.0.0.1:8980:8980"
+    volumes:
+      - ./cache.jsonnet:/config/cache.jsonnet:ro
+      - mac-store:/store
+    restart: unless-stopped
+
+volumes:
+  mac-store:

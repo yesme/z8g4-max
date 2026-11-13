@@ -1,0 +1,66 @@
+# Merge this fragment under autoinstall; review the storage screen before writing.
+# Fill the FIT udev ID_SERIAL and the two verified paths in this installer session.
+identity:
+  hostname: z8g4-max
+  username: z8user
+  password: REPLACE_WITH_CRYPT_PASSWORD_HASH
+storage:
+  swap:
+    size: 0
+  config:
+    - id: fit
+      type: disk
+      match: {serial: "REPLACE_FIT_ID_SERIAL"}
+      ptable: gpt
+      wipe: superblock
+      grub_device: false
+    - id: p4618-a
+      type: disk
+      match: {path: "/dev/REPLACE_P4618_A"}
+      ptable: gpt
+      wipe: superblock
+      grub_device: false
+    - id: p4618-b
+      type: disk
+      match: {path: "/dev/REPLACE_P4618_B"}
+      ptable: gpt
+      wipe: superblock
+      grub_device: false
+    - id: fit-esp
+      type: partition
+      device: fit
+      number: 1
+      size: 1G
+      flag: boot
+      grub_device: true
+    - id: fit-boot
+      type: partition
+      device: fit
+      number: 2
+      size: 2G
+    - id: raid-a
+      type: partition
+      device: p4618-a
+      number: 1
+      size: -1
+      flag: raid
+      wipe: superblock
+    - id: raid-b
+      type: partition
+      device: p4618-b
+      number: 1
+      size: -1
+      flag: raid
+      wipe: superblock
+    - id: root-raid
+      type: raid
+      name: z8root
+      raidlevel: 0
+      metadata: "1.2"
+      devices: [raid-a, raid-b]
+    - {id: esp-fs, type: format, volume: fit-esp, fstype: fat32}
+    - {id: boot-fs, type: format, volume: fit-boot, fstype: ext4}
+    - {id: root-fs, type: format, volume: root-raid, fstype: xfs}
+    - {id: mount-root, type: mount, device: root-fs, path: /}
+    - {id: mount-boot, type: mount, device: boot-fs, path: /boot}
+    - {id: mount-esp, type: mount, device: esp-fs, path: /boot/efi}

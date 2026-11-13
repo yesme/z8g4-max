@@ -1,0 +1,16 @@
+[Unit]
+Description=Import Z8 RAIDZ1 by GUID
+BindsTo=z8-dmzoned.service
+After=z8-dmzoned.service
+Before=data.mount
+Conflicts=umount.target
+Before=umount.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/sbin/modprobe zfs
+ExecStart=/usr/local/sbin/z8-storage import
+ExecStop=/usr/local/sbin/z8-storage export
+TimeoutStartSec=120
+TimeoutStopSec=90

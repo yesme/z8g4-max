@@ -1,0 +1,13 @@
+# Merge into the project's OS/SDK-specific execution platform.
+_cache_enabled = read_root_config("z8_buildbarn", "enabled", "false") == "true"
+_uploads_enabled = read_root_config("z8_buildbarn", "allow_uploads", "false") == "true"
+
+def local_cached_executor():
+    return CommandExecutorConfig(
+        local_enabled = True,
+        remote_enabled = False,
+        remote_cache_enabled = _cache_enabled,
+        allow_cache_uploads = _cache_enabled and _uploads_enabled,
+        remote_execution_use_case = "buck2-default",
+        remote_output_paths = "output_paths",
+    )

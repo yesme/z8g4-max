@@ -1,0 +1,18 @@
+[Unit]
+Description=Local DeepSeek with dedicated physical CPU cores
+BindsTo=z8-pmem-model.service
+After=z8-pmem-model.service
+ConditionPathIsExecutable=/home/z8user/.config/z8-infer/launch.sh
+
+[Service]
+Type=exec
+User=z8user
+Slice=z8infer.slice
+Nice=-5
+WorkingDirectory=/home/z8user
+ExecCondition=/usr/bin/findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always
+ExecStartPre=+/usr/local/libexec/z8-cpu-mode reserve
+ExecStart=/home/z8user/.config/z8-infer/launch.sh
+ExecStopPost=+/usr/local/libexec/z8-cpu-mode restore
+TimeoutStartSec=60
+TimeoutStopSec=60

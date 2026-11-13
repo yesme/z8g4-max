@@ -1,0 +1,17 @@
+[Unit]
+Description=Linux Buildbarn worker using the shared tiered CAS
+BindsTo=z8-buildbarn.service
+After=z8-buildbarn.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/z8-kit/buildbarn
+Environment=BB_DATA_DIR=/srv/buildbarn/tiered
+ExecStart=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml up -d scheduler runner worker
+ExecStop=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml stop --timeout 30 worker runner scheduler
+TimeoutStartSec=180
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

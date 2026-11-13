@@ -1,0 +1,3 @@
+[buck2]
+sqlite_materializer_state = true
+defer_write_actions = true

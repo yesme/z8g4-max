@@ -1,0 +1,9 @@
+*.zip
+__pycache__/
+*.pyc
+*.log
+.env
+*.env
+!*.env.example
+z8-kit/hybrid.tsv
+z8-kit/pairs.tsv

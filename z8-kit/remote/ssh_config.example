@@ -1,0 +1,14 @@
+Host z8g4-max z8
+    HostName REPLACE_WITH_Z8_LAN_OR_VPN_IP
+    User z8user
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+
+Host z8-ports
+    HostName REPLACE_WITH_Z8_LAN_OR_VPN_IP
+    User z8user
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+    ExitOnForwardFailure yes
+    LocalForward 127.0.0.1:13389 127.0.0.1:3389
+    LocalForward 127.0.0.1:18000 127.0.0.1:18000

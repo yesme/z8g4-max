@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+target=/data/buildbarn
+source=$(findmnt -n -o SOURCE -M "$target") || {
+    echo "Expected z8data/data/buildbarn mounted at $target" >&2
+    exit 1
+}
+[[ $(findmnt -n -o FSTYPE -M "$target") == zfs && "$source" == z8data/data/buildbarn ]] || {
+    echo "Unexpected dataset at $target: $source" >&2
+    exit 1
+}
+export BB_DATA_DIR=${BB_DATA_DIR:-/srv/buildbarn/tiered}
+if [[ $(findmnt -n -o FSTYPE -T "$BB_DATA_DIR") != xfs ]]; then
+    echo "Create the Buildbarn directories on the P4618 XFS before starting." >&2
+    exit 1
+fi
+for store in cs cs-hot cms ac; do
+    [[ -d "$BB_DATA_DIR/$store/persistent_state" ]] || {
+        echo "Missing directory $BB_DATA_DIR/$store/persistent_state" >&2
+        exit 1
+    }
+done

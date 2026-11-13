@@ -1,0 +1,9 @@
+[Unit]
+Requires=z8build-remote.slice
+After=z8build-remote.slice
+
+[Service]
+ExecStart=
+ExecStart=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml -f compose.cpu-layout.yaml up -d scheduler runner worker
+ExecStop=
+ExecStop=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml -f compose.cpu-layout.yaml stop --timeout 30 worker runner scheduler

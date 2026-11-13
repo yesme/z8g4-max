@@ -1,0 +1,139 @@
+# Z8 G4 槽位与 F10 配置
+
+首轮装双 8269CY、散热和内存风道、12 条 DDR4、槽 4 的 P620、槽 7 的 AX210 和两根天线。接显示器后按 Esc → F10。T1/T2 从独立介质启动，P4618 到 T4 才装。拍下 `Main → System Information` 的板号和初始设置。按 [固件更新](FIRMWARE.md) 核 BIOS 与 ME，再按本页配置。槽 7 首轮保持 `Enable`，AX210 的蓝牙 USB 线可同时接好。
+
+## 板上槽位
+
+| HP 槽号 | 实际设备 | F10 目标与 Linux 验证 |
+|---|---|---|
+| 1 | P4618 | 双 CPU 时 Gen3 x8。先保留 Bifurcation Auto，验两组 3.2 TB controller/namespace。若只见一个，先核 Intel 卡内部拓扑及该槽分叉选项 |
+| 2 | x16→x8/x8 直通板 | Gen3 x16，Bifurcation 选 x8/x8，两张 V100，各 x8 |
+| 3 | x16→x8/x8 直通板 | Gen3 x16，由第二颗 CPU 提供，Bifurcation 选 x8/x8，两张 V100，各 x8 |
+| 4 | Quadro P620 | 主显示设备，显示器/虚拟头接在这里 |
+| 5 | P4800X 1.5 TB AIC | Gen3 x4；核 NVMe 序列号、八分区和散热 |
+| 6 | 空，受 P4800X 阻挡 | 保持空槽 |
+| 7 | AX210 转接卡 | x4 槽，Wi-Fi 实际 x1；蓝牙需 USB 线/接头 |
+
+主机验收阶段算力坞断电，四根 PCIe 线断开。主机通过后再逐卡接上、复核槽 2/3 各枚举两个 endpoint。记录 GPU UUID、BDF、`/sys/bus/pci/devices/<BDF>/numa_node` 和 `nvidia-smi topo -m`。用 CUDA H→D 传输时读当前宽度/速率。若此 BIOS 版本只显示 Auto 或其他分叉组合，记录选单原文和直通卡走线，按每槽两张都为 x8 验证。 [HP QuickSpecs](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf) · [Z8 G4 F10 实例，含 Slot Settings](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html)
+
+## F10 首装值
+
+| 路径 | 首装值 |
+|---|---|
+| Advanced → Boot Options | USB Media Boot Enable，Fast Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 首装设 Off，直到坞和主机上电顺序验证。UEFI Boot Order 先用 Samsung FIT 上的 Ubuntu 引导项，F9 可选 Memtest86+ 或救援 USB |
+| Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
+| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），PCIe MMIO Assignment Mode Auto，1TB Memory Cap 首次设 Auto，PCIe ACS 保持当前默认 |
+| Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 和 AX210 蓝牙接用的内部 USB 打开；sSATA 无连接可禁用，按板上实际丝印确认 |
+| Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
+| Advanced → Slot Settings | Slot 2/3 Bifurcation x8/x8，Limit PCIe Speed 先 Auto，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。NVMe 走 Linux mdadm，Intel VROC 关或保留未配置 |
+| Advanced → Performance Options | 验机和正式部署默认 Non-Uniform Memory Access Enabled、Sub-NUMA Clustering Disabled，HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率 |
+| Advanced → Power Management Options | 首次联调可关 PCI Express Power Management（ASPM）和 SATA Power Management，减少链路休眠变量。基线通过后逐项恢复并复跑。SATA Power Management 不负责交错起转 |
+| Security → Security Configuration → System Security | Virtualization Technology (VTx) = Enable，Virtualization Technology for Directed I/O (VTd) = Enable。部分版本将这两项列在 Advanced → System Options |
+| Advanced → NVDIMM Management | 第一次混插只查 12 条模块、固件和当前状态，保留 `NVDIMM Configuration`，跳过 `Apply NVDIMM Configuration`。App Direct goal 在 Xubuntu 提交 |
+| Security → NVDIMM Security Freeze | 按 [T3 的 PMem 流程](PMEM.md#t3-配置-app-direct) 将 `Unfreeze NVDIMMs for this number of boot sequences` 暂设为 `5`，保存后从 F9 启动临时 Xubuntu |
+
+具体项目显示取决于 BIOS 版本和已装设备。以上区分 HP F10 真实项目与要在实机选择的值。 [HP Service Guide，F10 与 POST](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [HP Z8 G4 F10 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html)
+
+`1TB Memory Cap` 是 F10 的平台设置。CPU 每路上限另读 `ipmctl show -socket` 的 `MappedMemoryLimit`。HP 还列出部分 AMD 显卡的整机 1 TiB 兼容限制，本机槽 4 用 NVIDIA P620。T3 核两路 App Direct region，只有在发现平台层截断、菜单提供 `Disable` 时，才保留原 goal 和插条，单改该项冷启对照两路映射。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [PMem 每路容量上限](PMEM.md#每路容量上限)
+
+Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 选择带 UEFI 标记的 Memtest86+、安装盘和 FIT 引导项。装完后以 `test -d /sys/firmware/efi` 和 `LC_ALL=C mokutil --sb-state` 分别确认 UEFI 和 `SecureBoot disabled`。如果之后更新 BIOS 或重置设置，在第一次开机时重新核对这两项。 [HP 固件设置路径](https://support.hp.com/ee-en/document/ish_9642671-9641393-16) · [Ubuntu Secure Boot 文档](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/)
+
+## NUMA 与 SNC
+
+| F10 设置 | 这台双路机器的含义 |
+|---|---|
+| `Non-Uniform Memory Access = Enabled`，`Sub-NUMA Clustering = Disabled` | T1/T2 预期 Linux 看到两个带 CPU 的 DRAM 节点，每颗 8269CY 对应标称 96 GiB。CPU0 可以读写 CPU1 的 DRAM，跨路请求走 UPI。Linux 可优先本地分配，也可让一个进程同时使用两路。 |
+| `Non-Uniform Memory Access = Disabled` | HP 另列 Memory Node Interleave 模式。对称 DDR4 下预期将双路交错呈现成一个 DRAM 节点，实际用 `numactl -H` 核对。两颗 CPU 和 UPI 仍在，跨路访问延迟也仍在，Linux 的 socket 级绑内存会失去原有边界。 |
+| `Sub-NUMA Clustering = Enabled` | SNC 是 Sub-NUMA Clustering。启用两簇模式后，每颗 CPU 内部的两套内存控制器分别与附近的核心和 L3 切片组成一个 NUMA 域，每域三个 DDR4 通道。双路预期可见四个带 CPU 的 DRAM 域，适合将线程与数据一起绑到同一域做延迟优化。混插 PMem 后的 region 与 PCIe 归属需另验。 |
+
+**验机和正式部署默认开 NUMA，SNC 始终关。** 开 NUMA 能给指定 socket 的 96 GiB DDR4 单独施压，便于查单路容量、通道或带宽异常。一个进程仍可使用双路内存，由启动器指定物理页策略。若已决定用一个 DDR4 节点，可以从 T1 就关 NUMA，省去切换；遇到单路问题时再开 NUMA 定位。采用关 NUMA 时，以实际运行配置验 DAX、kmem 和四卡推理。CPU/HT 分核始终按物理 socket 与同核线程生成。 [T3 切换与回退](PMEM.md#验证单-ddr4-节点和-pmem-分层) · [运行时内存策略](CPU-PLACEMENT.md#运行时的-numa-内存策略) · [Z8 G4 F10 菜单实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [HP QuickSpecs，第 21 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=21)
+
+## 内网主机的安全与虚拟化设置
+
+在无坞的主机阶段应用。F10 路径以该机 BIOS 的实际显示为准。HP 的 Z8 G4 F10 实例把 VTx/VTd 列在 Security，HP 服务手册也列出了 Advanced 下的路径。若改变 VTx 或 VTd，保存后关机再上电。 [Z8 G4 F10 菜单实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [HP 服务手册，第 6 章](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf)
+
+| F10 项目 | 设定 |
+|---|---|
+| Virtualization Technology (VTx) | **Enable**。保留 KVM 等虚拟机的 CPU 硬件加速。Xubuntu 裸机执行 Buck2、Docker Engine 和 CUDA，基线按这些进程的实际吞吐评估 |
+| Virtualization Technology for Directed I/O (VTd) | **Enable**。保留设备 DMA remapping 和未来的 VFIO 能力。DMA Protection、Pre-boot DMA Protection 和 PCIe ACS 首轮保留固件默认，接坞后按下面的流程定位 PCIe P2P |
+| Trusted Execution Technology (TXT)、Ready BIOS for Device Guard Use | 保持 Disabled 或未配置。TXT 可能约束 VTx、VTd 和 TPM 的可选状态 |
+| TPM Embedded Security | 这套 XFS 根没有配置 TPM 解锁。确认没有现有 TPM 绑定密钥后，可设 `TPM State = Disable`。`Clear TPM` 保持 No |
+| Advanced → Remote Management Options | `Intel Active Management Technology (AMT) = Disable`，`USB Key Provisioning Support = Disable`。保留 `Intel Management Engine (ME) = Enable`。板载 LAN 保持 Enable，首装和日常远程访问走 AX210 |
+| Advanced → Boot Options / HP Sure Recover | `Network (PXE) Boot = Disable`，`USB Media Boot = Enable`。如有 `HP Sure Recover`，设 Disable，OS 恢复使用已验证的独立救援 U 盘 |
+| Security → BIOS Sure Start / Utilities | 保留 Sure Start 的固件恢复及 `System Management Command` 的默认值。二者分别负责 BIOS 恢复和维修时重置安全设置 |
+| Security → Utilities → Hard Drive Utilities | DriveLock 保持未启用，保证冷启无需逐盘输密码。PMem 的 NVDIMM Security Freeze 单独按 App Direct 初始化步骤临时解冻 |
+
+主机冷启动后记录 CPU 虚拟化标志与内核 IOMMU 状态。VT-x 可用时 `lscpu` 显示 `Virtualization: VT-x`，`vmx` 出现在 CPU flags。仅看到 `DMAR` 表存在时，结合内核日志判断翻译是否启用。
+
+```bash
+LC_ALL=C lscpu | grep '^Virtualization:'
+grep -m 1 -ow vmx /proc/cpuinfo
+cat /proc/cmdline
+sudo journalctl -k -b --no-pager | grep -Ei 'DMAR|IOMMU|Default domain'
+```
+
+### 接坞后的 PCIe P2P
+
+先确认四卡的 NVLink 拓扑与实际选用的传输路径。若将运行 **裸机 GPU 间 PCIe P2P**，在这类数据传输前按 NVIDIA 指引关闭 Intel IOMMU。可在机旁用 GRUB 编辑当次启动项，按 `e` 后在 `linux` 行末追加 `intel_iommu=off`，按 `Ctrl-x` 或 `F10` 启动。BIOS 的 VT-x 和 VT-d 可继续启用。这个内核参数会关闭该次启动的 Intel DMA remapping。用 `/proc/cmdline` 和内核日志确认，再跑带结果校验的 CUDA P2P 和 NCCL，记录六对链路、数据正确性和带宽。普通重启恢复原内核参数。若 PCIe 路径仍异常，再按 GPU 所在桥检查 `ACSCtl`，一次只变一个设置。
+
+```bash
+nvidia-smi topo -m
+nvidia-smi topo -p2p n
+nvidia-smi topo -p2p p
+sudo lspci -Dvv | grep -E '^[[:xdigit:]]{4}:|ACSCtl:'
+```
+
+用 NVLink P2P 矩阵、NCCL 日志和实测数据确认 NVLink，PCIe 能力矩阵用于定位 PCIe 路径。 [NVIDIA NCCL 排查](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/troubleshooting/gpu_troubleshooting.html) · [NVIDIA SMI 拓扑命令](https://docs.nvidia.com/deploy/nvidia-smi/index.html) · [Linux 内核参数](https://docs.kernel.org/admin-guide/kernel-parameters.html)
+
+## 内存分两轮装，DDR4 原位保留
+
+CPU0、CPU1 各有一套编号 1–12 的 DIMM 槽。先在主板上找 `CPU0-DIMM1`、`CPU1-DIMM1` 等丝印，再按下表装。机盖图上的 1–24 若标作 **Load Order**，表示插入先后；下表按每颗 CPU 的 **DIMM 槽号**。
+
+| 操作 | CPU0 | CPU1 |
+|---|---|---|
+| 第一轮只装 DDR4 | 1、3、5、8、10、12 各插一条 16 GiB，合计 96 GiB | 1、3、5、8、10、12 各插一条 16 GiB，合计 96 GiB |
+| DDR4-only 两轮测试通过后加 PMem | 2、4、6、7、9、11 各加一条 128 GiB PMem | 2、4、6、7、9、11 各加一条 128 GiB PMem |
+
+T1 用独立 USB SSD 上的 Xubuntu 26.04.1 短跑双路 CPU。T2 用 F9 从 Memtest86+ U 盘启动，通过后换回临时系统完成 4 小时 DDR4 压测。随后关机断电，**DDR4 原位不动，直接把 PMem 插进空槽**。两边各六条 DDR4 加六条 PMem，共 24 条。第一次混插启动先看 F10 是否认全，再在 [Xubuntu 26.04.1 提交 App Direct goal](PMEM.md)。装每条时记位置和序列号，便于定位 DIMM 错误。 [HP QuickSpecs，第 22 页双路 192 GB](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=22) · [HP Optane 白皮书，第 22 页 24 条混插](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=22)
+
+## SATA0–7、硬盘识别和起转
+
+机箱内用四个原装 3.5 英寸托架。余下三盘用可直通的双 5.25 英寸三盘架或外部固定盘架。先量实际 175 mm 标称深度和连接器空间，确认原装光驱在独立的 9.5 mm 位时两个 5.25 位都可用。选择盘架时保留进风与拉线空间，必要时把后三盘分到外部独立供电且有明确启停顺序的盘架。数据口仍分别接主板 SATA0–6，光驱 SATA7。先给每根线两端贴 SATA 号，再装盘并记序列号。 [HP QuickSpecs，Expansion Bays](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf)
+
+### 先确认系统认盘
+
+先接一块 SATA 版 HC620 到主板 SATA0，断电冷启。成功后依次接 SATA0–3 的四块、SATA0–6 的七块，最后接 SATA7 的光驱。每个配置做至少三次冷启。每轮检查 Linux 是否列齐已接硬盘、序列号是否正确，留意 SATA 链路重置、反复协商和掉盘。SATA0 是主板数据接口编号，Linux 的 `ataN` 和 `/dev/sdX` 以当次枚举为准。按盘身序列号记录物理 SATA 口，建池时用稳定的 `/dev/disk/by-id/ata-…`。 [HP 服务手册，POST 904 SATA 规则](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf)
+
+```bash
+lsblk -d -o NAME,MODEL,SERIAL,TRAN,ZONED,LOG-SEC,PHY-SEC
+sudo journalctl -kb -o short-monotonic | grep -Ei 'ahci|ata[0-9]+:.*(link up|SATA|reset|failed)'
+```
+
+### 认盘以后，检查能否用于 dm-zoned
+
+HC620 把盘面划成许多区，大部分区要求从写入指针起顺序写。**ZAC** 是 SATA 盘报告这些区、执行相关操作的一套命令。这里要确认 Linux 经过实际的 AHCI 端口、数据线和盘架，能识别这条写入限制并读到盘区表。确认后交给 dm-zoned，让 ZFS 使用每对 HC620 + P4800X 生成的普通块设备。下列查询只读。 [Linux dm-zoned 说明](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html)
+
+1. 在上面的 `lsblk` 找到 HC620 的序列号和设备名。按本批 SATA 4Kn 14 TB 配置，七盘都应报告 `TRAN=sata`、`ZONED=host-managed`、`LOG-SEC=4096` 和 `PHY-SEC=4096`。后两项分别是系统寻址扇区和物理扇区的字节数。WD 的 14 TB SATA 4Kn 料号为 `HSH721414ALN6M0` 和 `HSH721414ALN6M4`。看到 `512 / 4096` 时先核盘身料号和订单。 [WD HC620 规格表](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/data-sheet-ultrastar-dc-hc620.pdf)
+2. 把下面的 `/dev/sdX` 换成该序列号对应的**整盘**，例如 `/dev/sdb`。第一条从盘头查两个区。第二条从标准 14 TB HC620 的第 525 个区开始查两个区。WD 手册给出盘头 524 个普通区、每区 256 MiB，所以第二条的偏移是 `524 × 256 MiB ÷ 512 B = 274726912`。这里的偏移单位由 blkzone 固定为 512 B，即使盘是 4Kn 也用这个数。
+
+   ```bash
+   disk=/dev/sdX
+   sudo blkzone report -c 2 "$disk"
+   sudo blkzone report -o 274726912 -c 2 "$disk"
+   ```
+
+   典型结果是盘头 `CONVENTIONAL`（可随机读写）、后段 `SEQ_WRITE_REQUIRED`（按各区写指针写入）。单用 `-c 32` 只读前 32 个区，在 HC620 上会全是 conventional 区。若这批盘布局不同，用 `sudo blkzone report -c 1024 "$disk" | awk '/SEQ_WRITE_REQUIRED/ && !seen++'` 找前 1,024 个区里第一条顺序区记录。若 `ZONED` 是 `none`、无法查区，先试主板 AHCI 直连并核型号和链路，再继续建池。 [盘头区在混合方案里的用途](../storage/README.md#hc620-盘头随机写区在混合方案里的用途) · [WD HC620 §4.4.3](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf#page=23) · [blkzone 手册](https://man7.org/linux/man-pages/man8/blkzone.8.html)
+
+3. `sudo smartctl -x "$disk"` 保存这块二手盘的健康、自检与错误记录。先看型号/序列号、总体健康、已有自检结果、待定或不可校正扇区，再看链路 CRC 错误是否增长。长自检另按 [拷机手册](BURN-IN.md) 运行。`sudo hdparm -I "$disk"` 是补查硬盘自己上报的型号、功能和设置。通常在型号、接口或是否启用上电待机有疑问时才用。`Power-Up In Standby feature set` 出现在支持列表里表示支持，前面的 `*` 才表示该功能启用。 [smartctl 手册](https://manpages.ubuntu.com/manpages/resolute/man8/smartctl.8.html) · [hdparm 手册](https://manpages.ubuntu.com/manpages/resolute/man8/hdparm.8.html)
+
+### 盘完全不转时看 P3，多盘同时起转时再看 P11 与 PUIS
+
+**P3 和 P11 都是硬盘宽的 15 针 SATA 供电插头上的针脚。** 主板 SATA0–7 用的是窄的 SATA 数据插头。
+
+| 术语 | 实际意思 | 这台机何时用到 |
+|---|---|---|
+| **PWDIS / P3** | Power Disable。部分 HC620 的第 3 针是电源禁用信号。旧线束若在 P3 持续送 3.3 V，这些盘的控制电路会停用，马达也不转 | 某块盘完全不转、Linux 也没有盘时，关机后先用已知正常的供电和 SATA0 对照。若怀疑 PWDIS，用明确兼容这台电源、P3 不送 3.3 V 且额定电流足够的供电线或盘架，保持同一条数据线再试 |
+| **P11 / 交错起转** | 供电插头第 11 针。它可参与 SATA 交错起转控制，也可能用于硬盘活动灯。整机是否分批起转还取决于供电接线、背板与控制器 | HP 公开 F10 手册未确认这台 Z8 G4 有交错起转选项。只有要确认启动电流或起转顺序时才测。日志里的 `stag` 只是控制器的能力位，`link up` 是数据链路时刻。实际起转看 12 V 启动电流随时间的变化 |
+| **PUIS** | Power-Up In Standby，上电待机。硬盘电子部分上电，盘片等主机发 ATA 起转命令才转。设置跨断电保留 | 首装保持原状。七盘能稳定冷启就无需启用。盘已有该模式且出现识别问题时，先用一台确认能发起转命令的主机检查，别一次修改七盘 |
+
+按七盘可能同时起转估算线束负担。WD 表 16 较高的测试峰值为每盘 12 V 1.99 A、5 V 0.51 A，七盘相加约 **13.93 A / 3.57 A**，光驱另计。4+3 分路时 12 V 分别约 7.96 A 和 5.97 A，共用上游连接器仍要承受两组之和。先查线束额定值并完成分批冷启。需要确认峰值时，用可捕获短时变化的 DC 电流探头记录。 [WD HC620 表 16、§10.10、§10.16.2](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf) · [WD PWDIS 说明](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/collateral/tech-brief/tech-brief-western-digital-power-disable-pin.pdf)

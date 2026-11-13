@@ -1,0 +1,19 @@
+[Unit]
+Description=Assemble and mount the Z8 App Direct DAX stripe
+After=local-fs.target systemd-udevd.service
+RequiresMountsFor=/usr/local/sbin
+Conflicts=umount.target
+Before=umount.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/z8-storage/pmem-model.env
+ExecStart=/usr/local/sbin/pmem-dax-stripe.sh create ${Z8_PMEM_FS0} ${Z8_PMEM_FS1}
+ExecStart=/usr/bin/mount -t ext4 -o dax=always,noatime,data=ordered,nodiscard /dev/mapper/z8-pmem-model /srv/pmem-model
+ExecStop=/usr/bin/umount /srv/pmem-model
+ExecStop=/usr/sbin/dmsetup remove z8-pmem-model
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

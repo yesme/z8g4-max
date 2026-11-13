@@ -1,0 +1,14 @@
+[Unit]
+Description=Mount Z8 storage dataset
+DefaultDependencies=no
+BindsTo=z8-zpool.service
+After=z8-zpool.service
+Conflicts=umount.target
+Before=umount.target
+
+[Mount]
+What=z8data/data
+Where=/data
+Type=zfs
+Options=rw
+TimeoutSec=60

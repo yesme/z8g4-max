@@ -1,0 +1,14 @@
+[Unit]
+Description=Assemble HC620 and P4800X dm-zoned mappings
+After=local-fs.target systemd-udevd.service
+RequiresMountsFor=/etc/z8-storage /usr/local/sbin
+Conflicts=umount.target
+Before=umount.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/z8-storage map
+ExecStop=/usr/local/sbin/z8-storage unmap
+TimeoutStartSec=180
+TimeoutStopSec=60

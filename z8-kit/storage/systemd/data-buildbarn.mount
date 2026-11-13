@@ -1,0 +1,14 @@
+[Unit]
+Description=Mount Z8 Buildbarn cold storage
+DefaultDependencies=no
+BindsTo=data.mount z8-zpool.service
+After=data.mount z8-zpool.service
+Conflicts=umount.target
+Before=umount.target
+
+[Mount]
+What=z8data/data/buildbarn
+Where=/data/buildbarn
+Type=zfs
+Options=rw
+TimeoutSec=60

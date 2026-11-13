@@ -1,0 +1,4 @@
+# Merge into the desktop user's Sunshine configuration.
+capture = x11
+encoder = nvenc
+upnp = disabled

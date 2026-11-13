@@ -1,0 +1,19 @@
+[Unit]
+Description=Buildbarn with ZFS cold CAS and XFS hot cache
+Requires=docker.service
+BindsTo=data-buildbarn.mount
+After=docker.service data-buildbarn.mount
+RequiresMountsFor=/opt/z8-kit /srv/buildbarn
+AssertPathIsMountPoint=/data/buildbarn
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/z8-kit/buildbarn
+Environment=BB_DATA_DIR=/srv/buildbarn/tiered
+ExecStartPre=/usr/local/sbin/z8-buildbarn-check
+ExecStart=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml up --abort-on-container-exit cache
+ExecStop=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml stop --timeout 30 cache
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

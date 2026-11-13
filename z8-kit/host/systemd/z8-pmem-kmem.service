@@ -1,0 +1,13 @@
+[Unit]
+Description=Online two validated Z8 PMem devices as system RAM
+After=local-fs.target systemd-udevd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/z8-storage/pmem-kmem.env
+ExecStart=/usr/local/sbin/pmem-kmem.sh
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

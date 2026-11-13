@@ -1,0 +1,9 @@
+Explanation: Accept updates within the proprietary Ubuntu desktop R580 driver branch.
+Package: nvidia-driver-580 nvidia-dkms-580
+Pin: version 580.*
+Pin-Priority: 990
+
+Explanation: Reject other NVIDIA driver/DKMS branches or flavours and transitional versions.
+Package: /^nvidia-(driver|dkms)-[0-9]+(-server)?(-open)?$/
+Pin: version /^.+$/
+Pin-Priority: -1

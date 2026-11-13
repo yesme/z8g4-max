@@ -1,0 +1,15 @@
+[global]
+ioengine=libpmem
+thread=1
+iodepth=1
+filename=${PMEM_TEST_FILE}
+size=${PMEM_TEST_SIZE}
+bs=2m
+verify=crc32c
+verify_fatal=1
+refill_buffers=1
+sync=1
+
+[persist-write-verify]
+rw=write
+do_verify=1
