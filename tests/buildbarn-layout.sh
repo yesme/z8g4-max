@@ -30,11 +30,14 @@ if bash check; then
 fi
 rm cold/i4-cas-aging.bin
 bash check
-grep -Fx '{"tib":54,"indexGib":1404}' cold-layout.json
+grep -Fx '{"tib":54,"indexGib":864}' cold-layout.json
 
 # On restart the layout is reused, without reading remaining pool space.
 rm available
 index="$BB_DATA_DIR/cs/key_location_map"
+truncate -s "$((864 * 1024**3))" "$index"
+bash check
+printf '%s\n' '{"tib":54,"indexGib":1404}' > cold-layout.json
 truncate -s "$((1404 * 1024**3))" "$index"
 bash check
 truncate -s "$((54 * 1024**3))" "$index"

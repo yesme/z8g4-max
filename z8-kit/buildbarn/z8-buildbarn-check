@@ -47,8 +47,8 @@ if [[ ! -e "$layout" ]]; then
     }
     temporary=$(mktemp "$layout.XXXXXX")
     trap 'rm -f -- "$temporary"' EXIT
-    # Size for about 5 KiB per indexed chunk at 50% load.
-    printf '{"tib":%s,"indexGib":%s}\n' "$tib" "$((tib * 26))" > "$temporary"
+    # Size for about 8 KiB of encoded data per indexed chunk at 50% load.
+    printf '{"tib":%s,"indexGib":%s}\n' "$tib" "$((tib * 16))" > "$temporary"
     ln -- "$temporary" "$layout"
 fi
 tib=$(jq -er '.tib | select(type == "number" and . == floor and . > 0 and . < 64)' "$layout") || {

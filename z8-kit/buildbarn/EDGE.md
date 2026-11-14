@@ -2,7 +2,7 @@
 
 max 运行唯一的 scheduler 和权威 AC/CAS。max、mini、Mac 的 Buck2 都用 `hardlinking` 实例。Linux 队列匹配 `OSFamily=linux` 和镜像，Darwin 队列匹配 `OSFamily=macos`、`arch=arm64`、`xcode=<版本>`。worker 主机名用来识别机器。先上线 max，再启 mini 和 Mac。 [Buildbarn 队列匹配](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/pkg/scheduler/in_memory_build_queue.go#L608)
 
-两台边缘机器共用 `edge-cache.jsonnet`。CAS 依次查本机 256 GiB 热 CS、表中的冷 CS 和 max。所有索引放热盘，首次从样例复制 `edge-site.json` 时，`coldIndexGiBPerTiB` 为 26。mini 的 640 GiB 冷 CS 配 16.25 GiB，Mac 首装的 512 GiB 配 13 GiB。旧站点配置省略该字段时沿用原比例。采用新比例时停 cache，退役旧冷块文件、索引和持久状态，再写配置并重启。CMS 在热盘留 4 GiB 和 128 MiB 索引，AC 直接查 max，由权威端检查产物完整性。上传直达 max，缓存只在读取时回填。固定版本把 `FindMissing` 交给慢侧，max 不可达时直接用本机执行。 [索引计算](README.md#冷-cs-几何与容量) · [Buildbarn readCaching 源码](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
+两台边缘机器共用 `edge-cache.jsonnet`。CAS 依次查本机 256 GiB 热 CS、表中的冷 CS 和 max。所有索引放热盘，首次从样例复制 `edge-site.json` 时，`coldIndexGiBPerTiB` 为 16。mini 的 640 GiB 冷 CS 配 10 GiB，Mac 首装的 512 GiB 配 8 GiB。已初始化的站点沿用原配置。采用新比例时停 cache，退役旧冷块文件、索引和持久状态，再写配置并重启。CMS 在热盘留 4 GiB 和 128 MiB 索引，AC 直接查 max，由权威端检查产物完整性。上传直达 max，缓存只在读取时回填。固定版本把 `FindMissing` 交给慢侧，max 不可达时直接用本机执行。 [索引计算](README.md#冷-cs-几何与容量) · [Buildbarn readCaching 源码](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
 ## SSH 与目录
 
@@ -62,9 +62,9 @@ done
 
 ### Mac 的四块 CMR 到货后
 
-用磁盘工具将四块可清空的盘分别建为 GPT/APFS，卷名固定为 `FarmCold1` 至 `FarmCold4`。每块 4 TB 名义约 3.64 TiB，取 3 TiB 作块文件。Buildbarn 自己按 digest 分四段，每块盘各建一个稀疏文件，合计 12 TiB。每盘的索引为 78 GiB，共 312 GiB，留在 PM9F1。重建任一盘时使用原卷名和 shard 键，清掉该 shard 的旧索引和持久状态后由 max 回填。守卫要求四盘目录均到位才启动边缘存储。 [Apple APFS 数据卷](https://support.apple.com/guide/disk-utility/file-system-formats-dsku19ed921c/mac) · [Buildbarn sharding 语义](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/proto/configuration/blobstore/blobstore.proto#L317)
+用磁盘工具将四块可清空的盘分别建为 GPT/APFS，卷名固定为 `FarmCold1` 至 `FarmCold4`。每块 4 TB 名义约 3.64 TiB，取 3 TiB 作块文件。Buildbarn 自己按 digest 分四段，每块盘各建一个稀疏文件，合计 12 TiB。每盘的索引为 48 GiB，共 192 GiB，留在 PM9F1。重建任一盘时使用原卷名和 shard 键，清掉该 shard 的旧索引和持久状态后由 max 回填。守卫要求四盘目录均到位才启动边缘存储。 [Apple APFS 数据卷](https://support.apple.com/guide/disk-utility/file-system-formats-dsku19ed921c/mac) · [Buildbarn sharding 语义](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/proto/configuration/blobstore/blobstore.proto#L317)
 
-确认四卷实际已挂载。先退出当前 farm 的 cache LaunchAgent，再把下面字段加到 `edge-site.json`，并确认 `coldIndexGiBPerTiB` 为 26。分别创建各卷的 `buildbarn/cs` 和热盘的 `cs-cmr-1` 至 `cs-cmr-4` 内的 `persistent_state`。重新生成并安装 cache plist，再启动它。此前的 SSD 冷缓存另行清理，热 CS 和 CMS 继续复用。
+确认四卷实际已挂载。先退出当前 farm 的 cache LaunchAgent，再把下面字段加到 `edge-site.json`，并把 `coldIndexGiBPerTiB` 设为 16。分别创建各卷的 `buildbarn/cs` 和热盘的 `cs-cmr-1` 至 `cs-cmr-4` 内的 `persistent_state`。重新生成并安装 cache plist，再启动它。此前的 SSD 冷缓存另行清理，热 CS 和 CMS 继续复用。
 
 ```json
 "coldShards": [
