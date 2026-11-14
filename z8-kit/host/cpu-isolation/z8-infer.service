@@ -15,4 +15,4 @@ ExecStartPre=+/usr/local/libexec/z8-cpu-mode reserve
 ExecStart=/home/z8user/.config/z8-infer/launch.sh
 ExecStopPost=+/usr/local/libexec/z8-cpu-mode restore
 TimeoutStartSec=60
-TimeoutStopSec=60
+TimeoutStopSec=300

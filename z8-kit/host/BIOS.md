@@ -6,7 +6,7 @@
 
 | HP 槽号 | 实际设备 | F10 目标与 Linux 验证 |
 |---|---|---|
-| 1 | P4618 | 双 CPU 时 Gen3 x8。先保留 Bifurcation Auto，验两组 3.2 TB controller/namespace。若只见一个，先核 Intel 卡内部拓扑及该槽分叉选项 |
+| 1 | P4618 | `Bifurcation = Auto`，双 CPU 且未装 Thunderbolt 3 卡时为 Gen3 x8。预期卡上交换芯片为一个 x8 上行口、两个 x4 下行口，连接两个各约 3.2 TB 的 Intel NVMe。按 [T4 的 PCIe 链路检查](BURN-IN.md#p4618-链路与双控制器) 验收 |
 | 2 | x16→x8/x8 直通板 | Gen3 x16，Bifurcation 选 x8/x8，两张 V100，各 x8 |
 | 3 | x16→x8/x8 直通板 | Gen3 x16，由第二颗 CPU 提供，Bifurcation 选 x8/x8，两张 V100，各 x8 |
 | 4 | Quadro P620 | 主显示设备，显示器/虚拟头接在这里 |
@@ -25,7 +25,7 @@
 | Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），PCIe MMIO Assignment Mode Auto，1TB Memory Cap 首次设 Auto，PCIe ACS 保持当前默认 |
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 和 AX210 蓝牙接用的内部 USB 打开；sSATA 无连接可禁用，按板上实际丝印确认 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
-| Advanced → Slot Settings | Slot 2/3 Bifurcation x8/x8，Limit PCIe Speed 先 Auto，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。NVMe 走 Linux mdadm，Intel VROC 关或保留未配置 |
+| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8/x8`。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。`Intel VROC NVMe RAID = Disable`，NVMe 阵列由 Linux mdadm 管理 |
 | Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率 |
 | Advanced → Power Management Options | 首次联调可关 PCI Express Power Management（ASPM）和 SATA Power Management，减少链路休眠变量。基线通过后逐项恢复并复跑。SATA Power Management 不负责交错起转 |
 | Security → Security Configuration → System Security | Virtualization Technology (VTx) = Enable，Virtualization Technology for Directed I/O (VTd) = Enable。部分版本将这两项列在 Advanced → System Options |
@@ -37,6 +37,8 @@
 `1TB Memory Cap` 是 F10 的平台设置。CPU 每路上限另读 `ipmctl show -socket` 的 `MappedMemoryLimit`。HP 还列出部分 AMD 显卡的整机 1 TiB 兼容限制，本机槽 4 用 NVIDIA P620。T3 核两路 App Direct region，只有在发现平台层截断、菜单提供 `Disable` 时，才保留原 goal 和插条，单改该项冷启对照两路映射。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [PMem 每路容量上限](PMEM.md#每路容量上限)
 
 Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 选择带 UEFI 标记的 Memtest86+、安装盘和 FIT 引导项。装完后以 `test -d /sys/firmware/efi` 和 `LC_ALL=C mokutil --sb-state` 分别确认 UEFI 和 `SecureBoot disabled`。如果之后更新 BIOS 或重置设置，在第一次开机时重新核对这两项。 [HP 固件设置路径](https://support.hp.com/ee-en/document/ish_9642671-9641393-16) · [Ubuntu Secure Boot 文档](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/)
+
+槽 1 留给 P4618，整机不装 Thunderbolt 3 扩展卡。P4618 卡上的交换芯片负责把单条 x8 上行分给两个 x4 控制器。若主机把槽 1 拆成 x4/x4，交换芯片的单条上行最多只能按 x4 协商，即使两块 NVMe 仍能枚举，共享上行带宽也会减半。GE 维修手册的 BIOS 2.47、2.68 实例里，Slot 1 有 `Bifurcation`，Slot 5/7 没有，`Intel VROC NVMe RAID` 列在 `Personality Slot CPU0` 下。 [HP 白皮书，第 7 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=7) · [GE BIOS 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [Broadcom PEX 8718 拓扑](https://docs.broadcom.com/doc/12351848)
 
 ## NUMA 与 SNC
 
@@ -75,6 +77,8 @@ sudo journalctl -k -b --no-pager | grep -Ei 'DMAR|IOMMU|Default domain'
 ### 接坞后的 PCIe P2P
 
 先确认四卡的 NVLink 拓扑与实际选用的传输路径。若将运行 **裸机 GPU 间 PCIe P2P**，在这类数据传输前按 NVIDIA 指引关闭 Intel IOMMU。可在机旁用 GRUB 编辑当次启动项，按 `e` 后在 `linux` 行末追加 `intel_iommu=off`，按 `Ctrl-x` 或 `F10` 启动。BIOS 的 VT-x 和 VT-d 可继续启用。这个内核参数会关闭该次启动的 Intel DMA remapping。用 `/proc/cmdline` 和内核日志确认，再跑带结果校验的 CUDA P2P 和 NCCL，记录六对链路、数据正确性和带宽。普通重启恢复原内核参数。若 PCIe 路径仍异常，再按 GPU 所在桥检查 `ACSCtl`，一次只变一个设置。
+
+**另测主机 pinned DDR4 → V100。** 保留固件 VT-d，先用默认启动跑 [pinned-copy](PMEM.md) 和真实 1017 请求，再从 GRUB 临时追加 `iommu.passthrough=1` 跑同一组。同一套 GPU UUID、DDR4 节点策略、模型和批量用来对照。用 `journalctl -k -b -g 'DMAR|Default domain'` 看默认域，若有 GPU 的 `iommu_group/type` 也一并核。直通域省去设备的 DMA 地址翻译，并降低这些设备的 DMA 隔离。101 GiB 除以 4 KiB 得到约 2648 万个基本页，实际 IOMMU 映射粒度和 IOTLB 开销看驱动、硬件和测试。以 H→D GB/s、TTFT 和 decode 的可复现变化决定是否保留本档。本节的主机 DMA 对照独立于上面的 NVIDIA PCIe P2P 要求。 [Linux IOMMU 启动参数](https://docs.kernel.org/admin-guide/kernel-parameters.html) · [NVIDIA 多 GPU IOMMU 指南](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/multi-gpu-systems.html#host-iommu-hardware-pci-access-control-services-and-vms)
 
 ```bash
 nvidia-smi topo -m

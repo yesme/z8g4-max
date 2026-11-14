@@ -60,11 +60,12 @@ def main():
             count = args.infer_per_socket
             if not 1 < count < len(cores):
                 raise ValueError(f"socket {socket} has {len(cores)} cores, invalid inference count {count}")
-            for primary, sibling in cores[:count]:
+            inference_cores = cores[-count:]
+            for primary, sibling in inference_cores:
                 infer.add(primary)
                 infer_siblings.add(sibling)
-            xolotl_pool.update(primary for primary, _ in cores[1:count])
-            for pair in cores[count:]:
+            xolotl_pool.update(primary for primary, _ in inference_cores[1:])
+            for pair in cores[:-count]:
                 build.update(pair)
             print(f"socket {socket}: {count} inference cores, {len(cores) - count} build/general cores")
 
@@ -86,7 +87,7 @@ def main():
             f"Z8_XOLOTL_POOL_CPUS={cpu_list(xolotl_pool)}\n",
             encoding="utf-8",
         )
-        (args.output / "80-z8-cpu.conf").write_text(
+        (args.output / "10-z8-cpu.conf").write_text(
             f"[Slice]\nAllowedCPUs={cpu_list(build | infer)}\n", encoding="utf-8"
         )
         print(f"Inference CPUs: {cpu_list(infer)}")

@@ -2,7 +2,7 @@
   global: {},
   buildDirectoryPath: '/worker/build',
   grpcServers: [{
-    listenPaths: ['/worker/runner'],
+    listenPaths: ['/run/bb-runner/runner.sock'],
     authenticationPolicy: { allow: {} },
   }],
 }

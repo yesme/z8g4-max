@@ -8,7 +8,9 @@
 
 当前 cold block file 由 ZFS 做盘上压缩。Buildbarn 的切块与拼块是本地后端布局，ByteStream zstd 另控制传输。I5 用真实上传和冷读取对比 [冷 CAS 的 `zstd-3`、`lz4` 与 `off`](../storage/README.md#冷-cas-压缩怎么定)。
 
-首次用 `docker compose -f compose.tiered.yaml config` 检查绑定与镜像。试配用上游 11 月镜像标签，首次启动需看日志确认 schema、文件/目录权限、GetCapabilities 和 CAS/AC 读写，再记录实际镜像 digest。`docker compose -p z8-tiered -f compose.tiered.yaml logs --tail 100` 与 `ss -ltn` 可复核。若镜像拒绝热读包装的 schema，可先把 `tiered-cache.jsonnet` 中的 `chunkStorage` 改为其 `slow` backend，用同一冷块与索引跑通，再在当前版 schema 下恢复热读。
+镜像里的 `LocalBlobAccess` 在新块内递增分配偏移，旧块轮转后复用偏移。并发写可交错，文件覆写会触发 ZFS CoW。淘汰动作只把逻辑块归还给 Buildbarn 自己的 allocator，文件对应范围仍存在于 ZFS，下一次覆写后旧物理块才有机会释放。冷 CAS 是可重建数据，给这份 dataset 配快照策略时将它排除，避免把轮转后的历史 extent 长期留在池内。现有布局继续用 HC620 放权威冷块，P4618 放热块和元数据。 [固定镜像的块分配实现](https://github.com/buildbarn/bb-storage/blob/ca3d8b4/pkg/blobstore/local/block_device_backed_block_allocator.go) · [backend 配置定义](https://github.com/buildbarn/bb-storage/blob/main/pkg/proto/configuration/blobstore/blobstore.proto)
+
+首次用 `docker compose -f compose.tiered.yaml config --images` 核镜像引用，用 `config` 核绑定。两个 Linux cache 配置以及 scheduler、worker、runner-installer 都固定到原 11 月 2 日标签的 GHCR 镜像索引 digest，标签供查版本。各索引包含 `linux/amd64`。首次启动需看日志确认 schema、文件/目录权限、GetCapabilities 和 CAS/AC 读写。`docker compose -p z8-tiered -f compose.tiered.yaml logs --tail 100` 与 `ss -ltn` 可复核。若镜像拒绝热读包装的 schema，可先把 `tiered-cache.jsonnet` 中的 `chunkStorage` 改为其 `slow` backend，用同一冷块与索引跑通，再在当前版 schema 下恢复热读。 [Buildbarn GHCR 包](https://github.com/buildbarn/bb-storage/pkgs/container/bb-storage) · [Docker digest 引用](https://docs.docker.com/reference/cli/docker/image/pull/#pull-an-image-by-digest-immutable-identifier)
 
 ```bash
 cd /opt/z8-kit/buildbarn
@@ -21,7 +23,7 @@ sudo stat /data/buildbarn/blocks
 sudo ls -ld /srv/buildbarn/tiered/{cs,cs-hot,cms,ac}
 ```
 
-容器运行后，用 `sudo docker image inspect <实际镜像标签> --format '{{json .RepoDigests}}'` 抄下 digest。运行期比较 `stat`、`du -h` 和 `zfs list`，区分块文件的逻辑大小与实际分配。冷 CS、热 CS 的容量值在 `tiered-cache.jsonnet`，索引与块的配置生成在 `disk.libsonnet`。先记录淘汰间隔、日上传量和命中率，再决定是否加大冷 CS。块文件容量与其持久索引相互关联，变更时优先另开空状态目录和新冷块路径跑一轮，避免用变更后的几何直接读取旧状态。
+容器运行后，用 `sudo docker image inspect <Compose 中的镜像引用> --format '{{json .RepoDigests}}'` 核实际 digest。运行期比较 `stat`、`du -h` 和 `zfs list`，区分块文件的逻辑大小与实际分配。冷 CS、热 CS 的容量值在 `tiered-cache.jsonnet`，索引与块的配置生成在 `disk.libsonnet`。先记录淘汰间隔、日上传量和命中率，再决定是否加大冷 CS。块文件容量与其持久索引相互关联，变更时优先另开空状态目录和新冷块路径跑一轮，避免用变更后的几何直接读取旧状态。
 
 原全闪存 `compose.yaml` 保留作对照。切换时先停 tiered service，两个配置都监听 8980，各用自己的索引与状态目录。
 
@@ -72,9 +74,11 @@ Buck2 自带 Deferred Materialization，RE 产物在本地 action 需要时才�
 
 512 GiB 冷 CS 是 `/data/buildbarn/blocks` 的文件尺寸。Buildbarn 将许多小 blob 放入同一个大文件中的新块，旧块按批次回收。当前 `old/current/new/spare = 8/24/3/3`，每个逻辑块约 13.47 GiB，它负责分配和淘汰。`minChunkSizeBytes=256 KiB` 与 `horizonSizeBytes=2 MiB` 是 CAS 切块参数。ZFS 的 `recordsize=1M` 和盘的 256 MiB zone 各自工作。先保留这几组值。P4618 的 64 GiB 热 CS 对重复读取有用，P4618 上的索引、CMS 和 AC 降低小随机 I/O 延迟。冷 CS `Put` 直接走 ZFS → 七组 dm-zoned → HC620，dm-zoned 可先把写入落到 P4800X。读取进入 old 类的块时，Buildbarn 的刷新可能把 blob 再写一遍，用实测区分刷新、上传和热层回填。 [本地块配置](https://github.com/buildbarn/bb-storage/blob/main/pkg/proto/configuration/blobstore/blobstore.proto) · [read-through 源码](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/readcaching/read_caching_blob_access.go) · [旧对象刷新](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/local/flat_blob_access.go)
 
-1. **上传。** 用一组产生新 digest 的真实目标填入冷库，记录客户端发送字节、构建完成时间、上传耗时和 p95。先测短突发，再测足够长的唯一数据和覆盖，以 `dmsetup status` 的 `cache` 空闲下降、回升和 HC620 写入确认已进入回收阶段。336 GiB 是七段 P4800X 的名义合计，ZFS 压缩、cache 元数据和各盘写入分布都会改变实际临界点。[I4 持续写](../storage/README.md#5-i4-验证实际写入scrub-与缺盘) 用于存储压力验证。真实构建样本用于决定是否要提速。
+1. **上传。** 用一组产生新 digest 的真实目标填入冷库，记录客户端发送字节、构建完成时间、上传耗时和 p95。先测短突发，再继续到旧块淘汰及偏移反复复用阶段。若已采集 Buildbarn 指标，用 cold CS 的 `buildbarn_blobstore_block_device_backed_block_allocator_releases_total` 观察淘汰。用 `dmsetup status` 的 `cache` 空闲下降、回升和 HC620 写入识别回收阶段。对齐时间窗口，比较客户端唯一写入量、`zpool iostat` 的 vdev 写入量和 `iostat` 的实体 HDD/Optane 写入量，记录回收后的稳态带宽和 p99。1,120 GiB 是七段 P4800X 的名义合计，ZFS 压缩、cache 元数据和各盘写入分布会改变实际临界点。 [I4 持续写与覆盖](../storage/README.md#5-i4-验证实际写入scrub-与缺盘)
 2. **首次冷读。** 上传后先用未构建过该目标的隔离目录消费同一批产物。先选未回填热 CS 的新 digest，在 `iostat` 核 HC620 确实发生读，再记录 p95 和字节数。新上传的数据可能还在 dm-zoned cache，做盘侧冷读时要先等这些数据确实迁到 HDD。第二个隔离目录消费同样内容，核 P4618 热层回填后的延迟和盘读量。使用实际 Buck2 消费动作强制物化，避免把 AC hit 当成传输了内容。再加一轮 1/2/4 个并行构建，分别记录小文件与大产物。这能区分 seek 排队与吞吐上限。
 3. **按瓶颈改一项。** 热层命中低且工作集重复时，试 64→128 GiB。冷读慢时，用独立空 dataset 和成对的冷块/索引比较 1 MiB 与 256 KiB `recordsize`，同时看小对象的读放大、冷写和 ZFS 压缩比。写慢时先对比冷库 `zstd-3`/`lz4` 的 CPU 与盘写量，并测同一任务的 P4618 全闪存基线。若长时间写入已由 HC620 持续落盘决定，额外的 SSD 写缓冲只能延长突发吸收期。所有 A/B 保持同一模型负载、Buck2 目标和 CAS 几何，每个新存储实例用自己的元数据。
+
+现有全闪存样例的 CS 是 64 GiB。要比较 512 GiB 冷层进入反复轮转后的表现，另起测试实例，在 P4618 的空测试目录用同一 512 GiB CS 几何、索引大小和请求回放，先核根 XFS 有足够余量。结果能判断是否值得用 P4618 为写密集项目单独开快速缓存实例。 [逻辑和物理 I/O 统计口径](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zpool-iostat.8.html)
 
 在 Linux 工作树 A 和同一提交的干净工作树 B 各执行一次下列命令，替换项目目标标签。分别保存两次的 log，检查缓存查询、AC 命中和本地执行动作数量。
 
@@ -146,7 +150,23 @@ filefrag -sv "$src" "$outdir/explicit"
 
 1. 从 [bb-deployments](https://github.com/buildbarn/bb-deployments) 取固定 SHA。先用原版 hardlinking 示例（P4618 上独立试验目录）验证 scheduler、worker 与 runner，再在当前版本集成 tiered CAS。按 `docker compose -f docker-compose.yml -f /path/to/compose.loopback.override.yaml config` 检查仅 18980 loopback，scheduler 端口不向宿主公布。
 2. 用相同 `-f` 参数执行 `up -d frontend storage-0 storage-1 scheduler runner-installer worker-hardlinking-ubuntu22-04 runner-hardlinking-ubuntu22-04`。`buck2-linux-worker.buckconfig` 与 `linux-worker-executor.bzl.example` 对应 `hardlinking`，镜像 digest/平台值跟实际 scheduler 一致。`buck2 build --remote-only --config-file /path/to/buck2-linux-worker.buckconfig //app:target` 证明任务进入 worker。
-3. `compose.worker.yaml` 加入 scheduler、runner、worker，worker 通过 Docker 内网向同一个 `cache:8980` 读写 CS/CMS/AC。入口将 `hardlinking` 的 Execute 请求转发给 scheduler。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`。先创建 `/srv/buildbarn/tiered/worker`、`/srv/buildbarn/tiered/runner-bin`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。测试 RE 在独立 checkout 的真实目标以及按需下载。若当前镜像、runner 或 toolchain 校验失败，停 worker service 并保留本地执行和缓存。I7 按 [CPU 分核手册](../host/CPU-PLACEMENT.md#生成并安装) 把实际执行构建的 runner 放进构建侧 cgroup。
-4. 先限制 worker 为 8–12 个物理核、约 32 GiB 的 cgroup 预算，避免推理 staging 被抢占。真正的上限用混合负载验证，按实测节点绑定。
+3. `compose.worker.yaml` 加入 scheduler、runner、worker，worker 通过 Docker 内网向同一个 `cache:8980` 读写 CS/CMS/AC。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。服务预建 XFS 上的 `worker/build`、`worker/cache` 与 `runner-bin`，共用 `/run/z8-bb-runner` 上的 socket。runner 启动时清理自己的残留 socket，worker 等 socket 出现再启动。固定镜像的 worker、runner-installer 和 runner 都以 UID 0 启动。用隔离 checkout 验实际 RE、按需下载、worker 停启后 CAS 持续服务。I7 把 runner 放进 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。 [Compose v2.40.3 按服务监控](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/up.go#L177)
+4. Runner 的 `cpus: 12` 是 CPU 时间额度，`concurrency: 4` 是初始活动 action 数，共用 `mem_limit: 32g`。若主要跑单线程编译且队列持续拥堵，单独把 `shared-worker.jsonnet` 的 `concurrency` 改为 8 重启 worker。同一批任务比较构建墙钟时间、峰值内存、OOM、推理 TTFT 与 decode。8 档仍有 CPU/内存余量再试 12。并行链接或多线程 rustc 要单独验，32 GiB 是硬限额，超出时任务可被 OOM 中止。
 
 [上游 Docker Compose](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose) · [Buck2 Buildbarn 样例](https://github.com/facebook/buck2/tree/main/examples/remote_execution/buildbarn)
+
+## 全 XFS 回退
+
+适用于 I4 冷库持续写达不到目标时。先停 tiered 服务，再用 P4618 上单独的 64 GiB CAS 配置跑本地构建。这里新建实例状态，Buck2 首轮会重新填充缓存。
+
+```bash
+sudo systemctl disable --now z8-buildbarn-worker.service z8-buildbarn.service
+cd /opt/z8-kit/buildbarn
+export BB_DATA_DIR=/srv/buildbarn/cache-xfs
+sudo install -d -m 0750 "$BB_DATA_DIR"/{cs,cms,ac}/persistent_state
+test "$(findmnt -n -T "$BB_DATA_DIR" -o FSTYPE)" = xfs &&
+    sudo env BB_DATA_DIR="$BB_DATA_DIR" docker compose -p z8-xfs -f compose.yaml up -d cache
+ss -ltn 'sport = :8980'
+```
+
+先确认 `findmnt` 显示 P4618 的 XFS，再启动 cache。验证 AC/CAS 后用 `buck2-linux.buckconfig` 走本地执行。回到 tiered 前先用同一 Compose 项目和目录环境执行 `down`，再启用原 systemd 服务。

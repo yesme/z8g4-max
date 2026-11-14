@@ -16,14 +16,16 @@ lsblk -e 7 -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN,TYPE,FSTYPE,MOUNTPOINTS
 ls -l /dev/disk/by-id/usb-* /dev/disk/by-id/nvme-*
 ```
 
-确认两个约 3.2 TB 端点属于同一张 P4618 的两个控制器，各取一个唯一整盘 by-id。若仅枚举出一个端点，先按 T4 基线复核槽 1 设置和实际链路，再决定是否用这个端点装 XFS 根。FIT 继续负责引导。Live 缺网时先按 T1 排查；若 Wi-Fi 暂时不可用，可以从已联网的 26.04 系统下载 `mdadm`、`nvme-cli` 和 Live 缺的依赖，带 `.deb` 回来安装。I1.3 负责图形安装器无法接管 RAID/XFS 的情况。 [Intel P4610/P4618 产品资料](https://fenixalliance.swcontentsyndication.com/sw/swchannel/CustomerCenter/documents/19765/76825/dc-p4610-p4618-series-brief.pdf)
+确认两个约 3.2 TB 端点属于同一张 P4618 的两个控制器，各取一个唯一整盘 by-id。若只枚举出一个端点或上行低于 Gen3 x8，回到 [T4 链路检查](BURN-IN.md#p4618-链路与双控制器)，通过后再建 RAID0。FIT 负责引导。Live 缺网时先按 T1 排查。若 Wi-Fi 暂时不可用，可以从已联网的 26.04 系统下载 `mdadm`、`nvme-cli` 和 Live 缺的依赖，带 `.deb` 回来安装。I1.3 负责图形安装器无法接管 RAID/XFS 的情况。 [Intel P4610/P4618 产品资料](https://fenixalliance.swcontentsyndication.com/sw/swchannel/CustomerCenter/documents/19765/76825/dc-p4610-p4618-series-brief.pdf)
 
 | 设备 | 分区 | 用途 |
 |---|---|---|
-| Samsung FIT | 1 GiB FAT32 ESP、2 GiB ext4 | `/boot/efi` 和 `/boot` |
+| Samsung FIT 128 GB | 1 GiB FAT32 ESP、8 GiB ext4 | `/boot/efi` 和 `/boot` |
 | P4618 namespace A | RAID 成员分区 | 与 B 等大 |
 | P4618 namespace B | RAID 成员分区 | 与 A 组 RAID0 |
 | 独立 USB | Xubuntu 或 Ubuntu Server 安装/救援 | 引导、chroot、恢复 |
+
+FIT 的 8 GiB ext4 留给当前内核、上一个通过验收的内核、新版试启项以及生成 initramfs 的临时空间。R580 默认用配套的预编译模块，实际 initramfs 大小在 I3 安装后用 `du -h /boot/initrd.img-*` 记录。ESP 单独保留 1 GiB。
 
 ### I1.2 Live 中预建阵列，再检查图形安装器
 
@@ -39,11 +41,11 @@ findmnt /cdrom
 sudo wipefs -n "$FIT" "$A" "$B"
 ```
 
-保持在同一终端执行。md chunk 采用 512 KiB。内核认到新分区后才建阵列并格式化。
+保持在同一终端执行。首装沿用 md 的 512 KiB chunk。128 KiB 会让中等连续 I/O 更早跨成员，多进程的小文件也可能通过不同逻辑地址分散到两个成员。XFS extent、实际请求尺寸、队列和两端点共享的板卡链路都会影响结果。比较请在两个端点仍可清空时做，用相同 XFS 几何规则、Buck2 冷构建和 Buildbarn 热读回放测试 128/512 KiB，同时记录每端点吞吐、队列和 p95。选择 128 KiB 时同时用 `mdadm --chunk=128` 和 `mkfs.xfs -d su=128k,sw=2`，安装后用 `xfs_info /` 复核。已有系统盘要改 chunk 需备份重建。 [Ubuntu mdadm chunk 默认值](https://manpages.ubuntu.com/manpages/resolute/man8/mdadm.8.html) · [Ubuntu mkfs.xfs 条带对齐](https://manpages.ubuntu.com/manpages/resolute/man8/mkfs.xfs.8.html)
 
 ```bash
 sudo sgdisk --clear -n 1:0:+1G -t 1:ef00 -c 1:Z8-ESP \
-    -n 2:0:+2G -t 2:8300 -c 2:Z8-BOOT "$FIT" &&
+    -n 2:0:+8G -t 2:8300 -c 2:Z8-BOOT "$FIT" &&
 sudo sgdisk --clear -n 1:0:0 -t 1:fd00 -c 1:Z8-RAID-A "$A" &&
 sudo sgdisk --clear -n 1:0:0 -t 1:fd00 -c 1:Z8-RAID-B "$B" &&
 sudo partprobe "$FIT" "$A" "$B" &&
@@ -61,7 +63,7 @@ cat /proc/mdstat
 核对详情是 RAID0、两个正确成员且均在线。然后建三个文件系统，查看而不挂载：
 
 ```bash
-sudo mkfs.xfs -m crc=1,reflink=1 -L z8root /dev/md/z8root
+sudo mkfs.xfs -d su=512k,sw=2 -m crc=1,reflink=1 -L z8root /dev/md/z8root
 sudo mkfs.fat -F 32 -n Z8ESP "${FIT}-part1"
 sudo mkfs.ext4 -L z8boot "${FIT}-part2"
 lsblk -o NAME,PATH,SIZE,FSTYPE,LABEL,MOUNTPOINTS "$FIT" "$A" "$B"
@@ -72,7 +74,7 @@ lsblk -o NAME,PATH,SIZE,FSTYPE,LABEL,MOUNTPOINTS "$FIT" "$A" "$B"
 | 安装器必须认得的设备 | 分配 |
 |---|---|
 | 已组装的 `z8root` | XFS，挂 `/` |
-| FIT 的 2 GiB ext4 | 挂 `/boot` |
+| FIT 的 8 GiB ext4 | 挂 `/boot` |
 | FIT 的 1 GiB FAT32 ESP | EFI 系统分区，挂 `/boot/efi` |
 
 任一项无法选择，或预览显示会重建 P4618 成员，就退出图形安装器，在写盘前转 I1.3。Canonical 桌面安装器的 mdadm 支持问题仍开放，能否接管这组预建布局需在目标 Live 环境看安装器结果。 [Canonical Desktop 安装器的 mdadm 进度](https://github.com/canonical/ubuntu-desktop-provision/issues/1210)
@@ -194,7 +196,68 @@ nvidia-smi --query-gpu=name,pci.bus_id,driver_version --format=csv
 sudo journalctl -k -b -g 'NVRM|Xid'
 ```
 
-确认 P620 正常、R580 已加载、SSH 仍能登录，按远程手册验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与快速 CUDA/NCCL，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
+确认 P620 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与快速 CUDA/NCCL，并在 Moonlight 串流时再核一次捕获的显示接口和 P620 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
+
+## 固定 GA 轨道并试启新内核
+
+两套测试系统分别记录实际 ABI。临时 Xubuntu 在 T1 安装微码和当前 GA 更新后记录 `uname -r`，后续测试一直从该项启动。正式安装的 ISO、APT 和 R580 预编译模块若带来不同 ABI，在 I3 复跑 CUDA/NCCL，在 I4 复验 ZFS 与 dm-zoned。冻结从各自跑通所需组件后开始，等 I7 通过解除正式系统的 hold。临时系统的 hold 无法跨到新装系统。 [Ubuntu 内核轨道](https://documentation.ubuntu.com/kernel/reference/hwe-kernels/) · [Ubuntu 自动安全更新](https://documentation.ubuntu.com/security/security-updates/#automatic-security-updates)
+
+```bash
+sudo install -m 0644 host/z8-no-hwe.pref.example /etc/apt/preferences.d/z8-no-hwe
+sudo install -m 0644 host/51z8-kernel-manual.example /etc/apt/apt.conf.d/51z8-kernel-manual
+dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'linux-generic*' 'linux-modules-nvidia-*'
+apt-cache policy linux-generic linux-generic-hwe-26.04 linux-modules-nvidia-580-generic
+apt-config dump | grep -F 'Unattended-Upgrade::Package-Blacklist'
+sudo unattended-upgrade --dry-run
+# GA 元包已装时，验机期间在当前系统 hold。
+sudo apt-mark hold linux-generic linux-image-generic linux-headers-generic
+apt-mark showhold
+```
+
+I3 安装 R580 后，在正式系统追加驱动 hold。
+
+```bash
+sudo apt-mark hold linux-modules-nvidia-580-generic
+apt-mark showhold
+```
+
+I7 通过后，在正式系统运行 `sudo apt-mark unhold linux-generic linux-image-generic linux-headers-generic linux-modules-nvidia-580-generic`。已经装过 HWE 的系统先装 GA 和配套模块并验证可启动，再移除 HWE 元包。上述 blacklist 只影响 unattended-upgrades。安排手动维护更新被排除的包，并用 `apt-get -s dist-upgrade` 检查升级集。要停用跨 Ubuntu 发行版提示，在 `/etc/update-manager/release-upgrades` 的现有 `[DEFAULT]` 段设 `Prompt=never`，继续更新 26.04 的软件源。
+
+在插显示器时演练一次 GRUB 回滚。在 `/etc/default/grub.d/55-z8-saved.cfg` 写 `GRUB_DEFAULT=saved`、`GRUB_TIMEOUT_STYLE=menu`、`GRUB_TIMEOUT=5` 三行。在 `findmnt -M /boot` 确认源为 FIT 上独立 ext4，再执行下列命令。子菜单用 `父菜单 ID>子菜单 ID`，都从当前 `grub.cfg` 抄。用固定 ABI 的普通菜单项，避免默认项随新内核移动。 [Ubuntu grub-reboot](https://manpages.ubuntu.com/manpages/resolute/man8/grub-reboot.8.html)
+
+```bash
+findmnt -M /boot -o SOURCE,FSTYPE,OPTIONS
+df -h /boot /boot/efi
+du -h /boot/initrd.img-* /boot/vmlinuz-*
+sudo update-grub
+sudo grep -E '^[[:space:]]*(submenu|menuentry) ' /boot/grub/grub.cfg
+old_abi=$(uname -r)
+old_entry='REPLACE_SUBMENU_ID>REPLACE_OLD_KERNEL_MENUENTRY_ID'
+sudo grub-set-default "$old_entry"
+sudo grub-editenv list
+dpkg-query -W "linux-image-$old_abi" "linux-modules-$old_abi" \
+    "linux-modules-extra-$old_abi" "linux-modules-nvidia-580-$old_abi"
+# 把上面确实已安装的四项标为 manual，防止自动清理回退 ABI。
+sudo apt-mark manual "linux-image-$old_abi" "linux-modules-$old_abi" \
+    "linux-modules-extra-$old_abi" "linux-modules-nvidia-580-$old_abi"
+sudo apt update
+sudo apt-get -s dist-upgrade
+# 把新 ABI 填作 7.0.0-N-generic，包含末尾的 -generic。
+new_abi=REPLACE_NEW_ABI
+apt-cache policy "linux-modules-nvidia-580-$new_abi"
+```
+
+模拟需包含目标 ABI 和对应 R580 模块，无意外卸载后才执行已审阅的升级。装完用 `modinfo -k "$new_abi" nvidia`、`modinfo -k "$new_abi" zfs`、`modinfo -k "$new_abi" dm_zoned` 查模块，并核 NVIDIA 用户态与保留的旧 ABI 模块版本也兼容。单次引导只回退内核，若同一交易升级了用户态驱动或 ZFS，旧 ABI 与新用户态仍需配套验证。试启前先停止作业。
+
+```bash
+sudo grep -E '^[[:space:]]*(submenu|menuentry) ' /boot/grub/grub.cfg
+new_entry='REPLACE_SUBMENU_ID>REPLACE_NEW_KERNEL_MENUENTRY_ID'
+sudo grub-reboot "$new_entry"
+sudo grub-editenv list
+sudo systemctl reboot
+```
+
+新内核起来后，核 `uname -r`、`grub-editenv list` 中 `next_entry` 已消费，并从客户端验证 Wi-Fi SSH。再查 `nvidia-smi -L`、`zpool status -x z8data`、`sudo dmsetup status --target zoned` 的七个成员、模型卷的实际挂载点、`sudo daxctl list` 两路 online 和 `sudo journalctl -k -b -p err`。成功才 `sudo grub-set-default "$new_entry"`。若试启失联，机旁优先用控制台重启或从 GRUB 选择旧项。先在本机验证一次性项确实被消费，才依赖下一次重启回旧项。
 
 ## 算力坞验收
 

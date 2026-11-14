@@ -3,4 +3,4 @@ date_cst,sku,variant,condition,seller,region,currency,quantity,total_delivered,i
 ,Intel PMem 100 128GB,exact part number,,,,CNY,12,,,,,
 ,Intel P4618 6.4TB,AIC,,,,CNY,1,,,,,
 ,Intel P4800X 1.5TB,AIC,,,,CNY,1,,,,,
-,WD HC620 14TB,SAS or SATA,,,,CNY,7,,,,,
+,WD HC620 14TB,SATA 6 Gb/s 4Kn host-managed SMR (HSH721414ALN6M0 or HSH721414ALN6M4),,,,CNY,7,,,,,

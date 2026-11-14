@@ -6,7 +6,9 @@ F10 固定 NUMA 开、SNC 关。以下 `--interleave=0,1` 中的 `0,1` 是示例
 
 ## 先挂 PMem，再准备文件
 
-模型、Engram、DSpark 和 tokenizer 从第一次下载起就放到约 510 GiB 的 App Direct 条带卷。先启 [PMem 模型卷](../host/PMEM.md#i4-在正式系统复用-pmem)，再以 `z8user` 登录准备目录。若容器启动，模型卷用相同绝对路径 bind mount，权重目录只读，启用持久 KV 的试验才给专用缓存目录写权限。
+模型、Engram、DSpark 和 tokenizer 从第一次下载起就放到 PMem。以下通用启动命令用名义 516 GiB、块设备约 508 GiB 的 App Direct 条带卷。先启 [PMem 模型卷](../host/PMEM.md#i4-在正式系统复用-pmem)，再以 `z8user` 登录准备目录。若容器启动，模型卷用相同绝对路径 bind mount，权重目录只读，启用持久 KV 的试验才给专用缓存目录写权限。
+
+要在组条带前验证 1017 的 NUMA 本地性，按两个本地卷的清单下载分片，使用相同 `DS41_GGUF` / `DS41_ENGRAM` 参数指向实体文件和链接所在目录，前台运行并核两处挂载。 [两个本地卷的文件布局](../host/PMEM.md#两个本地卷的-1017-文件布局)
 
 ```bash
 PMEM=/srv/pmem-model
@@ -16,7 +18,7 @@ sudo install -d -m 0750 -o z8user -g "$(id -gn z8user)" \
 df -h "$PMEM"
 ```
 
-llama.cpp 和本页固定的 Xolotl 先共用同一套 ISTA IQ2_XXS 主体和 IQ4_NL Engram，约 249 GB（232 GiB）。1Cat #1277 的独立四分片参考套装另占约 249 GB。若两套都下载，在约 510 GiB 条带卷上名义只剩约 46 GiB，先扣除文件系统开销并核算 draft、缓存和临时文件。若另试 Xolotl raw Engram 参考套装，先安排轮换。用 `df -h` 检查实际可用量，下载和重组的临时文件也放 PMem。保留模型 revision、文件名与 SHA256。 [ISTA 模型文件](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF) · [1Cat 参考文件大小](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Buster raw Engram 样例](https://github.com/Indras-Mirror/Xolotl/issues/2)
+llama.cpp 和本页固定的 Xolotl 先共用同一套 ISTA IQ2_XXS 主体和 IQ4_NL Engram，约 249 GB（232 GiB）。1Cat #1277 的独立四分片参考套装另占约 249 GB。若两套都下载，在约 508 GiB 块设备上先扣除模型后余约 44 GiB，再扣文件系统开销、预留块并核算 draft、缓存和临时文件。若另试 Xolotl raw Engram 参考套装，先安排轮换。用 `df -h` 检查实际可用量，下载和重组的临时文件也放 PMem。保留模型 revision、文件名与 SHA256。 [ISTA 模型文件](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF) · [1Cat 参考文件大小](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Buster raw Engram 样例](https://github.com/Indras-Mirror/Xolotl/issues/2)
 
 ## llama.cpp v1.0.0 首选多会话服务候选
 
@@ -63,7 +65,7 @@ numactl --interleave=0,1 llama.cpp/build/bin/llama-server --host 127.0.0.1 --por
     --load-mode mmap --lazy-mode on --split-mode layer --tensor-split 1,1,1,1 \
     --n-gpu-layers all --cpu-moe --fit off --no-mmproj \
     --moe-cache-mib "${MOE_CACHE_MIB:-0}" --moe-cache-cpu-share "${MOE_CPU_SHARE:-0}" \
-    --threads 12 --threads-batch 12 --batch-size 512 --ubatch-size 128 \
+    --threads 12 --threads-batch 12 --batch-size 512 --ubatch-size "${UBATCH_SIZE:-128}" \
     --parallel "$slots" --ctx-size "$((slots * slot_ctx))" --no-kv-unified \
     --cont-batching --cache-ram 0 --no-cache-idle-slots --no-cache-prompt \
     --spec-type none --reasoning off --jinja --metrics --slots
@@ -71,7 +73,9 @@ numactl --interleave=0,1 llama.cpp/build/bin/llama-server --host 127.0.0.1 --por
 
 如果 cache-off 已显存不足，先查四卡分配并降低 `--n-gpu-layers`。cache-off 跑通后固定层分布，先设 `MOE_CACHE_MIB=8192 MOE_CPU_SHARE=0`，再单独扫 CPU share `0.5 / 0.9`。有足够逐卡余量才试 `16384 / 24576` MiB 总缓存。看每卡缓存分配、预填充和 decode 峰值、PCIe 带宽及正常退出时输出的 cache hit / CPU miss / host upload 统计。活跃 KV 先保留引擎默认布局，模型和 Engram 留 PMem。`mmap` 下经 fsdax 映射的页直接访问 PMem，CPU backend 也可能分配或重排部分张量到 DRAM。用引擎日志、`/proc/<PID>/smaps`、`VmPin`/`VmLck` 与 `numastat -p` 核对。可另测 `--load-mode none` 给冷专家更多 DDR4/pinned 容量，运行前先停重构建，确认 Engram 仍按需映射和 DDR4 余量。约 129 GiB 主体全进 DDR4 时，扣掉 16 GiB ARC、32 GiB 构建预算后，名义只剩约 15 GiB 给其他分配。 [缓存与 host buffer](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [权重 loader](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model-loader.cpp)
 
-固定专家策略后设 `SLOTS=2`，先测 4K/slot（总 8192），再设 `SLOT_CTX=8192` 测 8K/slot（总 16384）。核启动日志的 `n_ctx_slot`，请求同时运行时查 `/slots` 和 `/metrics`。先验证两路持续流式、不同项目标记与工具闭环，再把 `--no-cache-prompt` 改成 `--cache-prompt`，测 `A→A`、`A→B→A` 和相同前缀配不同后缀的实际复用 token 数。槽位按 prompt 相似度匹配，可另测 host prompt cache 和 slot 保存恢复。首轮并发面向同一操作者的多个 harness。比较两路各自和合计吞吐、短/长 prefill、工具追加后的 TTFT 及取消后恢复。拿四卡 Xolotl 用同一权重与任务作单会话对照，先在两边关闭 thinking（Xolotl 请求体加 `"reasoning_effort": "none"`），再固定到同一档实测。 [llama-server 参数与接口](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md) · [slot 匹配源码](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/server-context.cpp#L1801) · [Xolotl 请求参数](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/serve/serve_ds41.py#L60)
+开专家缓存后，用同一模型和请求重启分别跑 `UBATCH_SIZE=32` 与 `128`，在 32 档扫 `MOE_CPU_SHARE=0 / 0.5 / 0.9`。记录长 prefill、工具回传 TTFT、decode 稳态与 cache admission / CPU miss / upload 计数。32 档让长 prompt 的实际 microbatch 进入两条优化路径，128 档仍可利用已驻留专家及短 microbatch，能否更快看实测。 [缓存分流实现](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L684)
+
+固定专家策略后设 `SLOTS=2`，先测 4K/slot（总 8192），再设 `SLOT_CTX=8192` 测 8K/slot（总 16384）。核启动日志的 `n_ctx_slot`，在探针加 `--parallel-pairs`，两路同时运行时查 `/slots` 和 `/metrics`。验证两路持续流式、不同项目标记与工具闭环后，把 `--no-cache-prompt` 改成 `--cache-prompt`，测 `A→A`、`A→B→A` 和相同前缀配不同后缀的实际复用 token 数。槽位按 prompt 相似度匹配，可另测 host prompt cache 和 slot 保存恢复。比较各路和合计吞吐、工具追加后的 TTFT 及取消后恢复。拿四卡 Xolotl 用同一权重与任务作单会话对照，先在两边关闭 thinking（Xolotl 请求体加 `"reasoning_effort": "none"`）。 [llama-server 参数与接口](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md) · [Xolotl 请求参数](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/serve/serve_ds41.py#L60)
 
 要验证重启后复用，在已挂载的 PMem 卷上为运行账户准备权限 `0700` 的 `/srv/pmem-model/kv/llama`，另起一轮加 `--slot-save-path /srv/pmem-model/kv/llama/`。对空闲 slot 调 `POST /slots/<id>?action=save`，JSON 指定 `{"filename":"prefix.bin"}`。同版服务重启后对目标 slot 调 `action=restore`，重发同前缀配新后缀，核 API 返回的恢复量和下一次 prompt 的 `cache_n`。这是显式文件快照，运行时活跃 KV 和 host prompt cache 仍各用引擎自己的内存分配。 [slot 缓存保存与恢复接口](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md)
 
@@ -105,7 +109,7 @@ export VLLM_API_KEY
 numactl --interleave=0,1 bash "$kit/inference/serve-1cat.sh" "$repo" "$PWD/1cat-4x16.yaml"
 ```
 
-1Cat 要对实际 CUDA worker 核 `numastat -p`，并用 `VmLck`/`VmPin` 和引擎日志查 pinned 分配。 [运行时内存策略](../host/CPU-PLACEMENT.md#运行时的-numa-内存策略)
+1Cat 要对实际 CUDA worker 核 `numastat -p`，并用 `VmLck`/`VmPin` 和引擎日志查 pinned 分配。GGUF 与 Engram 留在 fsdax 上，cold expert staging 按实际 DDR4 缓冲和 PCIe 流量计算，另查 PMem 读取。 [运行时内存策略](../host/CPU-PLACEMENT.md#运行时的-numa-内存策略) · [PMem、pinned memory 与 H→D 测试](../host/PMEM.md#量-upi-与-pinned-memory)
 
 过 4K 单会话后按计划分步恢复图、长上下文和 DSpark。把与 phase3 匹配的 draft safetensors 目录准备在 `/srv/pmem-model/ds41-1cat/dspark-v41`。在上一条生成命令中改用同 checkout 的 `serve-ds41-phase3.yaml`，追加 `--draft /srv/pmem-model/ds41-1cat/dspark-v41`，给 `--output` 新文件名。脚本把它填入 `speculative-config.model`，沿用配方的量化、加载方式及 DSpark5 宽度。该引擎要求 draft 宽度满足 checkpoint block size。检查日志确认 drafter 加载和接受率。原配方只有一个活动请求，先测同会话恢复。 [1Cat phase3 配方](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/serve-ds41-phase3.yaml) · [1Cat DSpark 参数校验](https://github.com/1CatAI/1Cat-vLLM/blob/main/vllm/config/speculative.py#L1006) · [#1277 handoff](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md)
 
@@ -181,6 +185,8 @@ install -d -m 0700 "$PMEM/kv/xolotl-single-stage"
 这版 DS41 把相同的 `--arena-gib` 预算交给每个 stage。生成脚本四卡默认每 stage 24 GiB，双卡和单卡默认每 stage 48 GiB。四卡固定切层和 4K 请求，按 `--arena-gib 24 → 25 → 26 → 27` 复跑，对应合计上限 96 → 100 → 104 → 108 GiB。按各 stage 的实际占用核 pinned RSS、每节点余量、cgroup 峰值、PMem 读量、TTFT 和 decode。实际达到 108 GiB 时，扣去 16 GiB ARC 与 32 GiB 构建预算后，DDR4 名义剩 36 GiB。单会话通过后再并发编译。148 GiB 只作为单卡隔离诊断档，先停构建，并核 Buster wrapper 的 `MemoryMax=140G` 和各 DRAM 节点余量。 [Xolotl stage 初始化](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_pipeline.cpp#L382) · [Xolotl arena 上限](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_moe.cpp#L2377)
 
 ## 统一验证
+
+默认串行发请求，生成预算为 256 token。只在配置了多槽或专门测排队时加 `--parallel-pairs`。若返回只有 reasoning，按探针报出的 `finish_reason` 核 thinking 和生成预算。
 
 ```bash
 export DS41_API_KEY="$VLLM_API_KEY"   # 仅在服务设置了鉴权时

@@ -24,4 +24,30 @@ ip -br address
 
 ## Sunshine
 
-I3 确认重启后 P620 已加载 NVIDIA 显卡驱动，再装 Sunshine。用 [官方安装文档](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2getting__started.html) 选当前 Linux 包。在 P620 负责的本机 Xfce/X11 会话内运行，合并 `sunshine.conf.example`。在 Web UI 设置凭证，按 [配置与端口文档](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html) 只允许可信 LAN/VPN 访问 Moonlight 所需端口。先在本机打开 Web UI 配对，用 Moonlight 手填 LAN/VPN 地址，1080p60/H.264 测画面、键鼠和音频。日志应显示 P620 NVENC，若落到软件编码则查 `nvidia-smi`、X11 显示、虚拟屏和捕获后端。xrdp 独立桌面由 Xorg 会话维护。
+I3 确认 P620 已加载 NVIDIA 580 分支后，装能在该驱动上打开 H.264 NVENC 的 Sunshine 构建，记录安装版本。FFmpeg 以 NVENC API 13.0 构建时的最低驱动为 570，API 13.1 则要求 610。若日志报 `minimum required Nvidia driver` 或 NVENC API 版本不符，检查 Sunshine 所用编码库，按现有 V100 驱动分支选择兼容构建。 [Sunshine 安装](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2getting__started.html) · [FFmpeg NVENC 版本检查](https://github.com/FFmpeg/FFmpeg/blob/master/libavcodec/nvenc.c) · [NVIDIA SDK 13.1 要求](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/read-me/index.html#system-requirements)
+
+Sunshine 在 P620 的**本机** Xfce/X11 会话运行，`xsession.example` 供 xrdp 独立桌面使用。合并 `sunshine.conf.example`，在 Web UI 设置凭证，只允许可信 LAN/VPN 访问所需端口。显示器或虚拟屏接 P620，从 `xrandr` 和 Sunshine 日志找到实际已连接接口，按需填写 `output_name`。下面的命令分别在仅 P620 和接回四张 V100 后执行。NVENC 支持矩阵列出 P620 与 Tesla V100，测试时以实际编码 PID 和 GPU 为准。 [Sunshine 显示与编码配置](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#output_name) · [NVIDIA NVENC 矩阵](https://developer.nvidia.com/video-encode-decode-support-matrix)
+
+```bash
+nvidia-smi --query-gpu=index,name,uuid,pci.bus_id --format=csv
+xrandr --query
+journalctl --user -b -u app-dev.lizardbyte.app.Sunshine.service --no-pager
+# Moonlight 正在串流 1080p60 H.264 时核对 Sunshine 编码会话的 GPU。
+nvidia-smi encodersessions
+```
+
+如果接坞后**画面**落到错误 GPU，先确认 F10 的主显卡是槽 4。P620 的 PCI 地址以接坞后为准。需要显式固定时，为 LightDM 本机 `seat0` 指定 `/etc/X11/z8-console.conf`，在 `/etc/lightdm/lightdm.conf.d/90-z8-console.conf` 写 `[Seat:seat0]` 和 `xserver-config=z8-console.conf`。Xorg 配置用下面的 `Device` 与 `Screen`。示例 `0000:3b:00.0` 转成十进制 `PCI:59:0:0`，实际安装前替换。通过 SSH 保持一条连接，再重启显示管理器验证本地桌面。若启动失败，移走该 LightDM drop-in 后重启显示管理器即可回退。 [LightDM seat 配置](https://github.com/ubuntu/lightdm/blob/main/data/lightdm.conf) · [Xubuntu Xorg BusID](https://manpages.ubuntu.com/manpages/resolute/man5/xorg.conf.5.html)
+
+```text
+Section "Device"
+    Identifier "P620"
+    Driver "nvidia"
+    BusID "PCI:59:0:0"
+EndSection
+Section "Screen"
+    Identifier "P620Screen"
+    Device "P620"
+EndSection
+```
+
+如果只选错**编码** GPU，用 `systemctl --user edit app-dev.lizardbyte.app.Sunshine.service` 为该服务增加 `[Service]` 和 `Environment=CUDA_VISIBLE_DEVICES=GPU-<P620实际UUID>`，重启后复验 NVENC 会话归属。CUDA 设备 UUID 仅在 Sunshine 服务内应用。Linux X11 + NVENC 的配置不填 Windows 示例的 `adapter_name` 营销型号。若该构建仍选错编码器，按实际版本的 X11/CUDA 路径定位。 [CUDA 可见设备](https://docs.nvidia.com/cuda/archive/12.9.1/cuda-c-programming-guide/index.html#env-vars) · [Sunshine Linux X11 实现](https://github.com/SunshineStream/Sunshine/blob/master/src/platform/linux/x11grab.cpp)

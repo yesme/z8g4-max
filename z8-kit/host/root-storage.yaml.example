@@ -37,7 +37,7 @@ storage:
       type: partition
       device: fit
       number: 2
-      size: 2G
+      size: 8G
     - id: raid-a
       type: partition
       device: p4618-a

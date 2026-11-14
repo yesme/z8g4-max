@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# shellcheck source=z8-kit/host/pmem-device-wait.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/pmem-device-wait.sh"
 
-if [[ $# != 3 || ( $1 != show && $1 != create ) ]]; then
-    echo "Usage: bash $0 show|create FSDAX_NAMESPACE_UUID0 FSDAX_NAMESPACE_UUID1" >&2
+if [[ $# != 3 || ( $1 != show && $1 != create && $1 != mount ) ]]; then
+    echo "Usage: bash $0 show|create|mount FSDAX_NAMESPACE_UUID0 FSDAX_NAMESPACE_UUID1" >&2
     exit 2
 fi
 mode=$1
@@ -10,17 +12,8 @@ shift
 chunk_sectors=4096  # 2 MiB
 devices=()
 size=0
-namespace_json=$(ndctl list --namespaces)
-for uuid in "$@"; do
-    [[ "$uuid" =~ ^[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$ ]] || {
-        echo "Pass the namespace UUID reported by ndctl, not a filesystem UUID" >&2
-        exit 2
-    }
-    name=$(jq -er --arg id "$uuid" '
-        [(if type == "array" then .[] else . end)
-          | select(.uuid == $id and .mode == "fsdax") | .blockdev]
-        | if length == 1 and .[0] != null then .[0] else error("Missing fsdax namespace") end
-    ' <<< "$namespace_json")
+names=$(pmem_wait_devices fsdax "$@")
+while IFS= read -r name; do
     device="/dev/$name"
     [[ "$device" =~ ^/dev/pmem[0-9]+(\.[0-9]+)?$ && -b "$device" ]] || {
         echo "Expected a whole PMem namespace, got $device" >&2
@@ -31,21 +24,48 @@ for uuid in "$@"; do
         size=$current
     fi
     devices+=("$device")
-done
-[[ ${devices[0]} != "${devices[1]}" ]] || { echo 'The namespaces must be distinct' >&2; exit 2; }
+done <<< "$names"
 size=$((size / chunk_sectors * chunk_sectors))
 (( size > 0 )) || { echo 'Namespaces are too small' >&2; exit 2; }
 table="0 $((2 * size)) striped 2 $chunk_sectors ${devices[0]} 0 ${devices[1]} 0"
 printf '%s\n' "$table"
-[[ "$mode" == create ]] || exit 0
-for device in "${devices[@]}"; do
-    if findmnt -rn -S "$device" >/dev/null; then
-        echo "Unmount $device first" >&2
+[[ "$mode" != show ]] || exit 0
+if dmsetup info z8-pmem-model >/dev/null 2>&1; then
+    # dmsetup table prints major:minor rather than the input device paths.
+    id0=$(lsblk -dnro MAJ:MIN "${devices[0]}")
+    id1=$(lsblk -dnro MAJ:MIN "${devices[1]}")
+    expected="0 $((2 * size)) striped 2 $chunk_sectors $id0 0 $id1 0"
+    if [[ $(dmsetup table z8-pmem-model) != "$expected" ]]; then
+        echo 'Existing z8-pmem-model has a different device table' >&2
         exit 1
     fi
-    if [[ -n $(ls -A "/sys/class/block/${device##*/}/holders") ]]; then
-        echo "$device already belongs to an active mapped device" >&2
+else
+    for device in "${devices[@]}"; do
+        if findmnt -rn -S "$device" >/dev/null; then
+            echo "Unmount $device first" >&2
+            exit 1
+        fi
+        if [[ -n $(ls -A "/sys/class/block/${device##*/}/holders") ]]; then
+            echo "$device already belongs to an active mapped device" >&2
+            exit 1
+        fi
+    done
+    dmsetup create z8-pmem-model --table "$table"
+fi
+mapper=/dev/mapper/z8-pmem-model
+udevadm settle --timeout=10
+test -b "$mapper"
+[[ "$mode" != create ]] || exit 0
+
+target=/srv/pmem-model
+if mounted=$(findmnt -rn -M "$target" -o MAJ:MIN,FSTYPE,OPTIONS); then
+    read -r source_id fstype options <<< "$mounted"
+    mapper_id=$(lsblk -dnro MAJ:MIN "$mapper")
+    if [[ "$mounted" == *$'\n'* || "$source_id" != "$mapper_id" ||
+          "$fstype" != ext4 || ",$options," != *,dax=always,* ]]; then
+        echo "An unexpected filesystem is mounted at $target" >&2
         exit 1
     fi
-done
-exec dmsetup create z8-pmem-model --table "$table"
+    exit 0
+fi
+exec mount -t ext4 -o dax=always,noatime,data=ordered,nodiscard "$mapper" "$target"

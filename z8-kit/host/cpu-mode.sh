@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# shellcheck source=/dev/null
 source /etc/z8-infer-cpu.env
 case "${1:-}" in
     reserve)

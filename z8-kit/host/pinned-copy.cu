@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -17,8 +18,13 @@ void require_cuda(cudaError_t status) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::cerr << "Usage: pinned-copy MiB_per_GPU repetitions\n";
+    if (argc < 3 || argc > 4) {
+        std::cerr << "Usage: pinned-copy MiB_per_GPU repetitions [both|h2d|d2h]\n";
+        return 2;
+    }
+    const std::string_view direction = argc == 4 ? argv[3] : "both";
+    if (direction != "both" && direction != "h2d" && direction != "d2h") {
+        std::cerr << "Direction must be both, h2d or d2h\n";
         return 2;
     }
     char* end = nullptr;
@@ -62,15 +68,15 @@ int main(int argc, char** argv) {
         require_cuda(cudaMalloc(&gpu[i], bytes));
         require_cuda(cudaMemcpy(gpu[i], host[i], bytes, cudaMemcpyHostToDevice));
     }
-    auto copy = [&](cudaMemcpyKind direction, const char* name) {
+    auto copy = [&](cudaMemcpyKind kind, const char* name) {
         const auto start = std::chrono::steady_clock::now();
         std::vector<std::thread> threads;
         for (int i = 0; i < count; ++i) {
             threads.emplace_back([&, i] {
                 require_cuda(cudaSetDevice(i));
-                const bool h2d = direction == cudaMemcpyHostToDevice;
+                const bool h2d = kind == cudaMemcpyHostToDevice;
                 for (unsigned long n = 0; n < repeats; ++n) {
-                    require_cuda(cudaMemcpy(h2d ? gpu[i] : host[i], h2d ? host[i] : gpu[i], bytes, direction));
+                    require_cuda(cudaMemcpy(h2d ? gpu[i] : host[i], h2d ? host[i] : gpu[i], bytes, kind));
                 }
             });
         }
@@ -81,8 +87,8 @@ int main(int argc, char** argv) {
         std::cout << name << " aggregate GB/s: " << std::fixed << std::setprecision(2)
                   << static_cast<double>(bytes) * count * repeats / seconds / 1e9 << '\n';
     };
-    copy(cudaMemcpyHostToDevice, "H2D");
-    copy(cudaMemcpyDeviceToHost, "D2H");
+    if (direction != "d2h") copy(cudaMemcpyHostToDevice, "H2D");
+    if (direction != "h2d") copy(cudaMemcpyDeviceToHost, "D2H");
     for (int i = 0; i < count; ++i) {
         require_cuda(cudaSetDevice(i));
         require_cuda(cudaFree(gpu[i]));

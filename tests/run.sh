@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+shellcheck -x z8-kit/*/*.sh z8-kit/storage/z8-storage z8-kit/buildbarn/z8-buildbarn-check tests/*.sh
+bash tests/storage.sh
+bash tests/pmem.sh
+python3 tests/cpu-layout.py
+python3 -B tests/inference-probe.py

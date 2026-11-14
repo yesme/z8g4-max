@@ -37,6 +37,7 @@ def stream(args, label, messages, expected=None):
     usage = {}
     timings = {}
     complete = False
+    finish_reason = None
     text_chunks = 0
     text = []
     with urlopen(request(args, payload), timeout=args.timeout) as response:
@@ -53,6 +54,7 @@ def stream(args, label, messages, expected=None):
             usage = chunk.get("usage") or usage
             timings.update(chunk.get("timings") or {})
             for choice in chunk.get("choices", []):
+                finish_reason = choice.get("finish_reason") or finish_reason
                 delta = choice.get("delta") or {}
                 now = time.monotonic()
                 content = delta.get("content")
@@ -66,8 +68,13 @@ def stream(args, label, messages, expected=None):
                     if expected is not None:
                         text.append(content)
     elapsed = time.monotonic() - started
-    if not complete or first_content is None:
-        raise RuntimeError(f"{label}: expected visible text and a complete SSE stream")
+    if not complete:
+        raise RuntimeError(f"{label}: missing SSE end marker")
+    if first_content is None:
+        raise RuntimeError(
+            f"{label}: no visible text (finish_reason={finish_reason!r}); "
+            "check the engine's thinking setting and --max-tokens"
+        )
     if expected is not None and "".join(text).strip() != expected:
         raise RuntimeError(f"{label}: expected the request's marker in the reply")
     tokens = usage.get("completion_tokens")
@@ -146,9 +153,11 @@ def main():
     parser.add_argument("--model", default="deepseek-v4.1-flash-1017")
     parser.add_argument("--prompt-file", type=Path)
     parser.add_argument("--repeats", type=int, default=3)
-    parser.add_argument("--max-tokens", type=int, default=96)
+    parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--tools", action="store_true")
+    parser.add_argument("--parallel-pairs", action="store_true",
+                        help="Also send simultaneous pairs to an engine configured for concurrency")
     parser.add_argument("--usage", action="store_true", help="Request SSE usage for supporting engines")
     parser.add_argument("--reasoning-effort", help="Set reasoning_effort for engines that support it")
     args = parser.parse_args()
@@ -197,9 +206,11 @@ def main():
                 show(result)
                 if label == "A-repeat":
                     warm.append(result["first_visible_text_s"])
-            run_pair("parallel-shared", a, b)
-            run_pair("parallel-distinct", a, distinct)
-        run_pair("parallel-markers", *isolation_inputs, expected=markers)
+            if args.parallel_pairs:
+                run_pair("parallel-shared", a, b)
+                run_pair("parallel-distinct", a, distinct)
+        if args.parallel_pairs:
+            run_pair("parallel-markers", *isolation_inputs, expected=markers)
         if args.tools:
             show(tool_round_trip(args))
         show({"case": "summary", "A-repeat_median_first_text_s": statistics.median(warm)})

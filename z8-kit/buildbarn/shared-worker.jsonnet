@@ -26,7 +26,7 @@ local digest = 'dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
       cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
     },
     runners: [{
-      endpoint: { address: 'unix:///worker/runner' },
+      endpoint: { address: 'unix:///run/bb-runner/runner.sock' },
       concurrency: 4,
       instanceNamePrefix: 'hardlinking',
       platform: {

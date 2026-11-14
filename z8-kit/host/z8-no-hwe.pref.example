@@ -1,0 +1,4 @@
+Explanation: Track the Ubuntu 26.04 GA generic kernel and matching R580 modules.
+Package: linux-*-hwe-26.04*
+Pin: release a=*
+Pin-Priority: -1

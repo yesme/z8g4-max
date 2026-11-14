@@ -18,6 +18,7 @@ show kernel-cmdline cat /proc/cmdline
 show bios dmidecode -t bios
 show memory-slots dmidecode -t memory
 show cpu lscpu
+# shellcheck disable=SC2016 # $3 is an awk field.
 show cpu-microcode awk '/^microcode/ && !seen[$3]++ {print $3}' /proc/cpuinfo
 show numa numactl --hardware
 show pmem-socket-limit ipmctl show -units GiB -socket

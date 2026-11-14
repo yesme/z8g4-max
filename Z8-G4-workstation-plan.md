@@ -2,7 +2,7 @@
 
 2026 年 11 月 14 日 · v2.15 实施版
 
-主机名 `z8g4-max`，登录用户 `z8user`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。HC620 + P4800X 八分区组成可重建的冷 CAS。PMem 使用 App Direct，模型文件从首装起直接放在条带卷。
+主机名 `z8g4-max`，登录用户 `z8user`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。HC620 + P4800X 八分区组成可重建的冷 CAS。模型从首装开始直接放在 App Direct。用两个本地卷先测 1017，本仓库的通用启动服务使用条带卷。
 
 将本仓库克隆或解压到目标 Linux 的普通用户目录。`z8g4-max` 和 `z8user` 是示例主机名和用户名。所有相对路径的操作默认从 `z8-kit` 根目录执行。先阅读本节和第 2–3 节，再打开相应的命令页。
 
@@ -22,10 +22,10 @@
 
 | 顺序 | 这一步接什么 | 做到什么再继续 |
 |---|---|---|
-| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P620、槽 7 AX210 和天线、显示器、Live U 盘与临时 USB SSD | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 用 AX210 先连 Wi-Fi，核 DHCP、DNS 和 APT，再准备临时系统并跑双路 CPU 压测。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-wi-fi-与临时验机系统) |
+| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P620、槽 7 AX210 和天线、显示器、Live U 盘与临时 USB SSD | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 用 AX210 先连 Wi-Fi，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-wi-fi-与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
 | **T2 · DDR4** | 沿用 T1 硬件，换用 Memtest86+ U 盘，再换回临时 Linux | 每路 96 GiB、共 192 GiB。Memtest86+ 默认测试集四个完整 pass，跳过 Rowhammer。再跑 Linux 144 GiB、4 小时，比较前后的 ECC 与 CPU 硬件事件。 [怎么读硬件错误](z8-kit/host/BURN-IN.md#怎么读硬件错误) |
-| **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。验混插 DDR4、DAX 持久性，并逐路确认 DDR4 到 PMem 慢节点的下沉。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [NUMA 拓扑验收](z8-kit/host/PMEM.md#核对双路-numa-拓扑) |
-| **T4 · 存储** | 槽 1 加 P4618 并验证两个端点，槽 5 加 P4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验 AX210 与七盘同跑。 [硬盘识别](z8-kit/host/BIOS.md) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
+| **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。验混插 DDR4、DAX 持久性，测两路 kmem 的冷启动上线时间，再逐路确认 DDR4 到 PMem 慢节点的下沉。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [kmem 冷启计时](z8-kit/host/PMEM.md#t3-记录-kmem-冷启动时间) |
+| **T4 · 存储** | 槽 1 加 P4618，确认 Gen3 x8 上行、两个 x4 下行和两个各约 3.2 TB 的 NVMe 端点，再加槽 5 的 P4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验 AX210 与七盘同跑。 [P4618 链路检查](z8-kit/host/BURN-IN.md#p4618-链路与双控制器) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
 | **T5 · 算力坞** | 临时 Linux 先装 NVIDIA 显卡驱动。主机硬件通过后断电，槽 2/3 装直通卡，接 V100 | 逐卡 → 每槽两卡 → 四卡，验 Gen3 x8、六对 NVLink P2P、NCCL、单卡/四卡拷机、pinned H→D。测试完关机、断开 V100，转正式安装。 [拷机手册](z8-kit/host/BURN-IN.md) |
 
 ### 第二阶段 · 正式安装和上线
@@ -48,7 +48,7 @@ DIMM 上的 **PMem100** 在 T3 验，测试时提交的 goal 和 namespace 供�
 
 | HP 槽号 | 设备 |
 |---|---|
-| 1 | P4618，双 CPU 时 Gen3 x8 |
+| 1 | P4618，`Bifurcation = Auto`，双 CPU 且不装 Thunderbolt 3 卡时为 Gen3 x8 |
 | 2 | x16→x8/x8 直通卡，接两张 V100 |
 | 3 | x16→x8/x8 直通卡，接两张 V100 |
 | 4 | P620，主显示 |
@@ -83,7 +83,7 @@ HP 的公开 F10 手册未确认 Z8 G4 能让硬盘分批起转，供电按七�
 
 ### 引导与 P4618
 
-- I1 分四步。① 用独立 Xubuntu 26.04.1 Desktop amd64 U 盘进 Live，核 FIT、两个真实 P4618 端点和安装 U 盘。Live 镜像是 `7.0.0-30-generic`，联网加 `mdadm`、`nvme-cli`。② P4618 两端组 md RAID0，建 XFS。FIT 建 1 GiB FAT32 ESP 和 2 GiB ext4 `/boot`，在图形安装器里用手动分区分配这三个挂载点。③ 若桌面安装器认不到完整布局，改用同版本 Server 安装器的 RAID0/XFS 路径，然后装 `xubuntu-desktop`。④ 拔安装盘，从 FIT 首启。GRUB 从 FIT 读内核和 initramfs，再由 initramfs 组装根阵列。核挂载、UUID 和 EFI 启动项，再用独立救援盘核读根。 [操作步骤](z8-kit/host/INSTALL.md) · [官方 Live manifest](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest)
+- I1 分四步。① 用独立 Xubuntu 26.04.1 Desktop amd64 U 盘进 Live，核 FIT、两个真实 P4618 端点和安装 U 盘。Live 镜像是 `7.0.0-30-generic`，联网加 `mdadm`、`nvme-cli`。② P4618 两端组 md RAID0，建 XFS。FIT 建 1 GiB FAT32 ESP 和 8 GiB ext4 `/boot`，在图形安装器里用手动分区分配这三个挂载点。③ 若桌面安装器认不到完整布局，改用同版本 Server 安装器的 RAID0/XFS 路径，然后装 `xubuntu-desktop`。④ 拔安装盘，从 FIT 首启。GRUB 从 FIT 读内核和 initramfs，再由 initramfs 组装根阵列。核挂载、UUID 和 EFI 启动项，再用独立救援盘核读根。 [操作步骤](z8-kit/host/INSTALL.md) · [官方 Live manifest](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest)
 
 - `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/z8user` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS、CAS 索引和热读缓存落 P4618。单独在 `/srv/pmem-model` 挂 PMem ext4 DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在 Live 阶段显式用 `mkfs.xfs -m crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
 - 首启为根 XFS 写 `noatime,nodiscard`，md 实测透出 discard 时用周期 TRIM。FIT 的 `/boot`、ESP 用 `noatime`，从周期 TRIM 排除。PMem 模型 ext4 用 `dax=always,noatime,data=ordered,nodiscard`。两个 ZFS 单元按依赖链以 `rw` 挂载，压缩、atime 和同步写策略保存在 dataset 属性。 [全机挂载参数及核对命令](z8-kit/host/MOUNTS.md) · [fstab 样例](z8-kit/host/fstab-boot.example)
@@ -92,9 +92,9 @@ HP 的公开 F10 手册未确认 Z8 G4 能让硬盘分批起转，供电按七�
 
 Xubuntu 26.04.1 的 Linux 7.0 块层用 zone write plugging 保持同一顺序区的写入次序。七块 HC620 保留系统默认 I/O 调度器。按 SATA0–6 记录 `host-managed`、两类区和实际调度器，命令见存储手册。 [Zoned Storage 写顺序](https://zonedstorage.io/docs/linux/sched)
 
-P4800X 的 `p1–p7` 各 48 GiB，分别作为七个 dm-zoned 常规设备。七个 mapper 做 RAIDZ1，理想数据容量约 84 TB / 76.4 TiB。`p8` 用尽剩余约 **1,061 GiB**，作为 special vdev，承载元数据、符合阈值的小块和 ZIL。OpenZFS 2.4.1 在没有独立 SLOG 时，优先从 special 的内嵌日志区分配 ZIL，空间不足时可用 special 的普通空间，再回退到 RAIDZ1。按默认 metaslab 算法，p8 预计自动划 **一个 8 GiB 的内嵌日志区**。这个容量随 vdev 几何计算，建池命令只声明 `special`，无需增加第九个分区。 [OpenZFS 2.4.1 日志分配](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/zio.c#L4249) · [metaslab 大小算法](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2766)
+P4800X 的 `p1–p7` 各 160 GiB，分别作为七个 dm-zoned 常规设备。七个 mapper 做 RAIDZ1，理想数据容量约 84 TB / 76.4 TiB。`p8` 用尽剩余约 **277 GiB**，作为 special vdev，承载元数据、符合阈值的小块和 ZIL。OpenZFS 2.4.1 在没有独立 SLOG 时，优先从 special 的内嵌日志区分配 ZIL，空间不足时可用 special 的普通空间，再回退到 RAIDZ1。按默认 metaslab 算法，p8 预计自动划 **一个 2 GiB 的内嵌日志区**。这个容量随 vdev 几何计算，建池命令只声明 `special`，无需增加第九个分区。 [OpenZFS 2.4.1 日志分配](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/zio.c#L4249) · [metaslab 大小算法](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2766)
 
-HC620 七盘按 SATA 4Kn、256 MiB 区验机。I4 在确认可清空的 P4800X 上清掉旧分区表，直接新建 GPT 八分区。脚本读取逻辑扇区大小来做 1 MiB 对齐。p1–p7 各 48 GiB，给七组 dm-zoned；p8 使用剩余空间，给 ZFS special vdev。dm-zoned 向 ZFS 提供 4 KiB 块设备。 [P4800X 八分区命令](z8-kit/storage/README.md#新建-gpt-八分区)
+HC620 七盘按 SATA 4Kn、256 MiB 区验机。I4 在确认可清空的 P4800X 上清掉旧分区表，直接新建 GPT 八分区。脚本读取逻辑扇区大小来做 1 MiB 对齐。p1–p7 各 160 GiB，给七组 dm-zoned；p8 使用剩余空间，给 ZFS special vdev。dm-zoned 向 ZFS 提供 4 KiB 块设备。 [P4800X 八分区命令](z8-kit/storage/README.md#新建-gpt-八分区)
 
 每块 HC620 盘头有 **524 个可随机读写的 `CONVENTIONAL` 区，共 131 GiB**。双设备 mapper 的前台缓冲走 P4800X。HC620 第 0 区存成员超级块，其余健康普通区纳入数据容量。后台回收分配不到顺序目的区时才尝试使用盘头普通区，所以这部分可以长期基本闲着。后段的 16 个顺序预留区另由 `dmzadm` 默认管理。 [盘头区用途与实机核对](z8-kit/storage/README.md#hc620-盘头随机写区在混合方案里的用途) · [WD HC620 区布局](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf#page=23)
 
@@ -134,7 +134,7 @@ ss -ltn 'sport = :8980'
 |---|---|
 | 四卡 HBM 合计 64 GiB | 热专家尽量多放，逐卡给 dense、KV 热区、indexer、CUDA graph、staging 留空间。首轮先保 1–2 GiB/卡余量 |
 | 两路 DDR4 合计 192 GiB | 冷专家和 DMA staging 优先在 DDR4。101 GiB 若均分是每 socket 50.5 GiB，名义剩 91 GiB；若“101 GB”为十进制，则约 94.1 GiB，名义剩约 97.9 GiB |
-| 2×255 GiB App Direct | dm-stripe 组成约 510 GiB ext4 DAX 卷，挂 `/srv/pmem-model`。存 GGUF、Engram、DSpark、tokenizer 和引擎支持的 KV checkpoint |
+| 2×258 GiB App Direct | T3 独立挂载，I6 优先用两本地卷做 1017 性能对照。通用启动配置用 2 MiB dm-stripe，名义 516 GiB、块设备约 508 GiB 的 ext4 DAX，挂 `/srv/pmem-model`。存 GGUF、Engram、DSpark、tokenizer 和引擎支持的 KV checkpoint |
 | 2×约 500 GiB App Direct 余量 | 转 kmem，使用可迁移应用页的慢层。实测可上线容量、demotion/promotion、PSI 及构建时延 |
 
 **App Direct 按每路 DDR4 和 PMem 合计。** 首装标称每路 864 GiB。若 DDR4 换为 6×32 GiB，保留 6×128 GiB PMem，每路 960 GiB，距基础档 1 TiB 尚有 64 GiB。6×32 GiB DDR4 加 6×512 GiB PMem 会达到每路 3,264 GiB，超出 HP 公布的 1 TiB 基础档和 2 TiB M 档，单条 512 GiB 也未列在 Z8 G4 的支持清单。T3 用 `sudo ipmctl show -units GiB -socket` 核 8269CY 的 `MappedMemoryLimit`，同时用两路 region 核已映射的 App Direct 容量。 [PMem 容量与实机核对](z8-kit/host/PMEM.md#每路容量上限) · [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15)
@@ -143,7 +143,9 @@ ss -ltn 'sport = :8980'
 
 **从 T1 验机到正式部署，F10 固定 NUMA 开、SNC 关。** Linux 看到每路一个约 96 GiB 的 DDR4 节点，并保留 PCIe 和 PMem 的插槽归属。推理用启动器在两个 DDR4 节点交错分配，101 GiB pinned arena 的目标是约 50.5 GiB/路。用实际 worker 的页分布和可用内存确认分配结果。普通系统服务与 Buck2 使用两路对称的 CPU 集合和本地优先分配。两路各自上线 PMem kmem，核冷页的实际去向。四卡验收用 H→D 和 UPI 数据比较启动策略，再决定是否把独立 staging 就近放到 GPU 对应的 DDR4 节点。 [各类进程的启动方式](z8-kit/host/CPU-PLACEMENT.md#运行时的-numa-内存策略) · [NUMA 拓扑验收](z8-kit/host/PMEM.md#核对双路-numa-拓扑) · [Linux NUMA 内存策略](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)
 
-**8269CY 与主板链路分开算。** 第三方料号页列 8269CY 3×10.4 GT/s，Intel 通用数据表也说明三链路处理器的端口结构；未找到 Intel 对该 OEM SKU 的公开 ARK 条目。HP 白皮书直接确认 Z8 G4 是 **双 UPI，最高 10.4 GT/s/链路**。以 Intel PCM 的 172-bit flit、5/6 flit/cycle、每 cycle 8 transfers 估算，两链路每方向约 **46.6 GB/s 的 flit 口径**；按 PCM 的 64 B/9 flit 数据口径，保守工程预算约 **15.4 GB/s/方向**。平台文档也有不同口径，不能用双向合计值当作 DMA 带宽。Gen3 x8 每张约 7.88 GB/s 单向理论值。对称交错、两卡/每 socket、全部 H→D 满载时，粗估约 **7.88 GB/s/方向** 穿 UPI；把全部 pinned 页放在一侧则远端两张可能需要约 **15.75 GB/s 单方向**，还没计 CPU 访问和一致性流量。用 Intel PCM、MLC 和配套 CUDA pinned-copy 以实际链路状态和 tok/s 收尾。 [HP Z8 G4 架构白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf) · [Intel Cascade Lake 数据表](https://www.intel.com/content/dam/www/public/us/en/documents/datasheets/2nd-gen-xeon-scalable-datasheet-vol-1.pdf) · [Intel PCM flit 换算](https://github.com/intel/pcm/blob/master/src/cpucounters.h)
+**Z8 G4 的主板布了两条 UPI，最高 10.4 GT/s/条。** 第三方料号页列 8269CY 支持三条，主板布线决定实际可用链路。用 Intel PCM 实测两条链路的速率和每方向流量。Gen3 x8 每张约 7.88 GB/s 单向理论值。四卡满载、DDR4 均匀交错时，净 H→D 可能有约 7.88 GB/s/方向经 UPI。全放一侧可能集中到单方向约 15.75 GB/s。两组 GPU 各自就近读 DDR4 可去掉这部分跨路 DMA，PMem 冷读则另看读取线程与文件所在插槽。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 卷选择和 UPI 实测步骤](z8-kit/host/PMEM.md#量-upi-与-pinned-memory)
+
+**按 1017 的实际分片先验证本地卷。** 采用 Xolotl 的 10/20/30 切层时，CPU0 放前三个 GGUF 分片和 Engram，CPU1 放后两个。测试先固定 DDR4 交错，再按引擎能力比较 stage/rank 就近分配 staging。切换正式服务取决于 Engram 读取、工具回传首字延迟和有 Buck2 构建时的 decode 结果。 [1017 分片布局与启动调整](z8-kit/host/PMEM.md#两个本地卷的-1017-文件布局)
 
 **模型、Engram 和 DSpark 直接下载到 PMem。** 1Cat #1277 的 packed KV 将压缩 latents 放 host memfd，GPU 保留热环和索引。该配置没有 KV 文件路径。若要把其可迁移的 host KV 放到 kmem，需要针对该映射设置 NUMA 分配并验实际页位置。Xolotl 单 stage 支持把持久前缀写到 `/srv/pmem-model/kv/xolotl-single-stage`；当前四卡 layer split 用内存会话缓存，持久化要补多 stage 支持。 [1Cat KV 布局](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Xolotl 持久前缀](https://github.com/Indras-Mirror/Xolotl/blob/main/docs/PERSISTENT_PREFIX_CACHE.md) · [配置步骤](z8-kit/inference/README.md)
 
@@ -238,7 +240,9 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 1. **T1–T3 主机。** 两颗 CPU 都跑负载。DDR4-only 用 Memtest86+ 四个 pass 和 Linux 144 GiB、4 小时压力测试。随后插 PMem，应用 App Direct goal，重跑一轮混插内存测试。每路 fsdax 写约 200 GiB 文件并在切 AC 后复核 SHA-256。devdax 每路先测 8 GiB，再测约 448 GiB 并验 CRC32C。留独立日志，再转 kmem。
 2. **T4 裸盘。** 七块 HC620 冷启稳定后并行跑 SMART 长检。按每盘报告的 ETA 预留一晚到一天以上，每块都要有最新的成功结果。
 3. **T5 算力坞。** GPU Burn 先单卡 15 分钟、再四卡 60 分钟。测每对 NVLink P2P、NCCL、PCIe Gen3 x8，查 Xid/ECC/AER。
-4. **I4–I5 正式存储和服务。** 建池后写入至少 700 GiB 高熵文件，并在测试数据仍在池中时 scrub。做单 HC620、整卡 P4800X 缺席演练及恢复。挂载通过后上线 Z8 Buildbarn，再验 Mac 本机冷库断网时的命中与未命中。验证 SSH、Sunshine 与 xrdp。
+4. **I4–I5 正式存储和服务。** 建池后用同一 512 GiB 文件跑三遍顺序覆盖，另做随机覆盖摸底，在测试文件仍在池中时 scrub。做单 HC620、整卡 P4800X 缺席演练及恢复。挂载通过后上线 Z8 Buildbarn，再验 Mac 本机冷库断网时的命中与未命中。验证 SSH、Sunshine 与 xrdp。
 5. **I7 整机。** 8 小时内轮流发 Buck2 冷读、热读和新上传，同时运行指向本机 1017 的探针或 OMP 本地 profile，并使用 SSH 和 RDP。保存启动期和混合负载的 kernel、RAS、NVMe/SMART、ZFS、UPI/NUMA 与 TTFT 记录。 [逐条命令与结果判读](z8-kit/host/BURN-IN.md)
 
-部署包已在 Ubuntu 26.04 用户空间检查 Bash、YAML 和 systemd 单元依赖。依赖检查使用占位可执行文件。存储脚本用模拟设备走过七盘齐全、缺一盘、缺两盘、p8 缺席与已导入池拒绝拆映射。kmem 脚本用模拟 sysfs 验证全局开关、每设备写入顺序及重复执行。已核官方 Live 包清单、Ubuntu 7.0.0-43 amd64 的相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 在 26.04 用户空间的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、桌面安装器、BIOS、PMem、数据池和推理吞吐均需在目标 Z8 上确认。
+在仓库根目录安装 `jq`、`shellcheck` 和 `python3` 后运行 `bash tests/run.sh`，GitHub Actions 在 push 和 PR 上运行同一入口。模拟覆盖七盘齐全、缺一盘、缺两盘、p8 缺席、拒绝拆除已导入池的映射、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。测试只用临时目录和替身命令。
+
+此前部署包已在 Ubuntu 26.04 用户空间用占位可执行文件检查 systemd 依赖，也核过官方 Live 包清单、Ubuntu 7.0.0-43 amd64 相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、桌面安装器、BIOS、PMem 上线时间、数据池和推理吞吐均需在目标 Z8 上确认。

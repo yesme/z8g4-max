@@ -49,7 +49,37 @@ sudo ras-mc-ctl --errors
 sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
 ```
 
-压测时另开终端 `watch -n 5 sensors`，记录两路温度、风扇状态与持续降频。全核可用、压测通过且无新增硬件错误后进 T2。
+保留 `matrixprod` 作为通用负载，再单独跑 30 分钟 **AVX-512 VNNI**。Xubuntu 26.04 的 stress-ng 0.20.01 提供 `vpdpbusd512` intrinsic。8269CY 启动后应枚举 Linux 标志 `avx512f` 和 `avx512_vnni`。先跑 5 秒确认确有 bogo ops 且压力项通过，再跑双路全核。 [Ubuntu stress-ng VNNI 参数](https://manpages.ubuntu.com/manpages/resolute/man1/stress-ng.1.html) · [Cascade Lake AVX 频率实测](https://www.nas.nasa.gov/hecc/support/kb/cascade-lake-processors_579.html)
+
+```bash
+# 从已挂载的外部日志盘目录运行。
+sudo apt install linux-tools-common "linux-tools-$(uname -r)"
+sudo modprobe msr
+grep -m1 -w avx512f /proc/cpuinfo
+grep -m1 -w avx512_vnni /proc/cpuinfo
+lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE
+stress-ng --vnni 1 --vnni-intrinsic --vnni-method vpdpbusd512 --verify -t 5s --metrics-brief
+```
+
+先在另一个终端开始每 5 秒采样，留至少 30 秒空闲基线。用相同命令也可在通用 `matrixprod` 轮次记录一份对照文件。
+
+```bash
+sudo turbostat --quiet --cpu core --interval 5 \
+    --show Package,Core,CPU,Busy%,Bzy_MHz,CoreTmp,PkgTmp,CoreThr,PkgWatt,PKG_% \
+    --out t1-avx512-turbostat.txt
+```
+
+```bash
+(
+    set -o pipefail
+    stress-ng --vnni "$(nproc)" --vnni-intrinsic --vnni-method vpdpbusd512 \
+        --verify --timeout 30m --metrics-brief 2>&1 | tee t1-avx512-stress-ng.log
+)
+sudo ras-mc-ctl --errors
+sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
+```
+
+负载结束，留 30 秒恢复记录后用 Ctrl+C 停 turbostat。两路分别比较满载 `Bzy_MHz`、`PkgTmp` 和 `PkgWatt`。AVX 的正常频率档可以低于常规负载。温度持续上升、`CoreThr` 增加、两路温差异常或出现新增硬件错误时，排查风道、散热器和 BIOS 电源配置。`PKG_%` 结合温度及功耗看。运行时可用 `watch -n 5 sensors` 对照风扇与温度。两轮通过再进 T2。 [Ubuntu turbostat 指标](https://manpages.ubuntu.com/manpages/resolute/man8/turbostat.8.html)
 
 ### 怎么读硬件错误
 
@@ -106,7 +136,7 @@ sudo ipmctl start -diagnostic
 
 这次运行覆盖 Quick、Config、Security、FW。Security 结果对照实际冻结/锁定策略；未预期的告警、region 缺失、介质错误增量或训练失败先处理。需要按模块复查时用 `sudo ipmctl start -diagnostic Quick -dimm 0xNNNN`，DIMM ID 用工具实际返回值。验收前后保存传感器的 Media/Controller 温度和模块报告的阈值，并记录有无节流，使用该批模块/固件阈值。 [Intel ipmctl 命令](https://www.intel.com/content/www/us/en/support/articles/000032861/technologies/memory-and-storage.html) · [诊断参数](https://docs.pmem.io/ipmctl-user-guide/debug/run-diagnostic)
 
-2. 用 **fsdax 文件与 devdax 设备分别做持久写入和 CRC32C 回读**。装 Ubuntu 26.04 amd64 的 fio 3.41-2，按 [PMem 工具清单](PMEM.md) 核 `libpmem` / `dev-dax`。对两个 255 GiB namespace 在独立 DAX 挂载各写约 200 GiB 测试文件，也对 stripe 重跑一次。对两个约 500 GiB 的 devdax 仅在全新、未 kmem online 且可清空的 namespace 执行，先 8 GiB，再约 448 GiB 或按可用量下调。2 MiB 的块大小与 devdax 对齐一致。切勿把正在用的生产设备代入 fio。
+2. 用 **fsdax 文件与 devdax 设备分别做持久写入和 CRC32C 回读**。装 Ubuntu 26.04 amd64 的 fio 3.41-2，按 [PMem 工具清单](PMEM.md) 核 `libpmem` / `dev-dax`。对两个 258 GiB namespace 在独立 DAX 挂载各写约 200 GiB 测试文件，也对 stripe 重跑一次。对两个约 500 GiB 的 devdax 仅在全新、未 kmem online 且可清空的 namespace 执行，先 8 GiB，再约 448 GiB 或按可用量下调。2 MiB 的块大小与 devdax 对齐一致。切勿把正在用的生产设备代入 fio。
 
 ```bash
 sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=200G \
@@ -126,7 +156,22 @@ sudo env PMEM_TEST_DAX=/dev/dax0.1 PMEM_TEST_SIZE=8G \
 
 ### 加盘与确认链路
 
-加槽 1 的 P4618，确认两个端点与 SMART，再加槽 5 的 P4800X 查 NVMe 健康。按 [SATA 接线与认盘](BIOS.md) 做 1 → 4 → 7 盘冷启动和 SATA7 光驱枚举。七块 HC620 全部在线后，按序列号保存 SATA0–6 对应的整盘 by-id，逐盘查 `ZONED` 和普通区、顺序写区。到此只操作裸设备的识别和测试。P4800X 分区、dm-zoned 格式化、RAIDZ1 建池和 scrub 都在正式安装 I4。
+### P4618 链路与双控制器
+
+先装槽 1 的 P4618，从验机介质启动。记录桥接层次、各端口实际协商宽度和两个 NVMe 序列号，然后再装槽 5 的 P4800X。
+
+```bash
+sudo apt install pciutils nvme-cli
+sudo lspci -tv
+sudo lspci -d 10b5:8718 -vv | grep -E '^[0-9a-f]|LnkSta:'
+sudo nvme list
+```
+
+用 `lspci -tv` 把桥和末端控制器对应起来。预期一条 `LnkSta` 为 `Speed 8GT/s, Width x8` 的主机上行、两条 `Speed 8GT/s, Width x4` 的板内下行，以及两个各约 3.2 TB 的 Intel NVMe namespace，各自有控制器和序列号。若型号过滤无输出，按树里桥的 PCI 地址执行 `sudo lspci -s <BDF> -vv`，核 `LnkSta` 和 `LnkCap`。上行低于 Gen3 x8 时，先回 F10 查两颗 CPU 已识别、Slot 1 保持 `Bifurcation = Auto`、`Limit PCIe Speed = Auto`，同时确认没有 Thunderbolt 3 卡。然后关机断电检查卡的金手指、插槽和挡板是否让卡完全插到位，重插后复测。上行已是 Gen3 x8 但只见一组 3.2 TB 时，从缺失的下行分支查对应 NVMe 枚举和内核 AER／NVMe 错误。两个端点与链路均通过再进入 SMART 检查。 [Intel P4618 产品简报](https://www.mouser.com/datasheet/2/612/dc-p4610-p4618-series-brief-1660967.pdf) · [HP 槽位白皮书，第 7 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=7)
+
+### NVMe 健康与 SATA 枚举
+
+按 [SATA 接线与认盘](BIOS.md) 做 1 → 4 → 7 盘冷启动和 SATA7 光驱枚举。七块 HC620 全部在线后，按序列号保存 SATA0–6 对应的整盘 by-id，逐盘查 `ZONED` 和普通区、顺序写区。到此只操作裸设备的识别和测试。P4800X 分区、dm-zoned 格式化、RAIDZ1 建池和 scrub 都在正式安装 I4。
 
 ```bash
 sudo apt install nvme-cli smartmontools hdparm fio
