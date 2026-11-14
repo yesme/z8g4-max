@@ -1,6 +1,6 @@
 # I7. 保留 HT，DeepSeek 启停时交还整颗物理核
 
-F10 → Advanced → Performance Options 保持 HT、所有核心和 Turbo 开启，默认 NUMA 开、SNC 关。单 DDR4 节点按 [T3 与 I6 的实测](PMEM.md#验证单-ddr4-节点和-pmem-分层) 选择。用默认调度跑一轮真实模型和 Buck2，再启用本节。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程。按每路独立分配，CPU 编号随实机拓扑生成。
+F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT、所有核心和 Turbo 开启。用默认调度跑一轮真实模型和 Buck2，再启用本节。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程，按每路独立分配。DDR4 节点号用 [T3 拓扑报告](PMEM.md#核对双路-numa-拓扑) 确认。
 
 | 每路推理预留 | 双路可运行的推理线程 | 双路系统与编译可用线程 | Xolotl CPU expert worker 起点 |
 |---|---:|---:|---:|
@@ -30,6 +30,7 @@ Linux 的 CPU 号全机唯一，实际可能先枚举双路的物理核各一个
 | 系统、SSH、Xfce、普通 harness | 两路都保留普通任务的 CPU，沿用 Linux 本地优先。页初次实际分配时，内核优先使用当时运行线程所在的节点，紧张时可回退 | 用 `numastat -m` 看两路 DDR4 余量，用 `numastat -p PID` 看吃内存最多的服务 |
 | Buck2 本地编译、Buildbarn worker | 先保留两路对称 CPU 集合和本地优先，由并行编译进程就近分配。现有 `z8build-local.slice` 和 worker 的 `z8build-remote.slice` 都跨两路 | 看整个构建 cgroup 的 `memory.numa_stat`，分别比较 `anon` 和 `file`，以及真实构建时间。单个 linker 偏一侧可以接受。若持续挤满同一侧，先在多个独立构建间分配 socket，或对大工作集做两 DDR4 节点交错对照 |
 | 1Cat、Xolotl 四卡推理 | 推理核每路等量，约 101 GiB 共享 pinned 缓冲以 `Z8_DRAM_INTERLEAVE=0,1` 启动，目标约 50.5 GiB/路。0、1 是示例 DDR4 节点，不含 kmem。独立 staging 后续再试让每个 rank 的线程和缓冲贴近它对应的 V100 | 查实际 CUDA worker/引擎的 `/proc/PID/numa_maps`、`numastat -p PID` 和 pinned 峰值。用 `nvidia-smi topo -m` 对照 GPU 归属，再看 H→D、UPI、TTFT 和 decode |
+| llama.cpp 四卡推理 | 首轮同样在两路保留等量 CPU，以 DDR4 交错启动。`mmap` 的 GGUF/Engram 按条带的物理布局读取，进程策略影响可受该策略约束的 DRAM 分配。用 `--load-mode none` 对照时重新核 DDR4 预算 | 分开看文件映射、匿名页和 pinned buffer。按 `/proc/PID/smaps`、`numastat -p PID`、`VmPin` 与引擎日志核对，再比较 PCIe / UPI 和 TTFT |
 
 DDR4 交错是进程启动时的分配策略。具体映射若由引擎、共享内存或 CUDA 驱动另行设置，核实际节点分布。101 GiB 是总预算，还要留出系统和编译的空间。顶层 slice 的 `AllowedMemoryNodes` 维持默认，允许正常回退及冷页下沉。严格只给 DDR4 节点的 cgroup 会失去向 PMem 下沉的目标。 [Linux 7.0 下沉掩码](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L978) · [cgroup `memory.numa_stat`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
 
@@ -87,7 +88,11 @@ cat "$layout"/{z8infer.slice,z8-infer-cpu.env,80-z8-cpu.conf}
 
 ## 启停本地模型
 
-下面两个引擎选一个，按已通过的 I6 profile 写入 `~/.config/z8-infer/launch.sh`。以 `z8user` 创建目录与脚本，执行 `install -d -m 0700 ~/.config/z8-infer`、`chmod 0700 ~/.config/z8-infer/launch.sh`。`env.sh` 由该用户保存，权限设为 0600，填 GPU UUID、本地密钥以及对应引擎配置需要的变量，使用 `export NAME=值`。单 DDR4 节点时留空 `Z8_DRAM_INTERLEAVE`。双 DDR4 节点时填 `export Z8_DRAM_INTERLEAVE=0,1`，用 `numactl -H` 的实际 **DDR4** 节点编号。服务以 `z8user` 运行，要求 PMem 模型卷已挂载。
+按已通过的 I6 profile 写入 `~/.config/z8-infer/launch.sh`。以 `z8user` 创建目录与脚本，执行 `install -d -m 0700 ~/.config/z8-infer`、`chmod 0700 ~/.config/z8-infer/launch.sh`。`env.sh` 由该用户保存，权限设为 0600，填 GPU UUID、本地密钥以及对应引擎配置需要的变量，使用 `export NAME=值`。按 `numactl -H` 和 T3 报告填两个 **DDR4** 节点号，例如 `export Z8_DRAM_INTERLEAVE=0,1`。服务以 `z8user` 运行，要求 PMem 模型卷已挂载。
+
+**llama.cpp 的 `launch.sh`**
+
+沿用 [实测通过的 llama-server 命令](../inference/README.md#llamacpp-v100-首选多会话服务候选)。文件首部加 `#!/usr/bin/env bash` 和 `set -euo pipefail`，加载 `source "$HOME/.config/z8-infer/env.sh"`。将服务命令的开头改为 `exec /usr/bin/numactl --interleave="$Z8_DRAM_INTERLEAVE" /path/to/llama.cpp/build/bin/llama-server`。在 `env.sh` 填 `CUDA_VISIBLE_DEVICES`、`DS41_GGUF` 及跑通的 `SLOTS`、`SLOT_CTX` 和专家缓存预算。把 `--threads` 和 `--threads-batch` 两处初始值 12 一起改成实际预留 CPU 数。若为 Xolotl 配过服务的 `MemoryMax`，切换前按 llama.cpp 工作集调整同一个 drop-in。
 
 **1Cat 的 `launch.sh`**
 
@@ -95,11 +100,7 @@ cat "$layout"/{z8infer.slice,z8-infer-cpu.env,80-z8-cpu.conf}
 #!/usr/bin/env bash
 set -euo pipefail
 source "$HOME/.config/z8-infer/env.sh"
-memory_policy=()
-if [[ -n ${Z8_DRAM_INTERLEAVE:-} ]]; then
-    memory_policy=(/usr/bin/numactl "--interleave=$Z8_DRAM_INTERLEAVE")
-fi
-exec "${memory_policy[@]}" /usr/bin/bash \
+exec /usr/bin/numactl --interleave="$Z8_DRAM_INTERLEAVE" /usr/bin/bash \
     /path/to/z8-kit/inference/serve-1cat.sh /path/to/1Cat-vLLM /path/to/1cat-4x16.yaml
 ```
 
@@ -116,11 +117,8 @@ export Z8_BUSTER_INHERIT_SCOPE=1
 export STRATA_POOL_CORES="$Z8_XOLOTL_POOL_CPUS"
 export STRATA_ENGINE_NICE=0
 cd /path/to/Xolotl
-memory_policy=()
-if [[ -n ${Z8_DRAM_INTERLEAVE:-} ]]; then
-    memory_policy=(/usr/bin/numactl "--interleave=$Z8_DRAM_INTERLEAVE")
-fi
-exec "${memory_policy[@]}" /usr/bin/python3 tools/v41/serve/serve_ds41.py \
+export STRATA_BUILD_DIR="$PWD/build-buster"
+exec /usr/bin/numactl --interleave="$Z8_DRAM_INTERLEAVE" .venv-serve/bin/python tools/v41/serve/serve_ds41.py \
     --engine strata --config local-1017.json --port 8150
 ```
 

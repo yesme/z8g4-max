@@ -2,6 +2,8 @@
 
 主机运行 Xubuntu 26.04.1，按 [显卡驱动安装步骤](../host/INSTALL.md#安装并锁定-nvidia-显卡驱动) 装 NVIDIA 驱动。CUDA 12.x 工具链在容器内构建，后面所写的 Ubuntu 24.04 是该构建环境的镜像基底。容器里的 `nvidia-smi` 必须能看到 V100；如用 NVIDIA Container Toolkit，先验证设备映射与库注入。共享内存和 memlock 按实际 profile 需要开，模型目录只读挂载；1Cat 的 loopback 配置在宿主或使用 host 网络的测试容器内工作。把服务先以前台进程运行便于验错。
 
+F10 固定 NUMA 开、SNC 关。以下 `--interleave=0,1` 中的 `0,1` 是示例。用 `numactl -H` 和 [T3 拓扑报告](../host/PMEM.md#核对双路-numa-拓扑) 填两个 DDR4 节点号。模型启动后，用实际推理 worker PID 的 `numastat -p` 和 `/proc/<PID>/numa_maps` 核对页分布。
+
 ## 先挂 PMem，再准备文件
 
 模型、Engram、DSpark 和 tokenizer 从第一次下载起就放到约 510 GiB 的 App Direct 条带卷。先启 [PMem 模型卷](../host/PMEM.md#i4-在正式系统复用-pmem)，再以 `z8user` 登录准备目录。若容器启动，模型卷用相同绝对路径 bind mount，权重目录只读，启用持久 KV 的试验才给专用缓存目录写权限。
@@ -14,32 +16,64 @@ sudo install -d -m 0750 -o z8user -g "$(id -gn z8user)" \
 df -h "$PMEM"
 ```
 
-目录分别保存对应 checkout 的格式。先列出下载、解包临时空间、DSpark 和缓存预算。1Cat 参考主体和 Engram 合计约 249 GB，Xolotl 一套 Buster 参考主体和两份 raw Engram 合计约 353 GB，两套若都完整保存，合计约 602 GB，超过约 548 GB 的条带名义容量。按实际 revision 复算，空间不足就轮换引擎文件，保留 manifest 与 hash。两版量化只有字节完全相同且 loader 路径约定兼容时才共享文件。使用 Hugging Face CLI 时大文件用 `--local-dir "$PMEM/对应目录"`，并按选用的客户端将下载缓存或重组临时文件也设在 PMem，下载期间看 `df -h`。 [1Cat 参考文件大小](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Xolotl Buster 1017 文件示例](https://github.com/Indras-Mirror/Xolotl/issues/2)
+llama.cpp 和本页固定的 Xolotl 先共用同一套 ISTA IQ2_XXS 主体和 IQ4_NL Engram，约 249 GB（232 GiB）。1Cat #1277 的独立四分片参考套装另占约 249 GB。若两套都下载，在约 510 GiB 条带卷上名义只剩约 46 GiB，先扣除文件系统开销并核算 draft、缓存和临时文件。若另试 Xolotl raw Engram 参考套装，先安排轮换。用 `df -h` 检查实际可用量，下载和重组的临时文件也放 PMem。保留模型 revision、文件名与 SHA256。 [ISTA 模型文件](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF) · [1Cat 参考文件大小](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Buster raw Engram 样例](https://github.com/Indras-Mirror/Xolotl/issues/2)
 
-## llama.cpp 完整模型基线
+## llama.cpp v1.0.0 首选多会话服务候选
 
-在兼容 GCC 与 CUDA 12.9 的 Ubuntu 24.04 用户空间运行。先验证 `nvcc --version`。选择 ISTA 当期 llama.cpp 布局的一个固定 revision，把所有 IQ2_XXS 分片与独立 IQ4_NL Engram 下载到 `/srv/pmem-model/ds41-llamacpp`，保留原始命名。HF CLI 可以用 `hf download --dry-run` 先看匹配与容量。
+v1.0.0 于 2026-11-13 发布，包含后端专家缓存、LRFU/ClassLRU 和 CPU miss 分流。运行时给它设缓存预算，热点随实际路由变化，命中则从 GPU 缓存取专家。缓存开启后可把稳定工作阶段的一部分 miss 分给 CPU，其余通过 PCIe 上传给 GPU。`--moe-cache-mib` 是四卡合计预算。v1.0.0 源码对 `ubatch > 32` 跳过专家缓存接纳和 CPU miss 分流，大 batch 仍可复用已驻留的专家。分别测长 prompt prefill、工具返回后的 prefill 和持续 decode。 [v1.0.0 发布说明](https://github.com/ggml-org/llama.cpp/releases/tag/v1.0.0) · [专家缓存文档](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [缓存分流实现](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L684)
+
+在 CUDA 12.9 与兼容 GCC 的构建环境运行。用 `nvidia-smi -L` 取四块 V100 的 UUID，按硬件验机记录的 PCIe 顺序设置 `CUDA_VISIBLE_DEVICES`。记录 v1.0.0 对应 commit 和 `nvcc --version`。
 
 ```bash
-git clone --branch b11870 --depth 1 https://github.com/ggml-org/llama.cpp.git
+git clone --branch v1.0.0 --depth 1 https://github.com/ggml-org/llama.cpp.git
+git -C llama.cpp rev-parse HEAD
+nvcc --version
 cmake -S llama.cpp -B llama.cpp/build -G Ninja \
-    -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70
+    -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=70-real
 cmake --build llama.cpp/build --target llama-cli llama-server -j 8
-llama.cpp/build/bin/llama-cli --help | grep -E 'n-cpu-moe|gpu-layers|moe-cache-mib'
+export CUDA_VISIBLE_DEVICES=GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
+llama.cpp/build/bin/llama-server --list-devices
 ```
 
-按所用版本 `--help` 核对 flag。先用两块或四块 V100 的 UUID 列表和下列小 batch，确定低 GPU 层能生成连贯输出；逐次升层并查看实际显存/CPU offload。
+先给下载命令加 `--dry-run`，应列出五个主体文件和一个 Engram 文件。以下变量供两种引擎共用。链接在首次下载后创建一次。 [ISTA 分片链接约定](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF#llamacpp)
 
 ```bash
-export CUDA_VISIBLE_DEVICES=GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
-# In the model directory, create the published Engram shard link once.
-ln -s -- "$(realpath "$ENGRAM_GGUF")" "${GGUF_FIRST%-00001-of-00006.gguf}-00006-of-00006.gguf"
-llama.cpp/build/bin/llama-server --host 127.0.0.1 --port 18000 \
-    -m "$GGUF_FIRST" --alias deepseek-v4.1-flash-1017 --ctx-size 4096 \
-    --parallel 1 --batch-size 512 --ubatch-size 128 --jinja -ngl 8
+PMEM=/srv/pmem-model
+findmnt -rn -M "$PMEM" -t ext4 -O dax=always || exit 1
+DS41_MODEL_DIR="$PMEM/ds41-llamacpp"
+DS41_STEM=DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS
+DS41_GGUF="$DS41_MODEL_DIR/$DS41_STEM-00001-of-00006.gguf"
+DS41_ENGRAM="$DS41_MODEL_DIR/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf"
+hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
+    --revision 65d53bc8be65123e255ff02f3ded958b6dbf54fd \
+    --include "$DS41_STEM-*-of-00006.gguf" "${DS41_ENGRAM##*/}" \
+    --local-dir "$DS41_MODEL_DIR"
+test -s "$DS41_GGUF" && test -s "$DS41_ENGRAM" || exit 1
+ln -s -- "${DS41_ENGRAM##*/}" "$DS41_MODEL_DIR/$DS41_STEM-00006-of-00006.gguf"
 ```
 
-项目 README 的 `-ngl 99` 面向更大显存。开始跑 1017 前也可先用 1Cat 官方有 4×16 GB 记录的 Qwen3.8-27B NVFP4，检查四卡运行时与通信。 [llama.cpp](https://github.com/ggml-org/llama.cpp/releases/tag/b11870) · [ISTA 当前 GGUF 布局](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF) · [1Cat 4×16 GB 样例](https://github.com/1CatAI/1Cat-vLLM)
+先让 dense/attention 分层上四卡，把 routed experts 留在 host，测 cache-off。`-t/-tb` 以分给推理的 12 个逻辑 CPU 为起点，运行时纳入 [CPU 分核服务](../host/CPU-PLACEMENT.md#启停本地模型)。
+
+```bash
+findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always || exit 1
+slots=${SLOTS:-1}
+slot_ctx=${SLOT_CTX:-4096}
+numactl --interleave=0,1 llama.cpp/build/bin/llama-server --host 127.0.0.1 --port 18000 \
+    -m "$DS41_GGUF" --alias deepseek-v4.1-flash-1017 \
+    --load-mode mmap --lazy-mode on --split-mode layer --tensor-split 1,1,1,1 \
+    --n-gpu-layers all --cpu-moe --fit off --no-mmproj \
+    --moe-cache-mib "${MOE_CACHE_MIB:-0}" --moe-cache-cpu-share "${MOE_CPU_SHARE:-0}" \
+    --threads 12 --threads-batch 12 --batch-size 512 --ubatch-size 128 \
+    --parallel "$slots" --ctx-size "$((slots * slot_ctx))" --no-kv-unified \
+    --cont-batching --cache-ram 0 --no-cache-idle-slots --no-cache-prompt \
+    --spec-type none --reasoning off --jinja --metrics --slots
+```
+
+如果 cache-off 已显存不足，先查四卡分配并降低 `--n-gpu-layers`。cache-off 跑通后固定层分布，先设 `MOE_CACHE_MIB=8192 MOE_CPU_SHARE=0`，再单独扫 CPU share `0.5 / 0.9`。有足够逐卡余量才试 `16384 / 24576` MiB 总缓存。看每卡缓存分配、预填充和 decode 峰值、PCIe 带宽及正常退出时输出的 cache hit / CPU miss / host upload 统计。活跃 KV 先保留引擎默认布局，模型和 Engram 留 PMem。`mmap` 下经 fsdax 映射的页直接访问 PMem，CPU backend 也可能分配或重排部分张量到 DRAM。用引擎日志、`/proc/<PID>/smaps`、`VmPin`/`VmLck` 与 `numastat -p` 核对。可另测 `--load-mode none` 给冷专家更多 DDR4/pinned 容量，运行前先停重构建，确认 Engram 仍按需映射和 DDR4 余量。约 129 GiB 主体全进 DDR4 时，扣掉 16 GiB ARC、32 GiB 构建预算后，名义只剩约 15 GiB 给其他分配。 [缓存与 host buffer](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [权重 loader](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model-loader.cpp)
+
+固定专家策略后设 `SLOTS=2`，先测 4K/slot（总 8192），再设 `SLOT_CTX=8192` 测 8K/slot（总 16384）。核启动日志的 `n_ctx_slot`，请求同时运行时查 `/slots` 和 `/metrics`。先验证两路持续流式、不同项目标记与工具闭环，再把 `--no-cache-prompt` 改成 `--cache-prompt`，测 `A→A`、`A→B→A` 和相同前缀配不同后缀的实际复用 token 数。槽位按 prompt 相似度匹配，可另测 host prompt cache 和 slot 保存恢复。首轮并发面向同一操作者的多个 harness。比较两路各自和合计吞吐、短/长 prefill、工具追加后的 TTFT 及取消后恢复。拿四卡 Xolotl 用同一权重与任务作单会话对照，先在两边关闭 thinking（Xolotl 请求体加 `"reasoning_effort": "none"`），再固定到同一档实测。 [llama-server 参数与接口](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md) · [slot 匹配源码](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/server-context.cpp#L1801) · [Xolotl 请求参数](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/serve/serve_ds41.py#L60)
+
+要验证重启后复用，在已挂载的 PMem 卷上为运行账户准备权限 `0700` 的 `/srv/pmem-model/kv/llama`，另起一轮加 `--slot-save-path /srv/pmem-model/kv/llama/`。对空闲 slot 调 `POST /slots/<id>?action=save`，JSON 指定 `{"filename":"prefix.bin"}`。同版服务重启后对目标 slot 调 `action=restore`，重发同前缀配新后缀，核 API 返回的恢复量和下一次 prompt 的 `cache_n`。这是显式文件快照，运行时活跃 KV 和 host prompt cache 仍各用引擎自己的内存分配。 [slot 缓存保存与恢复接口](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md)
 
 ## 1Cat 性能试配
 
@@ -71,7 +105,7 @@ export VLLM_API_KEY
 numactl --interleave=0,1 bash "$kit/inference/serve-1cat.sh" "$repo" "$PWD/1cat-4x16.yaml"
 ```
 
-上面是默认双 DDR4 节点的启动方式。编号按 `numactl -H` 核对为 DDR4，实际页位置用 `numastat -p` 验。已选单 DDR4 节点时，从最后一条去掉 `numactl --interleave=0,1`。 [运行时内存策略](../host/CPU-PLACEMENT.md#运行时的-numa-内存策略)
+1Cat 要对实际 CUDA worker 核 `numastat -p`，并用 `VmLck`/`VmPin` 和引擎日志查 pinned 分配。 [运行时内存策略](../host/CPU-PLACEMENT.md#运行时的-numa-内存策略)
 
 过 4K 单会话后按计划分步恢复图、长上下文和 DSpark。把与 phase3 匹配的 draft safetensors 目录准备在 `/srv/pmem-model/ds41-1cat/dspark-v41`。在上一条生成命令中改用同 checkout 的 `serve-ds41-phase3.yaml`，追加 `--draft /srv/pmem-model/ds41-1cat/dspark-v41`，给 `--output` 新文件名。脚本把它填入 `speculative-config.model`，沿用配方的量化、加载方式及 DSpark5 宽度。该引擎要求 draft 宽度满足 checkpoint block size。检查日志确认 drafter 加载和接受率。原配方只有一个活动请求，先测同会话恢复。 [1Cat phase3 配方](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/serve-ds41-phase3.yaml) · [1Cat DSpark 参数校验](https://github.com/1CatAI/1Cat-vLLM/blob/main/vllm/config/speculative.py#L1006) · [#1277 handoff](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md)
 
@@ -92,30 +126,42 @@ strata launch --family deepseek41 --model ist-das-2.00bpw \
 
 I6 先验本节的原生启动。I7 改由 [CPU 分核服务](../host/CPU-PLACEMENT.md#启停本地模型) 启停本地模型，服务切换时自动让出与归还 CPU。1Cat 的 CUDA worker 继承 service cgroup；Xolotl 用配套补丁让 Buster 的实际引擎也继承该 cgroup。
 
-在 CUDA 12.x / GCC 兼容用户空间执行。先看 `docs/BUSTER.md`。把同一量化的 `$BUSTER_GGUF`、两路 raw Engram 目录和 `$RANK_BIN` 放在 `/srv/pmem-model/ds41-xolotl`，保留上游目录结构。`$XOL_TOKENIZER_DIR` 也放在这里，使用上游 GGUF 导出的 BPE 目录，参见 `export_tokenizer.py`。Buster 脚本使用 user systemd bus、`flock` 和 `MemoryMax=140G`，遇到内存上限先查实际工作集与 cgroup，独立 checkout 中修改并记录补丁。生成的 profile 带 `STRATA_ENGRAM_RAWDEV=0`，使用普通用户的文件读取路径。当前 Xolotl Engram 读法使用 `pread`，它在 DAX 文件系统上仍可绕开普通页缓存，PMD fault 仅对实际采用 `mmap` 的引擎路径成立。 [Buster 启动脚本](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/buster/buster-engine.sh) · [Xolotl Engram 读路径](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_engram.cpp)
+在 CUDA 12.x / GCC 兼容用户空间执行。固定到下面的 commit。把 `--model` 指向上节第一个分片，把 `--engram` 显式指向真实的 IQ4_NL Engram GGUF。该版本的 dense loader 识别 upstream 命名，独立 Engram loader 识别相应张量，读取时走 `pread`。`$XOL_TOKENIZER_DIR` 指向 PMem 上 1017 对应的 tokenizer 文件目录，实测时核两个引擎的 token 与模板。已用该量化与路由生成 rank 时给配置生成器追加 `--rank "$RANK_BIN"`，无 rank 时上游按 layer/expert 顺序初始化，可跑通基线并记录这一条件。若单独复现旧 Buster 配方，模型换成该配方的主体，`--engram` 传两路 raw 目录并用其配套 rank。 [Xolotl upstream GGUF 支持](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/docs/xolotl/CHANGELOG.md#upstream-llamacpp-and-unsloth-deepseek-v41-ggufs-82-84-85) · [Engram loader](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/engine/ds41_engram.cpp#L263)
+
+Buster 脚本使用 user systemd bus、`flock` 和 `MemoryMax=140G`，遇到内存上限先查实际工作集与 cgroup。生成的 profile 带 `STRATA_ENGRAM_RAWDEV=0`，使用普通用户的文件读取路径。DAX 上的 `pread` 可绕开普通页缓存，排查 PMD fault 时看采用 `mmap` 的引擎。 [Buster 启动脚本](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/buster/buster-engine.sh)
 
 ```bash
 kit=$(realpath /path/to/z8-kit)
 findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always || exit 1
+XOL_DIR=/srv/pmem-model/ds41-xolotl
+XOL_TOKENIZER_DIR="$XOL_DIR/tokenizer"
+hf download IndrasMirror/DeepSeek-V4.1-Flash-GSQ-Uncensored \
+    --revision 0ae18f838e103fb03d952fa8ed73c7aa9c34002f \
+    --include 'tokenizer/*' --local-dir "$XOL_DIR"
+test -s "$XOL_TOKENIZER_DIR/vocab.json" || exit 1
 git clone https://github.com/Indras-Mirror/Xolotl.git
 cd Xolotl
+git switch --detach db25febda3e2869333d72eca6b17296142916a9b
 git rev-parse HEAD
 bash tools/xolotl/fetch-llama.sh
 bash tools/buster/cmake-buster.sh "$PWD/build-buster"
 ninja -C build-buster -j 8 ds41_generate test_cuda_cc_policy test_ds41_pipeline test_ds41_geometry
-DS41_TEST_GGUF="$BUSTER_GGUF" ctest --test-dir build-buster \
+DS41_TEST_GGUF="$DS41_GGUF" ctest --test-dir build-buster \
     -R 'test_cuda_cc_policy|test_ds41_pipeline|test_ds41_geometry' --output-on-failure
 
 python3 "$kit/inference/configure.py" xolotl --repo "$PWD" \
-    --model "$BUSTER_GGUF" --engram "$ENGRAM_LAYER_1" "$ENGRAM_LAYER_14" \
-    --rank "$RANK_BIN" --tokenizer "$XOL_TOKENIZER_DIR" --gpu "$BUSTER_PCI_INDICES" \
+    --model "$DS41_GGUF" --engram "$DS41_ENGRAM" \
+    --tokenizer "$XOL_TOKENIZER_DIR" --gpu "$BUSTER_PCI_INDICES" \
     --output "$PWD/local-1017.json"
-python3 tools/v41/serve/serve_ds41.py --help
-numactl --interleave=0,1 python3 tools/v41/serve/serve_ds41.py \
+python3 -m venv .venv-serve
+.venv-serve/bin/pip install jinja2 regex
+export STRATA_BUILD_DIR="$PWD/build-buster"
+.venv-serve/bin/python tools/v41/serve/serve_ds41.py --help
+numactl --interleave=0,1 .venv-serve/bin/python tools/v41/serve/serve_ds41.py \
     --engine strata --config local-1017.json --port 8150
 ```
 
-`BUSTER_PCI_INDICES` 填按 checkout 实际识别的 V100 编号，如 `1,2`，用进程日志和 GPU UUID 复核。`--interleave=0,1` 只填实际 DDR4 节点，单 DDR4 节点时去掉 `numactl` 前缀。对 Buster 的实际引擎 PID 核 `numastat -p`。初始只用 loopback，先用 `ss -ltnp` 验监听。四卡用 layer split 和 `--parallel 1`。当前 DS41 native engine 在 layer split 下关闭 batch slots，仍有多 stage 的内存会话缓存，可串行测 `A→A` 与 `A→B→A`，观察复用日志。要测 DSpark，把兼容 sidecar 下载到同一 PMem 目录，生成命令追加 `--draft "$DSPARK_GGUF" --draft-tokens 1`，脚本填 `STRATA_SERVE_DSPARK`。核日志、末卡余量和接受率，再增深度。 [Xolotl DS41 源码](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_generate.cpp)
+`BUSTER_PCI_INDICES` 填按 checkout 实际识别的 V100 编号，如 `1,2`，用进程日志和 GPU UUID 复核。对 Buster 的 `ds41_generate` PID 核 `numastat -p`。初始只用 loopback，先用 `ss -ltnp` 验监听。四卡用 layer split 和 `--parallel 1`。本版本 DS41 native engine 在 layer split 下关闭 batch slots，仍有多 stage 的内存会话缓存，可串行测 `A→A` 与 `A→B→A`，观察复用日志。要测 DSpark，把兼容 sidecar 下载到同一 PMem 目录，生成命令追加 `--draft "$DSPARK_GGUF" --draft-tokens 1`，脚本填 `STRATA_SERVE_DSPARK`。核日志、末卡余量和接受率，再增深度。 [Xolotl DS41 源码](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/engine/ds41_generate.cpp#L615)
 
 ### 持久 KV 前缀试验
 
@@ -143,4 +189,6 @@ python3 inference/probe.py --base http://127.0.0.1:18000/v1 --usage \
     --repeats 5 --tools
 ```
 
-`--prompt-file` 可以换成不含密钥的固定文档，日志只写延迟和计数。用 `--max-tokens` 留足生成空间。先跑短文本和工具，再测长文、冷/热会话、真正的 harness 与并发构建。`A→B→A` 探针发送相同 A 请求，用于测精确前缀的时延代理。1Cat 上游 session cache 要求续上前一序列，另用其 `session_test.py` 验证真实续写以及日志中的命中。探针结果本身无法证明缓存命中、租户隔离或长上下文召回。
+`--prompt-file` 可以换成不含密钥的固定文档，日志只写延迟和计数。用 `--max-tokens` 留足生成空间。先跑短文本和工具，再测长文、冷/热会话、真正的 harness 与并发构建。看 llama.cpp 的 `usage.prompt_tokens_details.cached_tokens` 或 `timings.cache_n` 核前缀命中，`timings.prompt_n` / `prompt_ms` 核实 prefill。`A→B→A` 探针重发相同 A 请求，另用真实 harness 回传工具结果测增量 prefill。1Cat 上游 session cache 要求续上前一序列，另用其 `session_test.py` 验证真实续写以及日志中的命中。探针的项目标记用于发现串话，租户隔离和长上下文召回还要单独测。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)
+
+用 Xolotl 对照关闭 thinking 的 llama.cpp 时，探针加 `--base http://127.0.0.1:8150/v1 --reasoning-effort none`。能返回原生 `timings` 的服务会在探针 JSON 中显示 `server_timings`。

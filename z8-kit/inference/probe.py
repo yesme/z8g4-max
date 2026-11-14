@@ -16,6 +16,8 @@ def request(args, payload):
     headers = {"Content-Type": "application/json"}
     if os.environ.get("DS41_API_KEY"):
         headers["Authorization"] = f"Bearer {os.environ['DS41_API_KEY']}"
+    if args.reasoning_effort is not None:
+        payload = {**payload, "reasoning_effort": args.reasoning_effort}
     return Request(
         args.base.rstrip("/") + "/chat/completions",
         data=json.dumps({"model": args.model, **payload}).encode(),
@@ -33,6 +35,7 @@ def stream(args, label, messages, expected=None):
     started = time.monotonic()
     first_delta = first_content = last_content = None
     usage = {}
+    timings = {}
     complete = False
     text_chunks = 0
     text = []
@@ -48,6 +51,7 @@ def stream(args, label, messages, expected=None):
             if chunk.get("error"):
                 raise RuntimeError("SSE returned an error")
             usage = chunk.get("usage") or usage
+            timings.update(chunk.get("timings") or {})
             for choice in chunk.get("choices", []):
                 delta = choice.get("delta") or {}
                 now = time.monotonic()
@@ -79,6 +83,10 @@ def stream(args, label, messages, expected=None):
     }
     if isinstance(tokens, int) and tokens > 1 and elapsed > first_delta_seconds:
         result["approx_completion_tokens_per_s"] = round((tokens - 1) / (elapsed - first_delta_seconds), 2)
+    timing_fields = ("cache_n", "prompt_n", "prompt_ms", "predicted_n", "predicted_ms")
+    observed_timings = {key: timings[key] for key in timing_fields if key in timings}
+    if observed_timings:
+        result["server_timings"] = observed_timings
     return result
 
 
@@ -142,6 +150,7 @@ def main():
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--tools", action="store_true")
     parser.add_argument("--usage", action="store_true", help="Request SSE usage for supporting engines")
+    parser.add_argument("--reasoning-effort", help="Set reasoning_effort for engines that support it")
     args = parser.parse_args()
     if args.repeats < 1 or args.max_tokens < 1 or args.timeout <= 0:
         parser.error("repeats, max-tokens and timeout must be positive")

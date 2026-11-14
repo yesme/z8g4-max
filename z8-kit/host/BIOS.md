@@ -26,7 +26,7 @@
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 和 AX210 蓝牙接用的内部 USB 打开；sSATA 无连接可禁用，按板上实际丝印确认 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
 | Advanced → Slot Settings | Slot 2/3 Bifurcation x8/x8，Limit PCIe Speed 先 Auto，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。NVMe 走 Linux mdadm，Intel VROC 关或保留未配置 |
-| Advanced → Performance Options | 验机和正式部署默认 Non-Uniform Memory Access Enabled、Sub-NUMA Clustering Disabled，HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率 |
+| Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率 |
 | Advanced → Power Management Options | 首次联调可关 PCI Express Power Management（ASPM）和 SATA Power Management，减少链路休眠变量。基线通过后逐项恢复并复跑。SATA Power Management 不负责交错起转 |
 | Security → Security Configuration → System Security | Virtualization Technology (VTx) = Enable，Virtualization Technology for Directed I/O (VTd) = Enable。部分版本将这两项列在 Advanced → System Options |
 | Advanced → NVDIMM Management | 第一次混插只查 12 条模块、固件和当前状态，保留 `NVDIMM Configuration`，跳过 `Apply NVDIMM Configuration`。App Direct goal 在 Xubuntu 提交 |
@@ -46,7 +46,7 @@ Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 选择带 UEF
 | `Non-Uniform Memory Access = Disabled` | HP 另列 Memory Node Interleave 模式。对称 DDR4 下预期将双路交错呈现成一个 DRAM 节点，实际用 `numactl -H` 核对。两颗 CPU 和 UPI 仍在，跨路访问延迟也仍在，Linux 的 socket 级绑内存会失去原有边界。 |
 | `Sub-NUMA Clustering = Enabled` | SNC 是 Sub-NUMA Clustering。启用两簇模式后，每颗 CPU 内部的两套内存控制器分别与附近的核心和 L3 切片组成一个 NUMA 域，每域三个 DDR4 通道。双路预期可见四个带 CPU 的 DRAM 域，适合将线程与数据一起绑到同一域做延迟优化。混插 PMem 后的 region 与 PCIe 归属需另验。 |
 
-**验机和正式部署默认开 NUMA，SNC 始终关。** 开 NUMA 能给指定 socket 的 96 GiB DDR4 单独施压，便于查单路容量、通道或带宽异常。一个进程仍可使用双路内存，由启动器指定物理页策略。若已决定用一个 DDR4 节点，可以从 T1 就关 NUMA，省去切换；遇到单路问题时再开 NUMA 定位。采用关 NUMA 时，以实际运行配置验 DAX、kmem 和四卡推理。CPU/HT 分核始终按物理 socket 与同核线程生成。 [T3 切换与回退](PMEM.md#验证单-ddr4-节点和-pmem-分层) · [运行时内存策略](CPU-PLACEMENT.md#运行时的-numa-内存策略) · [Z8 G4 F10 菜单实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [HP QuickSpecs，第 21 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=21)
+**从 T1 起固定开 NUMA、关 SNC。** T2 可逐路对 96 GiB DDR4 施压，T3 可按 socket 核 PMem 归属和慢层去向。正式运行时由推理启动器在两路 DDR4 之间交错分配，CPU/HT 分核按物理 socket 与同核线程生成。 [T3 拓扑验收](PMEM.md#核对双路-numa-拓扑) · [运行时内存策略](CPU-PLACEMENT.md#运行时的-numa-内存策略) · [Z8 G4 F10 菜单实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [HP QuickSpecs，第 21 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=21)
 
 ## 内网主机的安全与虚拟化设置
 

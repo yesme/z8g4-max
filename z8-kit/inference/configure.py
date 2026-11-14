@@ -67,7 +67,7 @@ def xolotl(args):
         "cwd": str(repo),
         "args": [
             "-m", args.model, "--backend", "cuda", "--experts", "gpu",
-            "--engram", ":".join(args.engram), "--rank", args.rank,
+            "--engram", ":".join(args.engram),
             "--ctx", str(args.context), "--stop", "1", "--arena-adapt",
             "--route-bias", "0", "--route-bias-file", "0",
             "--arena-gib", str(arena_gib), "--no-chunk-mmq",
@@ -82,6 +82,8 @@ def xolotl(args):
         "sampling": {"temperature": 0, "top_p": 1},
         "parallel": args.parallel,
     }
+    if args.rank:
+        data["args"].extend(["--rank", args.rank])
     if len(gpu) > 1:
         data["layer_split"] = "20" if len(gpu) == 2 else "10,20,30"
     env = {"STRATA_ENGRAM_RAWDEV": "0"}
@@ -118,8 +120,9 @@ def main():
     cat.add_argument("--engram", type=existing, required=True)
     cat.add_argument("--offload", type=float, default=0.75)
     xo.add_argument("--repo", type=existing, required=True)
-    xo.add_argument("--engram", type=existing, nargs=2, required=True)
-    xo.add_argument("--rank", type=existing, required=True)
+    xo.add_argument("--engram", type=existing, nargs="+", required=True,
+                    help="One Engram GGUF or two raw Engram directories")
+    xo.add_argument("--rank", type=existing, help="Optional expert ranking for this model")
     xo.add_argument("--gpu", required=True)
     xo.add_argument("--log", default="xolotl-1017.log")
     xo.add_argument("--arena-gib", type=int, help="Pinned expert arena limit per stage, in GiB")
@@ -132,10 +135,20 @@ def main():
         parser.error("Invalid batch, context or port")
     if args.engine == "1cat" and not 0 < args.offload < 1:
         parser.error("Offload must be in (0, 1)")
-    if args.engine == "xolotl" and args.arena_gib is not None and args.arena_gib < 1:
-        parser.error("Arena must be positive")
-    if args.engine == "xolotl" and args.prefix_cache and not Path(args.prefix_cache).is_dir():
-        parser.error("Prefix cache must be a directory")
+    if args.engine == "xolotl":
+        engram_paths = [Path(value) for value in args.engram]
+        if len(engram_paths) == 1:
+            engram = engram_paths[0]
+            if not engram.is_file() or engram.suffix != ".gguf":
+                parser.error("A single Engram path must be a GGUF file")
+        elif len(engram_paths) != 2 or not all(path.is_dir() for path in engram_paths):
+            parser.error("Raw Engram requires two directories")
+        if args.rank and not Path(args.rank).is_file():
+            parser.error("Rank must be a file")
+        if args.arena_gib is not None and args.arena_gib < 1:
+            parser.error("Arena must be positive")
+        if args.prefix_cache and not Path(args.prefix_cache).is_dir():
+            parser.error("Prefix cache must be a directory")
     if args.draft and Path(args.draft).is_dir() != (args.engine == "1cat"):
         parser.error("DSpark requires a checkpoint directory for 1Cat or a GGUF file for Xolotl")
     content = onecat(args) if args.engine == "1cat" else xolotl(args)

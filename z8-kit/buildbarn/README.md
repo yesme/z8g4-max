@@ -68,6 +68,14 @@ Buck2 自带 Deferred Materialization，RE 产物在本地 action 需要时才�
 
 选 Linux 本机目标比较干净 checkout 冷缓存、热缓存、同一目标第二次本地使用、并发上传，以及构建+推理时的 p95。`buck2 log show` 查远端 AC 命中，`iostat -xz 2` 与 `zpool iostat -v 2` 查冷盘读/写。专门选择一个超过 dm-zoned cache 的上传/覆盖段观察 reclaim。热命中、冷读、上传的结果分别与全闪存基线对照。
 
+### 冷 CAS 读写调优
+
+512 GiB 冷 CS 是 `/data/buildbarn/blocks` 的文件尺寸。Buildbarn 将许多小 blob 放入同一个大文件中的新块，旧块按批次回收。当前 `old/current/new/spare = 8/24/3/3`，每个逻辑块约 13.47 GiB，它负责分配和淘汰。`minChunkSizeBytes=256 KiB` 与 `horizonSizeBytes=2 MiB` 是 CAS 切块参数。ZFS 的 `recordsize=1M` 和盘的 256 MiB zone 各自工作。先保留这几组值。P4618 的 64 GiB 热 CS 对重复读取有用，P4618 上的索引、CMS 和 AC 降低小随机 I/O 延迟。冷 CS `Put` 直接走 ZFS → 七组 dm-zoned → HC620，dm-zoned 可先把写入落到 P4800X。读取进入 old 类的块时，Buildbarn 的刷新可能把 blob 再写一遍，用实测区分刷新、上传和热层回填。 [本地块配置](https://github.com/buildbarn/bb-storage/blob/main/pkg/proto/configuration/blobstore/blobstore.proto) · [read-through 源码](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/readcaching/read_caching_blob_access.go) · [旧对象刷新](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/local/flat_blob_access.go)
+
+1. **上传。** 用一组产生新 digest 的真实目标填入冷库，记录客户端发送字节、构建完成时间、上传耗时和 p95。先测短突发，再测足够长的唯一数据和覆盖，以 `dmsetup status` 的 `cache` 空闲下降、回升和 HC620 写入确认已进入回收阶段。336 GiB 是七段 P4800X 的名义合计，ZFS 压缩、cache 元数据和各盘写入分布都会改变实际临界点。[I4 持续写](../storage/README.md#5-i4-验证实际写入scrub-与缺盘) 用于存储压力验证。真实构建样本用于决定是否要提速。
+2. **首次冷读。** 上传后先用未构建过该目标的隔离目录消费同一批产物。先选未回填热 CS 的新 digest，在 `iostat` 核 HC620 确实发生读，再记录 p95 和字节数。新上传的数据可能还在 dm-zoned cache，做盘侧冷读时要先等这些数据确实迁到 HDD。第二个隔离目录消费同样内容，核 P4618 热层回填后的延迟和盘读量。使用实际 Buck2 消费动作强制物化，避免把 AC hit 当成传输了内容。再加一轮 1/2/4 个并行构建，分别记录小文件与大产物。这能区分 seek 排队与吞吐上限。
+3. **按瓶颈改一项。** 热层命中低且工作集重复时，试 64→128 GiB。冷读慢时，用独立空 dataset 和成对的冷块/索引比较 1 MiB 与 256 KiB `recordsize`，同时看小对象的读放大、冷写和 ZFS 压缩比。写慢时先对比冷库 `zstd-3`/`lz4` 的 CPU 与盘写量，并测同一任务的 P4618 全闪存基线。若长时间写入已由 HC620 持续落盘决定，额外的 SSD 写缓冲只能延长突发吸收期。所有 A/B 保持同一模型负载、Buck2 目标和 CAS 几何，每个新存储实例用自己的元数据。
+
 在 Linux 工作树 A 和同一提交的干净工作树 B 各执行一次下列命令，替换项目目标标签。分别保存两次的 log，检查缓存查询、AC 命中和本地执行动作数量。
 
 ```bash
@@ -131,6 +139,8 @@ filefrag -sv "$src" "$outdir/explicit"
 ```
 
 `FICLONE` 或 `copy_file_range` 是路径线索。以两份文件的 `shared` 和物理区段匹配作为省空间的证据，`du` 会分别计两份逻辑拥有的块。工作流里只有需要第二份实体文件时才显式 reflink 导出；能直接使用 Buck2 返回的产物路径时可省掉导出。项目规则允许产物引用时，`ctx.actions.symlink_file` 可表达引用，发布二进制需要独立文件、RPATH 或旁边资源时再按规则要求使用 copy。 [Buck2 AnalysisActions](https://buck2.build/docs/api/build/AnalysisActions/)
+
+先用一个大链接产物分别验证 `--out` 和规则 `LocalCopy`。再从第二个 worktree 请求同一产物，记录 AC 命中、实际 CAS 读取量与两份文件的 FIEMAP。两次 gRPC 物化通常各自产生一份文件，即便服务端只有一个 digest。若确实要在多个 worktree 外共享同一套已构建输出，可以从第一个已物化的输出显式 clone 到 P4618 上的交付目录，并用 `cmp`、`filefrag` 核对。保持各 worktree 的 `buck-out` 由各自 daemon 管理。 [Rust 本地复制的系统调用](https://doc.rust-lang.org/std/fs/fn.copy.html) · [Buck2 Deferred Materialization](https://buck2.build/docs/users/advanced/deferred_materialization/)
 
 ## Linux worker
 

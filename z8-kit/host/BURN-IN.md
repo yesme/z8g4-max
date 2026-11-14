@@ -29,7 +29,7 @@ sudo apt update
 
 ### CPU 拷机
 
-从临时 SSD 启动并确认联网后，准备 CPU 微码和压测工具。微码安装后先重启，再记录两个物理 socket、DDR4 节点和当前微码版本。NUMA 开时预期两个 DDR4 节点，关时核实际是否只见一个。
+从临时 SSD 启动并确认联网后，准备 CPU 微码和压测工具。微码安装后先重启，再记录两个物理 socket、每路一个 DDR4 节点和当前微码版本。若 `numactl --hardware` 显示的拓扑不符，先回 F10 核对 NUMA 开、SNC 关，再确认两路 DDR4 枚举。
 
 ```bash
 sudo apt update
@@ -65,7 +65,7 @@ sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
 
 ## T2. 只测 DDR4
 
-1. DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，Fast Boot 和 SNC 关。NUMA 按准备部署的模式设定，默认开。P620 留在槽 4，其余板卡和硬盘继续等后续轮次。
+1. DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 留在槽 4，其余板卡和硬盘继续等后续轮次。
 2. 用官方 Memtest86+ x86_64 UEFI USB，F9 选 UEFI USB。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
 3. 换回临时 Linux。先检查 `free -h`。若只见约 192 GiB、无其他重服务，用下列 144 GiB 负载持续 4 h。保存两个 socket 的温度、频率、EDAC 和内核日志。
 
@@ -85,7 +85,7 @@ sudo journalctl -kb -o short-monotonic > ddr4-kernel-after.log
 diff -u ddr4-ecc-before.log ddr4-ecc-after.log
 ```
 
-终端执行前开 `set -o pipefail`。要求 `Status: PASS`、无新增 CE/UE、MCE、掉条。两 DDR4 节点按实机替换 `0,1`。若只见一个 DDR4 节点，直接执行 `stressapptest`，保留后面的参数。定位单边时才需要开 NUMA，用 `numactl --cpunodebind=N --membind=N`，每路试约 70 GiB（`-M 71680`）。排查后用正式配置复测。 [Memtest86+](https://www.memtest.org/readme) · [stressapptest](https://github.com/stressapptest/stressapptest)
+终端执行前开 `set -o pipefail`。要求 `Status: PASS`、无新增 CE/UE、MCE、掉条。两 DDR4 节点按实机替换 `0,1`。定位单路时用 `numactl --cpunodebind=N --membind=N` 逐路跑，每路试约 70 GiB（`-M 71680`）。排查后复跑两路交错测试。 [Memtest86+](https://www.memtest.org/readme) · [stressapptest](https://github.com/stressapptest/stressapptest)
 
 ## T3. PMem 100，App Direct 的专用检查
 
@@ -120,7 +120,7 @@ sudo env PMEM_TEST_DAX=/dev/dax0.1 PMEM_TEST_SIZE=8G \
 
 3. 通过后按 [PMem 手册](PMEM.md#剩余-pmem-转-kmem) 打开全局和每设备的 `memmap_on_memory`，再把两个 devdax 转成 kmem。用 `numactl -H` 确认实际慢节点，逐节点试 `numactl --membind=<slow-node> stressapptest -s 7200 -M 131072 -m 12 -W`。检查测试进程的 `numastat -p`。这轮确认慢内存可以直接分配、写入和回读。记录介质错误、温度、节流及各慢节点在线容量。
 
-4. 用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，再用相同构建负载比较 kmem 开关下的构建时间、内存 PSI 和 OOM/交换。独立比较 zswap 时要有 backing swap，记录压缩内存、CPU 和 swap-in/out。正式使用两 DDR4 节点时，通过后直接进入 T4。若要比较单 DDR4 节点，只在 PMem 仍为拷机测试数据时按 [单节点流程](PMEM.md#验证单-ddr4-节点和-pmem-分层) 切 F10，复测 DAX 回读和 kmem。
+4. 保存 [双路 NUMA 拓扑](PMEM.md#核对双路-numa-拓扑)，用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，再用相同构建负载比较 kmem 开关下的构建时间、内存 PSI 和 OOM/交换。独立比较 zswap 时要有 backing swap，记录压缩内存、CPU 和 swap-in/out。通过后直接进入 T4。
 
 ## T4. 存储、网络硬件和无坞基线
 
@@ -196,7 +196,7 @@ lsblk -e 7 -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN,ZONED
 ## T5. 算力坞 V100 与 PCIe 拷机
 
 - T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，`nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI` 保存前后。GPU Burn 用 CUDA 12.x `make COMPUTE=70` 构建。分别跑单卡 15 min，再四卡 `gpu_burn -m 80% -tc 3600`，查校验、温度、频率、功耗、泵、VRM/HBM 和接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
-- 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned H→D 与 UPI 命令](PMEM.md#量-upi-与-pinned-memory) 测 T3 选中的 BIOS 配置。若 T3 两种配置均通过，可只切 NUMA 比较四卡传输，按 T3 核 PMem 后再测。测试结束关机、断开 V100。
+- 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned H→D 与 UPI 命令](PMEM.md#量-upi-与-pinned-memory) 比较双路 DDR4 交错和按卡就近传输。测试结束关机、断开 V100。
 
 ## I7. 正式安装后的整机混合负载
 

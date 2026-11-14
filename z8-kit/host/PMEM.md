@@ -139,9 +139,22 @@ sudo ndctl list -RNXu
 
 两个 `fsdax` 合成一个约 510 GiB 的模型卷。2 MiB 条带按文件系统块地址分到两个 PMem 成员，线程的 `numactl` 策略无法改变已有文件的位置。文件路径对引擎只有一份，跨路读取仍可能走 UPI。两个 `devdax` 各自按固件给的目标节点上线，供 Linux 迁移可回收的页。四个 namespace 的数量和 Linux NUMA 节点的数量分别核对。
 
+### App Direct、fsdax 与 devdax
+
+`App Direct` 是 `ipmctl` 给固件提交的容量用途，重启后得到每路的 region。`fsdax` 与 `devdax` 是 Linux 在 region 内按 namespace 选择的访问方式。一套 App Direct 配置可以同时用两种 namespace。 [Linux NVDIMM namespace 模式](https://nvdimm.docs.kernel.org/index.html) · [daxctl system-ram](https://docs.pmem.io/ndctl-user-guide/daxctl-man-pages/daxctl-reconfigure-device)
+
+| 方式 | 出现在 Linux 的形式 | 在本机的用途 |
+|---|---|---|
+| `fsdax` | `/dev/pmemN` 块设备。ext4 提供普通文件名、权限和 DAX `mmap` | GGUF、Engram、DSpark 和引擎显式保存的文件型快照。读取映射页直接访问 PMem，文件仍可用普通工具管理 |
+| `devdax` | `/dev/daxX.Y` 字符设备。程序需要显式映射和管理偏移 | 上线前可逐路测设备。随后交给 `daxctl` 转 `system-ram`，由 `dax_kmem` 把该范围加进 Linux 的系统内存 |
+
+转为 `system-ram` 后由 Linux 管理可移动页，按慢层测试冷页下沉。两路分别上线，不做条带。`fsdax` 文件仍固定在模型卷的物理地址上，内核慢层对可迁移页的处理与模型文件布局独立。CUDA 已长期 pin 的页留在原驻留内存中，也要从 DDR4 预算扣除。
+
 ## 模型卷
 
 各 socket 一个 `fsdax` namespace。T3 先做两个本地 ext4 DAX 挂载，再在测试数据可清除时建立跨 socket 的约 510 GiB `dm-stripe` RAID0 模型卷。Linux v7.0 的 stripe target 有 direct_access。Engram 1/14 分放与绑定线程的组合可用两个本地挂载测试，前提是引擎支持拆文件。 [Linux dm-stripe](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-stripe.c) · [PMem 的 dm-stripe 操作](https://pmem.io/blog/2018/05/using-persistent-memory-devices-with-the-linux-device-mapper/)
+
+2 MiB 条带在两路现有 region 之上，每个 2 MiB chunk 只在一路，连续 chunk 在两路间轮转。主要收益是约 510 GiB 的统一容量和目录。并发扫描可利用两路带宽。单次几十到几百字节的 Engram 查表仍由所在 PMem 服务，跨插槽访问会经过 UPI，所以随机读 p95 要测。两个本地 255 GiB 卷可以分别放约 129 GiB 主体和约 103 GiB Engram，并在引擎支持独立文件路径或分片链接时复用。同一套权重能在两个布局间做 A/B。比较 cold load、实际 Engram 查表 p95、长 prompt TTFT、decode 和加 Buck2 后的变化。条带中断一侧会使整卷不可用，本机用固定 revision 和 SHA256 恢复模型文件。 [dm-stripe 说明](https://pmem.io/blog/2018/05/using-persistent-memory-devices-with-the-linux-device-mapper/#creating-dm-striped-devices) · [2 MiB PMD 映射条件](https://nvdimm.docs.kernel.org/2mib_fs_dax.html)
 
 若先跑两路单独测试，用 `sudo ndctl list -RNv` 记录每个 region 下 fsdax 的 `uuid`、`blockdev` 和 NUMA 归属。以下两条 `mkfs.ext4` 各写一个空的 fsdax namespace。测试结束先卸载两个文件系统，记录结果。若随后改成条带，两个原文件系统将被新布局覆盖，先把要留的文件复制到外部日志盘。
 
@@ -258,7 +271,7 @@ MGLRU 管页回收顺序。`demotion_enabled` 控制回收时能否尝试把冷�
 
 ### 核实每路 DDR4 的冷页去向
 
-Linux 7.0 根据 NUMA 距离为每个 DDR4 节点选择下一层首选目标，目标可受 cgroup 内存节点集合约束。两块 PMem 同处慢层、每个 DDR4 节点到同插槽 PMem 的距离较近时，预期各走本地。距离相同可能在两块之间选，本地慢节点分配失败也可能跨路回退。两块 PMem 不需要做条带即可工作。用 `ipmctl show -region` 的 `SocketID` 和 namespace UUID 对到 `daxctl` 的 `target_node`，用距离矩阵和当前启动日志核对，节点号以实机为准。若只见一个 DDR4 节点，就从该节点做一次测试，能验证下沉，无法分辨两路 DDR4 各自的去向。 [Linux 7.0 内存分层与目标选择](https://github.com/torvalds/linux/blob/v7.0/mm/memory-tiers.c#L311) · [Linux 7.0 回收与回退](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L927)
+Linux 7.0 根据 NUMA 距离为每个 DDR4 节点选择下一层首选目标，目标可受 cgroup 内存节点集合约束。两块 PMem 同处慢层、每个 DDR4 节点到同插槽 PMem 的距离较近时，预期各走本地。距离相同可能在两块之间选，本地慢节点分配失败也可能跨路回退。两个 devdax 分别上线。用 `ipmctl show -region` 的 `SocketID` 和 namespace UUID 对到 `daxctl` 的 `target_node`，用距离矩阵和当前启动日志核对，节点号以实机为准。 [Linux 7.0 内存分层与目标选择](https://github.com/torvalds/linux/blob/v7.0/mm/memory-tiers.c#L311) · [Linux 7.0 回收与回退](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L927)
 
 ```bash
 numactl -H
@@ -300,23 +313,15 @@ sudo systemctl stop z8-pmem-demotion-test.service
 
 对照 `anon` 在源 DDR4 减少、在预期 PMem 节点增长，源节点的 `pgdemote_proactive` 增长，swap 保持 0。`memory.reclaim` 若返回 `EAGAIN`，表示回收量未达到请求值，先看计数和节点分布，再决定是否重试。源节点计数给出下沉量，目的节点的 `anon` 变化给出去向。两路分别跑完，再用真实混合负载比较延迟。 [cgroup v2 主动回收与节点统计](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) · [Linux 7.0 回收计数](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L4448)
 
-## 验证单 DDR4 节点和 PMem 分层
+## 核对双路 NUMA 拓扑
 
-这是选择单 DDR4 节点时的验收，默认两 DDR4 节点可跳过。若 T1 就从关 NUMA 开始，直接在该设置下核 App Direct、DAX、kmem 和推理。如果要比较两种设置，按下面流程切换。目标是让系统看到一个约 192 GiB 的 DDR4 节点，同时保留两路 App Direct region、DAX 模型卷与可下沉冷页的独立 PMem 慢层。HP QuickSpecs 列有 Memory Node Interleave。HP 白皮书只在 Intel Memory Mode 下明确要求开 NUMA，现有资料未给出本机 BIOS 与 8269CY 在 App Direct 下关 NUMA 的实际节点拓扑。Linux 7.0 的 DAX kmem 需要固件提供有效的 `target_node`，冷页下沉也要有单独的低速节点。 [HP QuickSpecs，第 21 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=21) · [HP PMem 白皮书，第 6 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=6) · [Linux 7.0 DAX kmem](https://raw.githubusercontent.com/torvalds/linux/v7.0/drivers/dax/kmem.c)
+T3 两个 kmem 设备上线后，从 `z8-kit` 根目录保存报告。正式系统第一次启动 PMem 服务后复跑，与 T3 对照。用 `lscpu` 的 `SOCKET` 列对照 `numactl`，每颗 CPU 对应一个约 96 GiB 的 DDR4 节点。用 `ipmctl`、`ndctl` 与 `daxctl` 把每路 App Direct region、两个 namespace 的 UUID 和 kmem 目标节点对应起来。用 `lsmem` 和报告中的 `memory_tiering` 核两个 kmem 设备均已作为 `Movable` 内存进入慢层，并记录逐路冷页测试的源和目标。两个 **DDR4** 节点号用于推理启动器的 `Z8_DRAM_INTERLEAVE`。 [Linux 7.0 DAX kmem](https://github.com/torvalds/linux/blob/v7.0/drivers/dax/kmem.c) · [推理启动器](CPU-PLACEMENT.md#启停本地模型)
 
-1. T3 的两节点基线通过后，在临时 Xubuntu 保存下面的 `on` 日志。模型卷只保留拷机文件，另存其 SHA-256 清单。停压测、卸载 `/srv/pmem-model` 并重启。F10 进 `Advanced → Performance Options`，只把 `Non-Uniform Memory Access` 改为 `Disabled`，保持 `Sub-NUMA Clustering = Disabled`。从 F9 回同一个临时 Xubuntu。
-
-   ```bash
-   # 从 z8-kit 根运行。第二次把 tag 改成 off，先在 kmem 上线前记录。
-   tag=on
-   mkdir -p "$HOME/z8-burnin"
-   sudo bash host/pmem-numa-report.sh | tee "$HOME/z8-burnin/numa-$tag.log"
-   sudo ndctl list -RNXu | tee "$HOME/z8-burnin/namespaces-$tag.json"
-   ```
-
-2. 核 `numactl --hardware` 里两颗 socket 的 CPU 所在节点及 DDR4 容量，用 `lscpu -e=CPU,NODE,SOCKET` 区分 CPU 的物理 socket。对照两个 App Direct region 及四个 namespace 的 UUID 和容量。用 [模型卷步骤](#模型卷) 中的 `pmem-dax-stripe.sh create` 和 `mount` 重新装配原卷，跳过 `mkfs`，用保存的清单跑 `sha256sum -c`。在 kmem 上线后，用 `sudo daxctl list -RDu` 核 `target_node`。上线前也可在 sysfs 读 `/sys/bus/dax/devices/daxX.Y/target_node`。两个设备都要有有效的节点号，且均与 DDR4 分开。
-3. 用 [kmem 设置](#剩余-pmem-转-kmem) 中相同的 `memmap_on_memory` 参数将两块 devdax 转 kmem，以 `lsmem -o RANGE,SIZE,STATE,NODE,ZONES` 和 `memory_tier*/nodelist` 核两块容量都已上线为 `Movable`，且出现在与 DDR4 分开的慢 tier。按 [冷页测试](#核实每路-ddr4-的冷页去向) 确认冷页实际进入慢节点。若从两节点切到单节点，复测本阶段受拓扑影响的内存分配与慢层访问。用 `sudo bash host/pmem-numa-report.sh <PID>` 另存上线后的结果。
-4. 关 NUMA 后如遇 POST、region/namespace、DAX 或慢层问题，先在 F10 恢复 `Enabled`，回到原拓扑后重核 UUID 和回读。切换实验只改 F10 设置和 Linux 运行态的 kmem 上线，不重提 goal、重建 namespace 或格式化。通过则用单 DDR4 节点继续 T4/T5。T5 复测四卡 pinned H→D，I6 再看实际 arena、TTFT、decode 和混合负载。若推理实测需要两路本地性，恢复两节点基线并用启动器分配 DDR4。
+```bash
+mkdir -p "$HOME/z8-burnin"
+sudo bash host/pmem-numa-report.sh | tee "$HOME/z8-burnin/numa-topology-$(date +%F-%H%M%S).log"
+lsmem -o RANGE,SIZE,STATE,NODE,ZONES
+```
 
 ## I4 在正式系统复用 PMem
 
@@ -346,9 +351,9 @@ sudo systemctl enable z8-pmem-model.service z8-pmem-kmem.service
 
 ```bash
 nvcc -O3 -std=c++17 -arch=sm_70 -Xcompiler=-pthread host/pinned-copy.cu -o pinned-copy
-# 两种 BIOS 设置都跑默认策略，CUDA_VISIBLE_DEVICES 仅含 V100 UUID。
+# CUDA_VISIBLE_DEVICES 仅含 V100 UUID。先跑系统默认分配策略。
 ./pinned-copy 512 100
-# 以下三条仅在有两个 DDR4 节点时运行，按实际节点号替换 0,1。
+# 按实测 DDR4 节点号替换 0,1。
 numactl --interleave=0,1 ./pinned-copy 512 100
 numactl --cpunodebind=0 --membind=0 ./pinned-copy 512 100
 numactl --cpunodebind=1 --membind=1 ./pinned-copy 512 100
@@ -357,6 +362,8 @@ sudo pcm 1 -csv=upi.csv
 ```
 
 用两组各自只可见就近两张 V100 的进程同时跑，和单进程四卡交错比较。用 Intel MLC `--bandwidth_matrix`、`--latency_matrix` 做 CPU DRAM 基线。用同一请求回放比较真实 1Cat 和 Xolotl 的 TTFT、decode、pinned 峰值与跨路流量。普通 `numactl --interleave=0,1` 作用于进程政策，单独用 `numastat -p` 核实际页放置。两个 socket 共用地址空间，拆 rank 和 pinned 分配策略可放在 launcher 里。若 pin API 或引擎把 arena 集中到一节点、复制多份 GGUF 或触及约束，先减少 pinned arena 或改 rank-local staging，逐项重新测。 [Intel MLC](https://www.intel.com/content/www/us/en/developer/articles/tool/intelr-memory-latency-checker.html) · [Intel PCM](https://github.com/intel/pcm) · [Linux NUMA policy](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)
+
+四卡实验用同一 CPU 分核、模型卷布局、请求和 Buck2 并发，依次比较 Linux 默认本地优先、两 DDR4 节点交错，以及引擎支持时按卡就近放置 staging。DDR4 交错让假设的 101 GiB arena 平均每路约 50.5 GiB，名义各余 45.5 GiB，再扣系统与构建负载。按卡就近放置 staging 有机会减少跨 UPI 的 DMA。用四卡 pinned H→D、`pcm`、推理和 Buck2 混合负载验证收益。 [Linux NUMA policy](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html) · [Intel PCM](https://github.com/intel/pcm)
 
 ### I7 让推理与编译分用物理核
 
