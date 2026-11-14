@@ -11,8 +11,8 @@
 | `/srv/pmem-model`，两路 App Direct fsdax 的 dm-stripe/XFS | `z8-pmem-model.service` | `dax=always,noatime,nodiscard`。普通文件走 DAX，避免权重/Engram 热读更新 atime，保留 XFS 日志供模型文件更新。建卷时设 2 MiB 条带单元并关闭 reflink。 |
 | `/data`、`z8data`、`z8data/reserve` | `/data` 是根 XFS 上的普通目录，ZFS 两者不挂载 | 池根只设继承属性，`reserve` 只留空间，`readonly=on,canmount=off,mountpoint=none`。 |
 | `/data/buildbarn`，ZFS `z8data/buildbarn` | `data-buildbarn.mount`，`mountpoint=legacy` | `rw`，本地 `recordsize=1M,compression=zle,special_small_blocks=0`，继承 `atime=off,sync=standard,logbias=latency,primarycache=all`。容器 bind 到 `/cold`。 |
-| `/data/other`，ZFS `z8data/other` | `data-other.mount`，`mountpoint=legacy` | `rw`，本地 `recordsize=1M,special_small_blocks=24K`，继承 `zstd-3` 等公共属性。由池导入服务拉起。 |
-| `/srv/bbindex`，P4800X p9 XFS | `srv-bbindex.mount`，GPT 分区标签 `z8-cold-index` | `rw,noatime,nodiscard,x-systemd.device-bound`，容器 bind 到 `/cold-index`。 |
+| `/data/other`，ZFS `z8data/other` | `data-other.mount`，`mountpoint=legacy` | `rw`，本地 `recordsize=1M,special_small_blocks=24K`，继承 `zstd-3` 等公共属性。随开机拉起池导入，池启动后挂载。 |
+| `/srv/bbindex`，P4800X p9 XFS | `srv-bbindex.mount`，GPT 分区标签 `z8-cold-index` | 首装 XFS `reflink=0`。开机挂载 `rw,noatime,nodiscard,x-systemd.device-bound`，容器 bind 到 `/cold-index`。 |
 | HC620、P4800X p1–p8、七个 dm-zoned mapper | systemd 存储链与 zpool | 这些是块设备或池成员。只在 ZFS 数据集这一层挂载文件系统。池用 `autotrim=on`。 |
 | 两路 PMem devdax 转 system-ram | `z8-pmem-kmem.service` | 作为内核内存节点上线，无文件系统。 |
 

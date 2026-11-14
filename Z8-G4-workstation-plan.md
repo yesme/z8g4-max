@@ -1,6 +1,6 @@
 # HP Z8 G4 双路工作站装机与部署计划
 
-2026 年 11 月 15 日 · v2.18 实施版
+2026 年 11 月 15 日 · v2.19 实施版
 
 主机名 `jackywang-xubuntu-max`，登录用户 `jackywang`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。HC620 与 P4800X 组成可重建的冷 CAS 和归档池，冷索引放在 P4800X 的独立 XFS。模型从首装开始直接放在 App Direct。PMem 从 T3 起使用正式条带。
 
@@ -116,13 +116,13 @@ P4800X 的 p1–p7 各 96 GiB，分别作为七个 dm-zoned 缓存。七个 mapp
 
 数据集平铺为 `z8data/buildbarn`、`z8data/other` 和 `z8data/reserve`，根只传递公共属性。冷库 `recordsize=1M,compression=zle,special_small_blocks=0`，约 41 TiB 预留同时定义块文件长度，排除快照。其它数据设 `recordsize=1M,special_small_blocks=24K`，继承 `zstd-3`。空数据集预留初始可用量的 10%，其它数据共享剩余量。这个预留给池留出可分配空间，实际碎片和回收吞吐在物理占用首次到 80% 时检查。整块 P4800X 故障会丢失全池和冷索引，独立设备保留恢复源。 [建池、容量与同步写](z8-kit/storage/README.md#3-建-zfs-池与-legacy-mount-数据集)
 
-**强制启动顺序**是 `z8-dmzoned.service → z8-zpool.service → data-buildbarn.mount → z8-buildbarn.service`。Buildbarn 同时要求 `srv-bbindex.mount`，p9 缺席仍可导入池。池导入后尝试挂 `/data/other`，其结果独立于冷库启动。按 SATA by-id 和 p1–p7 逐一匹配，等设备最多 90 秒；p8 存在且至少六个 mapper 有效才尝试按 GUID 导入。正常停机逆序，池未导出时脚本拒绝拆 mapper。P4800X 整卡缺席时主机仍可 SSH。 [存储单元与安装步骤](z8-kit/storage/README.md#4-i4-安装存储依赖链)
+**强制启动顺序**是 `z8-dmzoned.service → z8-zpool.service → data-buildbarn.mount → z8-buildbarn.service`。Buildbarn 同时要求 `srv-bbindex.mount`，p9 缺席仍可导入池。I4 将三个挂载单元设为开机启动。两个 ZFS 挂载拉起池导入，`/data/other` 的开机挂载独立于 Buildbarn。按 SATA by-id 和 p1–p7 逐一匹配，等设备最多 90 秒；p8 存在且至少六个 mapper 有效才尝试按 GUID 导入。正常停机逆序，池未导出时脚本拒绝拆 mapper。P4800X 整卡缺席时主机仍可 SSH。 [存储单元与安装步骤](z8-kit/storage/README.md#4-i4-安装存储依赖链)
 
 ### 首次部署与以后每次启动
 
 首次部署先复制样例 `hybrid.tsv.example` 和 `storage.env.example`，把 SATA 口对应的七个 ATA 整盘 by-id 填到七行。例如 SATA3 对应 `hc620-3` 和 P4800X p4。所有 NVMe 分区统一使用同一根 by-id。先对确认可清空的 `hc620-0` 对应设备做一次初始化和启动，核 mapper 下只有对应的一块 HDD 和 p1 后，再处理另外六对。建池前用 `zpool create -n` 核对预览，建成后把 `zpool list -H -o guid z8data` 的结果写进 `Z8_POOL_GUID` 并导出。 [建池命令](z8-kit/storage/README.md#建池命令)
 
-I4 启动 `data-buildbarn.mount` 和 `srv-bbindex.mount`，检查冷块和索引挂载，完成持续写、scrub 和缺盘演练。I5 启用 `z8-buildbarn.service` 和 worker 后，由 systemd 在每次开机拉起依赖。池用 `cachefile=none` 并按 GUID 导入，两份 ZFS 数据集用 legacy mount。启动守卫核对冷库、p9、P4618 热层、预留和持久记录中的文件大小。
+I4 启用并启动 `data-buildbarn.mount`、`data-other.mount` 和 `srv-bbindex.mount`，检查安装结果，再做持续写、scrub 和缺盘冷启。I5 单独启用 `z8-buildbarn.service` 和 worker。池用 `cachefile=none` 并按 GUID 导入，两份 ZFS 数据集用 legacy mount。启动守卫核对冷库、p9、P4618 热层、预留和持久记录中的文件大小。
 
 ```bash
 sudo journalctl -b -o short-monotonic -u z8-dmzoned -u z8-zpool \

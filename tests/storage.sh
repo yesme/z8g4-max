@@ -110,3 +110,21 @@ touch "$tmp/foreign-hc620-3"
 if bash "$tmp/storage" unmap; then echo 'Unmapped a foreign device' >&2; exit 1; fi
 [[ $(ls -A "$tmp/dev/mapper") == hc620-3 ]]
 echo 'Mock storage paths passed: 7/6/5 disks, runtime HDD loss, missing p8, and live-pool/foreign mapping guards.'
+
+# Install the same units as I4, leaving the I5 Buildbarn units out.
+root="$tmp/systemd"
+units="$root/etc/systemd/system"
+mkdir -p "$units"
+install -m 0644 z8-kit/storage/systemd/{data-buildbarn.mount,data-other.mount,srv-bbindex.mount,z8-zpool.service,z8-dmzoned.service} "$units/"
+printf '[Unit]\nDescription=Boot target fixture\n' > "$units/multi-user.target"
+systemctl --root "$root" --quiet enable data-buildbarn.mount data-other.mount srv-bbindex.mount
+for mount in data-buildbarn.mount data-other.mount srv-bbindex.mount; do
+    [[ -L "$units/multi-user.target.wants/$mount" ]]
+    grep -Fxq 'DefaultDependencies=no' "$units/$mount"
+done
+for mount in data-buildbarn.mount data-other.mount; do
+    [[ -L "$units/z8-zpool.service.wants/$mount" ]]
+    grep -Fxq 'BindsTo=z8-zpool.service' "$units/$mount"
+    grep -Fxq 'After=z8-zpool.service' "$units/$mount"
+done
+echo 'I4 storage mounts enable independently of the Buildbarn service.'

@@ -5,7 +5,7 @@
 | 目录 | 用途 |
 |---|---|
 | host | AX210 首次 Live 联网、F10 与固件、Memtest86+、PMem 专用拷机、App Direct、UPI 和 CPU 分核 |
-| inference | 构建指引、1Cat/Xolotl 配置生成和启动、SSE/并发/工具探针 |
+| inference | llama.cpp 首装、Xolotl 回退、1Cat 专项、SSE/并发/工具探针 |
 | harness | 按项目启动独立 tmux，OMP/Pi/DSH 直连 DeepSeek，本地 OMP 验机样例 |
 | buildbarn | Z8 的 RAIDZ1 冷库和调度器、mini 与 Mac 的边缘缓存、Linux/Darwin worker、Buck2 延迟物化和 XFS reflink |
 | storage | P4800X 九分区、七个 dm-zoned 映射、RAIDZ1 与 p9 冷索引依赖 |

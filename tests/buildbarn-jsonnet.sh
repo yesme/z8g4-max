@@ -12,6 +12,16 @@ printf '%s\n' '{"tib":41,"indexGib":520}' > "$tmp/cold-index/cold-layout.json"
 for source in "$tmp"/config/*.jsonnet; do
     jsonnet "$source" > "${source%.jsonnet}.rendered.json"
 done
+assert_index_size() {
+    local config=$1 path=$2 gib=$3
+    jq -e --argjson path "$path" --argjson gib "$gib" '
+        .contentAddressableStorageServer.contentAddressableStorage.chunkStorage
+        | getpath($path).keyLocationMap.onBlockDevice.file.sizeBytes == ($gib * 1024 * 1024 * 1024)
+    ' "$config" >/dev/null
+}
+assert_index_size "$tmp/config/tiered-cache.rendered.json" '["readCaching","fast","local"]' 8
+assert_index_size "$tmp/config/edge-cache.rendered.json" '["readCaching","fast","local"]' 4
+
 jq -e '
     .contentAddressableStorageServer.contentAddressableStorage.chunkStorage.readCaching.slow.local
     | .blocksOnBlockDevice.source.file == {path:"/cold/blocks", sizeBytes:(41 * 1024 * 1024 * 1024 * 1024)}
@@ -24,10 +34,12 @@ jq '. + {xcode:"26.1", developerDir:"/Applications/Xcode.app/Contents/Developer"
     "$tmp/config/edge-site.json" > "$tmp/edge-darwin.json"
 mv "$tmp/edge-darwin.json" "$tmp/config/edge-site.json"
 for source in "$tmp"/config/edge-*.jsonnet; do
-    jsonnet "$source" >/dev/null
+    jsonnet "$source" > "${source%.jsonnet}.rendered.json"
 done
+assert_index_size "$tmp/config/edge-cache.rendered.json" '["readCaching","fast","local"]' 4
 
 # The XFS fallback may be started without the P4800X index or its geometry.
 rm "$tmp/cold-index/cold-layout.json"
-jsonnet "$tmp/config/fallback-farm.jsonnet" >/dev/null
+jsonnet "$tmp/config/fallback-farm.jsonnet" > "$tmp/config/fallback-farm.rendered.json"
+assert_index_size "$tmp/config/fallback-farm.rendered.json" '["local"]' 1
 echo 'Buildbarn Jsonnet tests passed.'

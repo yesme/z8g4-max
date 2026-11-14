@@ -69,10 +69,17 @@ done
 printf '%s\n' "$((41 * 1024**4))" > reservation
 bash check
 grep -Fx '{"tib":41,"indexGib":520}' "$layout"
+[[ $(stat -c %a -- "$layout") == 644 ]]
+
+# Check that an incomplete pair is rejected even before the first checkpoint.
+printf '%s\n' "$((41 * 1024**4))" > cold/blocks
+fail 'Accepted a lone cold block file with a saved layout'
+rm cold/blocks
+truncate -s "$((520 * 1024**3))" "$index"
+fail 'Accepted a lone cold index with a saved layout'
 
 # Reuse the geometry when the index is already allocated and free space has changed.
 rm free
-truncate -s "$((520 * 1024**3))" "$index"
 printf '%s\n' "$((41 * 1024**4))" > cold/blocks
 bash check
 printf '%s\n' "$((42 * 1024**4))" > reservation
@@ -83,7 +90,9 @@ fail 'Accepted a mismatched existing cold index'
 truncate -s "$((520 * 1024**3))" "$index"
 printf '0\n' > cold/blocks
 fail 'Accepted a mismatched existing cold block file'
-rm "$layout" "$index"
+rm "$layout"
+fail 'Accepted complete old files without their layout'
+rm "$index"
 fail 'Reinitialized the geometry of an existing cold block file'
 rm cold/blocks
 touch "$index"
@@ -93,4 +102,8 @@ touch index/persistent_state/checkpoint
 fail 'Reinitialized the geometry of existing cold state'
 printf '%s\n' '{"tib":41,"indexGib":520}' > "$layout"
 fail 'Accepted existing checkpoint without its data files'
+rm "$layout" index/persistent_state/checkpoint
+printf '%s\n' "$((527 * 1024**3))" > free
+bash check
+grep -Fx '{"tib":41,"indexGib":519}' "$layout"
 echo 'Buildbarn cold layout tests passed.'

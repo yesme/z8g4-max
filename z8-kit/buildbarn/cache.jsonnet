@@ -30,7 +30,7 @@ local disk(root, bytes, indexBytes, newBlocks) = {
   maximumMessageSizeBytes: 16 * MiB,
   contentAddressableStorageServer: {
     contentAddressableStorage: {
-      chunkStorage: disk('/store/cs', 64 * GiB, 128 * MiB, 3) + {
+      chunkStorage: disk('/store/cs', 64 * GiB, GiB, 3) + {
         'local'+: {
           chunkingParameters: {
             minChunkSizeBytes: 256 * 1024,

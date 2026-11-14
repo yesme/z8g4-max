@@ -44,14 +44,16 @@ if [[ ! "$reserved" =~ ^[1-9][0-9]{0,15}$ ]] || (( reserved % tib_bytes != 0 ));
     exit 1
 fi
 tib=$((reserved / tib_bytes))
+blocks=$target/blocks
 state=$(find "$index_dir/persistent_state" -mindepth 1 -maxdepth 1 -print -quit)
-if [[ -n "$state" && ( ! -f "$target/blocks" || ! -f "$index" ) ]]; then
-    echo "Existing cold CAS state requires both the original block file and index." >&2
+if [[ ( -e "$blocks" || -e "$index" || -n "$state" ) &&
+    ( ! -f "$blocks" || ! -f "$index" ) ]]; then
+    echo 'Cold CAS files are incomplete. Restore the matching files and state, or rebuild the cold CAS using the storage recovery procedure.' >&2
     exit 1
 fi
 if [[ ! -e "$layout" ]]; then
-    if [[ -e "$target/blocks" || -e "$index" ]]; then
-        echo "Existing cold CAS needs its original $layout; recover its geometry before starting." >&2
+    if [[ -e "$blocks" || -e "$index" ]]; then
+        echo "Restore $layout if both cold files and their state are intact. If p9 data was lost, rebuild the cold CAS using the storage recovery procedure." >&2
         exit 1
     fi
     # Preserve 8 GiB for persistent state and filesystem overhead.
@@ -63,6 +65,7 @@ if [[ ! -e "$layout" ]]; then
     temporary=$(mktemp "$layout.XXXXXX")
     trap 'rm -f -- "$temporary"' EXIT
     printf '{"tib":%s,"indexGib":%s}\n' "$tib" "$((free / gib_bytes - 8))" > "$temporary"
+    chmod 0644 -- "$temporary"
     ln -- "$temporary" "$layout"
     sync -- "$layout" "$index_dir"
 fi
@@ -75,7 +78,7 @@ index_gib=$(jq -er '.indexGib | select(type == "number" and . == floor and . > 0
     echo "Invalid cold CAS index size in $layout; recover its recorded GiB capacity." >&2
     exit 1
 }
-if [[ -e "$target/blocks" ]] && [[ $(stat -c %s -- "$target/blocks") != "$reserved" ]]; then
+if [[ -e "$blocks" ]] && [[ $(stat -c %s -- "$blocks") != "$reserved" ]]; then
     echo "Cold block file size differs from $layout; restore the original geometry." >&2
     exit 1
 fi

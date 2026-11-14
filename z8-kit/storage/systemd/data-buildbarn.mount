@@ -12,3 +12,6 @@ Where=/data/buildbarn
 Type=zfs
 Options=rw
 TimeoutSec=60
+
+[Install]
+WantedBy=z8-zpool.service multi-user.target

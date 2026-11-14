@@ -34,7 +34,7 @@ base + {
     contentAddressableStorage+: {
       chunkStorage: readCache(
         readCache(upstream, cold),
-        disk(edge.hot + '/cs', edge.hot + '/cs/blocks', 256 * GiB, 512 * MiB, 3),
+        disk(edge.hot + '/cs', edge.hot + '/cs/blocks', 256 * GiB, 4 * GiB, 3),
       ),
       chunkMappingStorage: readCache(upstream, disk(edge.hot + '/cms', edge.hot + '/cms/blocks', 4 * GiB, 128 * MiB, 1)),
     },

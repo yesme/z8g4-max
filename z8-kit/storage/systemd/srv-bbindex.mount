@@ -12,3 +12,6 @@ Where=/srv/bbindex
 Type=xfs
 Options=rw,noatime,nodiscard,x-systemd.device-bound
 TimeoutSec=60
+
+[Install]
+WantedBy=multi-user.target

@@ -2,7 +2,7 @@
 
 max 运行唯一的 scheduler 和权威 AC/CAS。max、mini、Mac 的 Buck2 都用 `hardlinking` 实例。Linux 队列匹配 `OSFamily=linux` 和镜像，Darwin 队列匹配 `OSFamily=macos`、`arch=arm64`、`xcode=<版本>`。worker 主机名用来识别机器。先上线 max，再启 mini 和 Mac。 [Buildbarn 队列匹配](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/pkg/scheduler/in_memory_build_queue.go#L608)
 
-两台边缘机器共用 `edge-cache.jsonnet`。CAS 依次查本机 256 GiB 热 CS、表中的冷 CS 和 max。所有索引放热盘，首次从样例复制 `edge-site.json` 时，`coldIndexGiBPerTiB` 为 16。mini 的 640 GiB 冷 CS 配 10 GiB，Mac 首装的 512 GiB 配 8 GiB。已初始化的站点沿用原配置。采用新比例时停 cache，退役旧冷块文件、索引和持久状态，再写配置并重启。CMS 在热盘留 4 GiB 和 128 MiB 索引，AC 直接查 max，由权威端检查产物完整性。上传直达 max，缓存只在读取时回填。固定版本把 `FindMissing` 交给慢侧，max 不可达时直接用本机执行。 [索引计算](README.md#冷-cs-几何与容量) · [Buildbarn readCaching 源码](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
+两台边缘机器共用 `edge-cache.jsonnet`。CAS 依次查本机 256 GiB 热 CS（4 GiB 索引）、表中的冷 CS 和 max。所有索引放热盘，首次从样例复制 `edge-site.json` 时，`coldIndexGiBPerTiB` 为 16。mini 的 640 GiB 冷 CS 配 10 GiB，Mac 首装的 512 GiB 配 8 GiB。已初始化的站点更改索引长度前先停 cache，成套退役该层旧块文件、索引和持久状态，再按新配置启动。CMS 在热盘留 4 GiB 和 128 MiB 索引，AC 直接查 max，由权威端检查产物完整性。上传直达 max，缓存只在读取时回填。固定版本把 `FindMissing` 交给慢侧，max 不可达时直接用本机执行。 [索引计算](README.md#冷-cs-几何与容量) · [Buildbarn readCaching 源码](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
 ## SSH 与目录
 
@@ -93,6 +93,10 @@ cache="$HOME/Library/LaunchAgents/local.z8.farm.cache.plist"
 install -m 0644 "$out/local.z8.farm.cache.plist" "$cache"
 launchctl bootstrap "$domain" "$cache"
 ```
+
+## 权威冷库重建后的边缘 CMS
+
+max 的冷 CS 重建后，mini 和 Mac 在重新接入前清空热盘上的 CMS 清单缓存。先停各节点的 cache：mini 从 `z8-kit/buildbarn` 按上线步骤设好 `BB_EDGE_HOT`、`BB_EDGE_COLD`、`BB_EDGE_WORK`、`BB_DATA_DIR`，运行 `sudo --preserve-env=BB_EDGE_HOT,BB_EDGE_COLD,BB_EDGE_WORK,BB_DATA_DIR docker compose -p z8-edge -f compose.edge-linux.yaml stop cache`；Mac 用 `launchctl bootout "gui/$(id -u)/local.z8.farm.cache"`。核对 `HOT` 是 `edge-site.json` 的热卷目录且该卷已挂载，然后删除该目录下 `cms/blocks`、`cms/key_location_map` 和 `cms/persistent_state` 的内容，保留目录本身。按前述节点的启动步骤恢复 cache。其它 CAS 缓存可继续使用。
 
 ## Buck2 上线
 

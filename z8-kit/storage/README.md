@@ -242,27 +242,39 @@ Buildbarn 固定镜像 `ca3d8b4` 写盘前已经对每个 CAS chunk 做 Zstd 编
 
 ## 4. I4 安装存储依赖链
 
-从 `z8-kit` 根执行。将 `hybrid.tsv` 与 `storage.env` 放在当前目录，填入 p8 by-id 和建池取得的 GUID。p9 仅在首装且已确认可清空时格式化。用 p8 的 by-id 推出同卡 p9，并确认它和分区标签指向同一设备。
+从 `z8-kit` 根执行。将 `hybrid.tsv` 与 `storage.env` 放在当前目录，填入 p8 by-id 和建池取得的 GUID。**仅首装**且确认 p9 可清空后运行这一段。按 p8 by-id 推出同卡 p9，再核对分区标签。
+
+```bash
+(
+    set -euo pipefail
+    source ./storage.env
+    [[ "$Z8_SPECIAL" == /dev/disk/by-id/nvme-*-part8 ]]
+    index_device="${Z8_SPECIAL%-part8}-part9"
+    [[ -b "$index_device" && "$index_device" -ef /dev/disk/by-partlabel/z8-cold-index ]]
+    lsblk -b -o NAME,SIZE,PARTLABEL,FSTYPE,MOUNTPOINTS "$index_device"
+    sudo mkfs.xfs -m reflink=0 "$index_device"
+)
+```
+
+**安装和重装都从这里继续。** 重装保留已有 p9 文件系统和池，使用原来的 `hybrid.tsv` 与 `storage.env`。本机只管理这一个 ZFS 池，下方在首次启动专用导入链前屏蔽已安装的系统默认导入服务。
 
 ```bash
 (
     set -e
-    # 此处 special 仍是实际 P4800X p8 的 by-id。
-    [[ "$special" == /dev/disk/by-id/nvme-*-part8 ]]
-    index_device="${special%-part8}-part9"
-    [[ -b "$index_device" && "$index_device" -ef /dev/disk/by-partlabel/z8-cold-index ]]
-    lsblk -b -o NAME,SIZE,PARTLABEL,FSTYPE,MOUNTPOINTS "$index_device"
-    sudo mkfs.xfs "$index_device"
+    sudo install -d -m 0755 /etc/z8-storage /data /srv/bbindex
+    sudo install -m 0600 hybrid.tsv storage.env /etc/z8-storage/
+    sudo install -m 0755 storage/z8-storage /usr/local/sbin/
+    sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,data-buildbarn.mount,data-other.mount,srv-bbindex.mount} \
+        /etc/systemd/system/
+    for unit in zfs-import-cache.service zfs-import-scan.service; do
+        if systemctl cat "$unit" >/dev/null 2>&1; then
+            sudo systemctl mask "$unit"
+        fi
+    done
+    sudo systemctl daemon-reload
+    sudo systemd-analyze verify /etc/systemd/system/{z8-dmzoned.service,z8-zpool.service,data-buildbarn.mount,data-other.mount,srv-bbindex.mount}
+    sudo systemctl enable --now data-buildbarn.mount data-other.mount srv-bbindex.mount
 )
-sudo install -d -m 0755 /etc/z8-storage /data /srv/bbindex
-sudo install -m 0600 hybrid.tsv storage.env /etc/z8-storage/
-sudo install -m 0755 storage/z8-storage /usr/local/sbin/
-sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,data-buildbarn.mount,data-other.mount,srv-bbindex.mount} \
-    /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemd-analyze verify /etc/systemd/system/{z8-dmzoned.service,z8-zpool.service,data-buildbarn.mount,data-other.mount,srv-bbindex.mount}
-sudo systemctl enable data-other.mount
-sudo systemctl start data-buildbarn.mount srv-bbindex.mount
 for point in /data/buildbarn /data/other /srv/bbindex; do
     findmnt -M "$point" -o SOURCE,TARGET,FSTYPE
 done
@@ -271,7 +283,9 @@ sudo journalctl -b -o short-monotonic -u z8-dmzoned -u z8-zpool \
     -u data-buildbarn.mount -u data-other.mount -u srv-bbindex.mount --no-pager
 ```
 
-正常启动时先见七个 mapper，再按 GUID 导入 `z8data`，然后挂载 `z8data/buildbarn`。`data-other.mount` 由池导入服务弱依赖拉起，其失败不阻塞 Buildbarn。p9 的 XFS 挂载依赖 P4800X 对应块设备，Buildbarn 等两个必需挂载均成功后才运行。要给 `jackywang` 建普通数据目录，先核实挂载源，再在数据集内建目录。
+三个挂载单元由 `multi-user.target` 弱依赖拉起。两个 ZFS 挂载通过 `BindsTo=` 和 `After=` 等导入完成；手动启动池时也会尝试挂这两个数据集。三个挂载均设 `DefaultDependencies=no`，`multi-user.target` 不会为这些挂载自动添加等待关系。I5 的 tiered Buildbarn 服务另有显式依赖，会等冷数据集和 p9。
+
+要给 `jackywang` 建普通数据目录，先核实挂载源，再在数据集内建目录。
 
 ```bash
 if [[ $(findmnt -n -M /data/other -o SOURCE,FSTYPE) == 'z8data/other zfs' ]]; then
@@ -282,20 +296,25 @@ fi
 如需把 **P4800X 的设备消失**也直接连到 systemd，在完成上面试启后为 p8 加设备依赖。只绑定这张共享卡，七块 HDD 继续由映射脚本按 RAIDZ1 容错处理。
 
 ```bash
-device_unit=$(systemd-escape --path --suffix=device "$special")
-systemctl is-active "$device_unit"
-sudo install -d "/etc/systemd/system/$device_unit.d" \
-    /etc/systemd/system/z8-dmzoned.service.d
-printf '[Unit]\nJobTimeoutSec=90s\n' \
-    | sudo tee "/etc/systemd/system/$device_unit.d/90-z8-timeout.conf"
-printf '[Unit]\nBindsTo=%s\nAfter=%s\n' "$device_unit" "$device_unit" \
-    | sudo tee /etc/systemd/system/z8-dmzoned.service.d/20-optane-device.conf
-sudo systemctl daemon-reload
+(
+    set -euo pipefail
+    source ./storage.env
+    [[ "$Z8_SPECIAL" == /dev/disk/by-id/nvme-*-part8 ]]
+    device_unit=$(systemd-escape --path --suffix=device "$Z8_SPECIAL")
+    systemctl is-active "$device_unit"
+    sudo install -d "/etc/systemd/system/$device_unit.d" \
+        /etc/systemd/system/z8-dmzoned.service.d
+    printf '[Unit]\nJobTimeoutSec=90s\n' \
+        | sudo tee "/etc/systemd/system/$device_unit.d/90-z8-timeout.conf"
+    printf '[Unit]\nBindsTo=%s\nAfter=%s\n' "$device_unit" "$device_unit" \
+        | sudo tee /etc/systemd/system/z8-dmzoned.service.d/20-optane-device.conf
+    sudo systemctl daemon-reload
+)
 ```
 
 `is-active` 应显示 `active`。否则先核 by-id 是否在 udev 的设备属性及 systemd 单元列表，再装 drop-in。整卡突发离线时，这条绑定会发起停服务和卸载。底层 ZFS 已因 I/O 故障挂起时，按故障恢复流程处理。
 
-本池用 `cachefile=none` 和 `zpool import -N`，两个 ZFS 数据集用 `mountpoint=legacy`。专用主机且只有这一个池时，确认 stock 服务后用 `sudo systemctl mask zfs-import-cache.service zfs-import-scan.service` 屏蔽两条并行导入路径。第一次冷启用 `systemctl is-enabled zfs-import-cache.service zfs-import-scan.service` 核对两条均为 `masked`，用 `sudo zpool get cachefile z8data` 核对 `none`。这三个挂载点都由 systemd 单元管理。由 systemd 持有 Compose 服务。 [缓存导入单元](https://github.com/openzfs/zfs/blob/zfs-2.4.1/etc/systemd/system/zfs-import-cache.service.in) · [扫描导入单元](https://github.com/openzfs/zfs/blob/zfs-2.4.1/etc/systemd/system/zfs-import-scan.service.in) · [systemd 依赖语义](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
+本池用 `cachefile=none` 和 `zpool import -N`，两个 ZFS 数据集用 `mountpoint=legacy`。第一次冷启用 `systemctl is-enabled zfs-import-cache.service zfs-import-scan.service` 确认系统已安装的默认导入服务均为 `masked`，用 `sudo zpool get cachefile z8data` 核对 `none`。这三个挂载点都由 systemd 单元管理。由 systemd 持有 Compose 服务。 [缓存导入单元](https://github.com/openzfs/zfs/blob/zfs-2.4.1/etc/systemd/system/zfs-import-cache.service.in) · [扫描导入单元](https://github.com/openzfs/zfs/blob/zfs-2.4.1/etc/systemd/system/zfs-import-scan.service.in) · [systemd 依赖语义](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
 
 ## 5. I4 验证实际写入、scrub 与缺盘
 
@@ -345,11 +364,39 @@ sudo journalctl -b -u z8-dmzoned -u z8-zpool -u data-other.mount -u srv-bbindex.
     -u data-buildbarn.mount -u z8-buildbarn --no-pager
 ```
 
-- 冷启验证依次做全设备、一盘断电缺席、全恢复、P4800X 断电缺席、再全恢复。每次先关机再动线。单盘演练完成后先等恢复盘完成 resilver，再演练 P4800X。检查 ZFS、服务日志与系统盘裸路径均符合预期。设备后来才出现，先停止本链、复核设备，再启动 `data-buildbarn.mount`。I5 已上线后可用 `sudo systemctl start z8-buildbarn.service` 同时恢复应用。如果前次只建成少数 mapper，脚本会核对并复用已正确创建的映射。P4800X 丢失后的常规恢复路线是从原数据/构建重建 CAS。保留项目、构建配置、GUID、分区表和映射表的独立副本。
+- 冷启验证依次做全设备、一盘断电缺席、全恢复、P4800X 断电缺席、再全恢复。每次先关机再动线。单盘演练完成后先等恢复盘完成 resilver，再演练 P4800X。每轮先查本次开机的 dm-zoned、池导入和挂载日志，再核 ZFS 与系统盘。P4800X 缺席时，日志必须显示链路尝试启动并在设备关口失败。只看目录未挂载或 SSH 可用无法判定守卫通过。设备后来才出现，先停止本链、复核设备，再运行 `sudo systemctl start data-buildbarn.mount data-other.mount srv-bbindex.mount`。I5 已上线后可用 `sudo systemctl start z8-buildbarn.service` 同时恢复应用。如果前次只建成少数 mapper，脚本会核对并复用已正确创建的映射。P4800X 丢失后的常规恢复路线是从原数据/构建重建 CAS。保留项目、构建配置、GUID、分区表和映射表的独立副本。
 
 临时缺盘回来时，原盘与原 P4800X 分区保持原配对。启动后用 `sudo zpool status -gP z8data` 观察旧成员、mapper、resilver 和校验计数。如果映射已恢复但 ZFS 仍标记 OFFLINE，先确认旧 vdev 标识，再对对应成员用 `sudo zpool online z8data <旧成员标识>`。仍是 UNAVAIL 时保留日志，检查 `dmsetup table` 与 `zdb -l /dev/mapper/hc620-N`，先核已有标签与池 GUID，避免重新格式化返回盘。
 
-永久换盘先用 `zpool status -gP` 抄下失效数据 vdev 的 GUID。只对新的 HC620 与原编号的 cache 分区重建同名 mapper，再用 `zpool replace z8data <旧vdev-GUID> /dev/mapper/hc620-N` 并等待 resilver。执行前须确认另外六个成员和 p8 健康，更新 `/etc/z8-storage/hybrid.tsv` 中该 HDD 的 by-id。原 cache 分区有旧 dm-zoned 元数据时按对应工具版本清理或明确指定覆盖，只处理这一组。若 P4800X 整卡不可恢复，重建池前也清除 P4618 上同一实例的热 CS、CMS、AC 及其索引和状态，或使用一个全新的状态目录，避免新块文件配到旧索引。
+永久换盘先用 `zpool status -gP` 抄下失效数据 vdev 的 GUID。只对新的 HC620 与原编号的 cache 分区重建同名 mapper，再用 `zpool replace z8data <旧vdev-GUID> /dev/mapper/hc620-N` 并等待 resilver。执行前须确认另外六个成员和 p8 健康，更新 `/etc/z8-storage/hybrid.tsv` 中该 HDD 的 by-id。原 cache 分区有旧 dm-zoned 元数据时按对应工具版本清理或明确指定覆盖，只处理这一组。若 P4800X 整卡不可恢复，停 tiered 服务，按 I4 新建池和 p9，再执行下方的冷库重建步骤。源数据和构建配置从独立设备恢复。
+
+#### 只有 p9 的冷索引丢失
+
+如果仅丢了 `cold-layout.json`，且冷块文件、索引及持久状态均完好，从独立备份恢复同一套冷库的原记录，然后启动 tiered 服务。**索引或持久状态丢失时，重建整套冷 CS。** 停 tiered worker 和 cache。先确认池仍可读写、`/data/buildbarn` 的挂载源正确。若 p9 的 XFS 已损坏且决定清空，单独卸载 `srv-bbindex.mount`，按 I4 第 4 节用 p8 by-id 核对 p9。旧签名需要覆盖时，仅对校验通过且已卸载的 p9 使用 `mkfs.xfs -f -m reflink=0`。
+
+若正用全 XFS 回退，先按[回退手册](../buildbarn/README.md#全-xfs-回退)停止该 Compose 项目。确认本机使用 I5 的默认状态目录后执行。以下清除冷 CS 与 CMS 缓存，保留其它数据集、热 CS 和 AC。
+
+```bash
+(
+    set -euo pipefail
+    sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service
+    sudo systemctl start data-buildbarn.mount srv-bbindex.mount
+    [[ $(findmnt -n -M /data/buildbarn -o SOURCE,FSTYPE) == 'z8data/buildbarn zfs' ]]
+    [[ $(findmnt -n -M /srv/bbindex -o FSTYPE) == xfs ]]
+    index_source=$(findmnt -n -M /srv/bbindex -o SOURCE)
+    [[ "$index_source" -ef /dev/disk/by-partlabel/z8-cold-index ]]
+    [[ $(findmnt -n -T /srv/buildbarn/tiered -o FSTYPE) == xfs ]]
+    sudo rm -f -- /data/buildbarn/blocks \
+        /srv/bbindex/{key_location_map,cold-layout.json} \
+        /srv/buildbarn/tiered/cms/{blocks,key_location_map}
+    sudo install -d -m 0755 /srv/bbindex/persistent_state /srv/buildbarn/tiered/cms/persistent_state
+    sudo find /srv/bbindex/persistent_state /srv/buildbarn/tiered/cms/persistent_state -mindepth 1 -delete
+    sudo systemctl start z8-buildbarn.service z8-buildbarn-worker.service
+)
+sudo journalctl -b -u z8-buildbarn -u z8-buildbarn-worker --no-pager
+```
+
+守卫按原 `refreservation` 和 p9 可用量生成新几何，冷库文件长度不依赖旧块释放的进度。热 CS 的内容以 digest 寻址，可以继续提供直接读取；AC 每次返回结果前会检查引用对象。CMS 一起重建，因为固定镜像的 `SplitBlob` 可以直接返回旧清单，读路径此时未检查清单引用的 chunk 是否还在。mini 和 Mac 也有 CMS 读缓存，重接农场前按[边缘 CMS 恢复](../buildbarn/EDGE.md#权威冷库重建后的边缘-cms)清理。 [Buildbarn 热读与权威后端](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go#L21-L47) · [AC 完整性检查](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/completenesschecking/completeness_checking_blob_access.go#L219-L227) · [SplitBlob 读取清单](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/grpcservers/content_addressable_storage_server.go#L432-L443)
 
 ## 6. I5 交给 Buildbarn
 

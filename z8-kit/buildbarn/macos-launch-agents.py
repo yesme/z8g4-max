@@ -16,15 +16,24 @@ def main():
     config = Path(__file__).resolve().parent
     binaries = args.bin_dir.resolve(strict=True)
     site = json.loads((config / "edge-site.json").read_text(encoding="utf-8"))
+    if not isinstance(site, dict):
+        parser.error("edge-site.json must contain an object")
+    cold_shards = site.get("coldShards")
+    required_fields = ["hostname", "hot", "work", "socket", "xcode", "developerDir"]
+    if cold_shards is None:
+        required_fields.append("cold")
+    for field in required_fields:
+        value = site.get(field)
+        if not isinstance(value, str) or not value.strip():
+            parser.error(f"set {field} to a non-empty string in edge-site.json")
     if not isinstance(site.get("caseInsensitive"), bool):
         parser.error("set caseInsensitive to true or false in edge-site.json")
     work = Path(site["work"])
     socket = Path(site["socket"])
     if not work.is_absolute() or socket.parent != work:
         parser.error("work must be absolute and socket must be directly below it")
-    if not site["xcode"] or not Path(site["developerDir"]).is_dir():
+    if not Path(site["developerDir"]).is_dir():
         parser.error("set xcode and an existing developerDir in edge-site.json")
-    cold_shards = site.get("coldShards")
     if cold_shards is not None and (
         not isinstance(cold_shards, list) or len(cold_shards) != 4 or len(set(cold_shards)) != 4
     ):

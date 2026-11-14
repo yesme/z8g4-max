@@ -25,7 +25,7 @@
 
 XFS 上的索引以 `ftruncate` 创建为稀疏文件，`mmap` 用于读取。散布的键用写系统调用更新，分配以文件系统块为单位，所以实际磁盘占用可能很早就接近逻辑长度。用 `stat -c 'bytes=%s allocated_512B_blocks=%b' /srv/bbindex/key_location_map` 看两者。保留 XFS，将索引、几何和 checkpoint 放在同一文件系统；裸块设备路径同样需要 mmap，还要另找持久状态目录。 [普通文件后端](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/new_block_device_from_file_unix.go#L25-L46) · [mmap 与 pwrite](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/memory_mapped_block_device_unix.go#L24-L81) · [裸块设备后端](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/new_block_device_from_device_linux.go#L25-L47)
 
-P4618 的 512 GiB 热 CS、64 GiB CMS、216 GiB AC 和合计 9 GiB 索引共约 **801 GiB**。加 128 GiB worker 输入缓存是 **929 GiB**，标称 6.4 TB P4618 约余 **4.91 TiB** 给系统、工作树和 `buck-out`，另扣文件系统元数据。 [Buildbarn 清单格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/chunk/mapping.go)
+max 热层的 512 GiB 配 8 GiB 索引，边缘的 256 GiB 配 4 GiB，全 XFS 回退的 64 GiB 配 1 GiB。统一按每 TiB 16 GiB 配置。以编码后均值 10 KiB、50% 装载率推算，max 旧 1 GiB 索引只覆盖约 78 GiB；这是假定物件分布下的设计点，实际碰撞与读取命中率随工作负载变化。P4618 的 512 GiB 热层、64 GiB CMS、216 GiB AC 和三库合计 16 GiB 索引共约 **808 GiB**。加 128 GiB worker 输入缓存是 **936 GiB**，标称 6.4 TB P4618 约余 **4.91 TiB** 给系统、工作树和 `buck-out`，另扣文件系统元数据。 [Buildbarn 清单格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/chunk/mapping.go)
 
 平时排查提前 miss 可在 max 查本机随 `bb-storage` 提供的计数。优先看 `TooManyAttempts` 和 `put_too_many_iterations_total` 持续增加，两者分别捕获探测深度和插入总迭代耗尽。CS 标签汇总 max 的冷热两张表。blob 尺寸直方图使用 digest 的未压缩字节数，且同类型本地 backend 汇总，冷索引占用需按压缩后独立 chunk 计算。 [计数定义](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go) · [对象尺寸指标](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/metrics_blob_access.go)
 
@@ -34,7 +34,7 @@ curl -fsS http://127.0.0.1:9980/metrics |
   awk '/^buildbarn_lossymap_hash_map_put_iterations_count\{/ && /name="KeyLocationMap:cs"/ && /outcome="TooManyAttempts"/ || /^buildbarn_lossymap_hash_map_(put_too_many_iterations|get_too_many_attempts)_total\{/ && /name="KeyLocationMap:cs"/'
 ```
 
-冷块文件、索引、持久状态与 `/srv/bbindex/cold-layout.json` 使用同一套几何。改变块文件或索引长度需要先停 worker 和 storage，再成套退役可重建的缓存。索引槽数参与哈希取模，直接扩展旧索引会改变查找位置。v2.18 的分区变更按新建池处理，旧库使用的 P4618 冷索引和旧 layout 一并退役。保留需要的源数据、工作树和构建配置。 [索引寻址](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go)
+冷块文件、索引、持久状态与 `/srv/bbindex/cold-layout.json` 使用同一套几何。改变块文件或索引长度需要先停 worker 和 storage，再成套退役可重建的缓存。索引槽数参与哈希取模，直接扩展旧索引会改变查找位置。热 CS 和回退 CS 改索引长度时，也把对应块文件、索引和持久状态作为一组重建。v2.18 的分区变更按新建池处理，旧库使用的 P4618 冷索引和旧 layout 一并退役。保留需要的源数据、工作树和构建配置。 [索引寻址](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go)
 
 `LocalBlobAccess` 在新块内递增分配偏移，旧块轮转后复用偏移。并发写可交错，文件覆写触发 ZFS CoW。淘汰只归还 Buildbarn allocator 的偏移，下一次覆写时旧 ZFS 块才有机会释放。 [Buildbarn 逻辑块分配](https://github.com/buildbarn/bb-storage/blob/ca3d8b4/pkg/blobstore/local/block_device_backed_block_allocator.go#L176-L187)
 
@@ -132,7 +132,7 @@ filefrag -sv "$src" "$outdir/export"
 
 ## 全 XFS 回退
 
-适用于 I4 冷库持续写达不到目标或冷池故障时。停 tiered 服务，改用 P4618 上独立的 64 GiB CAS 和同一 scheduler。按 [I5 准备过程](../storage/README.md#6-i5-交给-buildbarn) 安装 Docker 和复制配置，并完成 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。确认两路 kmem 已上线。使用新存储目录，Buck2 首轮会重新填充缓存。
+适用于 I4 冷库持续写达不到目标或冷池故障时。停 tiered 服务，改用 P4618 上独立的 64 GiB CAS（1 GiB 索引）和同一 scheduler。I4 已启用的存储单元继续自动导入池、挂载 `/data/other`。按 [I5 准备过程](../storage/README.md#6-i5-交给-buildbarn) 安装 Docker 和复制配置。回退使用下面的新状态目录，跳过 I5 的 p9 挂载和 tiered 服务启动。完成 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。确认两路 kmem 已上线。使用新存储目录，Buck2 首轮会重新填充缓存。
 
 ```bash
 sudo systemctl disable --now z8-buildbarn-worker.service z8-buildbarn.service
