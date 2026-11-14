@@ -16,6 +16,8 @@ def main():
     config = Path(__file__).resolve().parent
     binaries = args.bin_dir.resolve(strict=True)
     site = json.loads((config / "edge-site.json").read_text(encoding="utf-8"))
+    if not isinstance(site.get("caseInsensitive"), bool):
+        parser.error("set caseInsensitive to true or false in edge-site.json")
     work = Path(site["work"])
     socket = Path(site["socket"])
     if not work.is_absolute() or socket.parent != work:

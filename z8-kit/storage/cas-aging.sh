@@ -7,7 +7,7 @@ if [[ $# != 2 || $1 != sequential || $EUID != 0 ]]; then
 fi
 target=/data/buildbarn
 pool=z8data
-[[ $(findmnt -n -M "$target" -o SOURCE,FSTYPE) == 'z8data/data/buildbarn zfs' ]]
+[[ $(findmnt -n -M "$target" -o SOURCE,FSTYPE) == 'z8data/buildbarn zfs' ]]
 [[ $(zpool list -H -o health "$pool") == ONLINE ]]
 [[ $(zpool get -H -o value autotrim "$pool") == on ]]
 log_dir=$(realpath -e -- "$2")

@@ -1,6 +1,6 @@
 # 保留 HT，DeepSeek 启停时交还整颗物理核
 
-F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT、所有核心和 Turbo 开启。I6 完成推理放行后应用本节。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程，按每路独立分配。DDR4 节点号用 [T3 拓扑报告](PMEM.md#核对双路-numa-拓扑) 确认。
+F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT、所有核心和 Turbo 开启。I5 启用 Buildbarn worker 前先[生成并安装分核配置](#生成并安装)。I6 通过手动推理验收后再[配置并启动推理服务](#启停本地模型)，I7 验证启停和混合负载。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程，按每路独立分配。DDR4 节点号用 [T3 拓扑报告](PMEM.md#核对双路-numa-拓扑) 确认。
 
 | 每路推理预留 | 双路可运行的推理线程 | 双路系统与编译可用线程 | Xolotl CPU expert worker 起点 |
 |---|---:|---:|---:|
@@ -17,7 +17,9 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 
 `z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，只交还推理的 12 个主线程；同核的 12 个 HT 伙伴一直排除。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。服务常驻时即使暂时没有 API 请求也保留核心。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
-`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。推理核的独占由 CPU 集合分配实现。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。runner 的 `cpus: 72` 是 CPU 时间配额，`mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。推理时普通任务共享 80 个逻辑 CPU，留 8 个逻辑 CPU 的时间预算给系统、存储和协调进程，runner 设 72 并发和 72 CPU 配额。这个余量由配额提供，四个物理核并未另做硬隔离。I7 验固定配置的混合负载。CPU 集合和两路 DDR4 的 `numactl` 分配是两项独立设置。推理 slice 与 service 使用 `MemoryLow=160G` 优先保护已用内存免于压力回收，包含相应的回收下沉路径。这是按使用量生效的分层回收保护。服务另设 `OOMScoreAdjust=-900`，使全机内核 OOM 优先考虑其他合格进程。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html) · [Ubuntu 26.04 systemctl set-property](https://manpages.ubuntu.com/manpages/resolute/man1/systemctl.1.html)
+`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。推理运行时普通任务共享 80 个逻辑 CPU。runner 配 72 个活动 action 和 72 CPU 时间配额，给系统和协调进程留 8 个逻辑 CPU 的时间预算。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
+
+推理 slice 与 service 都设 `MemoryLow=160G`。两条是父子层级的同一尽力保护，按实际用量生效，降低它会改变回收次序。CUDA 长期 pin 的页本身不可回收。两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。服务的 `OOMScoreAdjust=-900` 降低被选作 OOM victim 的优先级。 [Linux cgroup v2 memory.low](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) · [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable)
 
 ## 运行时的 NUMA 内存策略
 
@@ -149,7 +151,7 @@ buck2 --isolation-dir z8-build build --local-only -j 8 //path:target
 
 用户态 slice 的 CPU 集合与 IRQ／内核线程亲和性独立。只有推理尾延迟异常且 `mpstat -P ALL 1` 或 `/proc/interrupts` 显示存储／网卡 IRQ 持续落在推理核时，才按实际向量检查 `/proc/irq/<IRQ>/effective_affinity_list`。需迁移时用 irqbalance 的 `IRQBALANCE_BANNED_CPULIST` 排开推理 CPU 和 HT 伙伴，屏蔽值取生成的 `/etc/z8-infer-cpu.env` 中 `Z8_IRQ_BANNED_CPUS`。全局 workqueue、CAT/MBA 保持默认。 [Ubuntu irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
-启动前、运行中、停止后分别检查。对实际 1Cat CUDA worker 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到空闲 CPU 集合，其中仍排除推理核的 HT 伙伴。`-j` 与容器的 CPU 时间配额仍分别限制构建并发和 CPU 时间。
+启动前、运行中、停止后分别检查。对实际 `llama-server` 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到空闲 CPU 集合，其中仍排除推理核的 HT 伙伴。`-j` 与容器的 CPU 时间配额仍分别限制构建并发和 CPU 时间。
 
 ```bash
 systemctl show z8infer.slice z8build.slice z8build-local.slice user.slice \
@@ -161,6 +163,9 @@ grep -E '^(Cpus_allowed_list|Mems_allowed_list|VmLck|VmPin):' "/proc/$pid/status
 numastat -p "$pid"
 cg=$(awk -F: '$1 == "0" {print $3}' "/proc/$pid/cgroup")
 sudo grep -E '^(anon|file|pgdemote_.*) ' "/sys/fs/cgroup$cg/memory.numa_stat"
+awk '/^Node / {zone=$0} zone ~ /zone[[:space:]]+Normal$/ && /pages free|^[[:space:]]+(min|low|high)[[:space:]]/ {print zone, $0}' /proc/zoneinfo
+grep -E '^(allocstall_normal|kswapd_low_wmark_hit_quickly|pgdemote_\S+) ' /proc/vmstat
+cat /proc/pressure/memory
 ```
 
 ```bash

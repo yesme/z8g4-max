@@ -4,6 +4,7 @@ local edge = import 'edge-site.json';
 local MiB = 1024 * 1024;
 local GiB = 1024 * MiB;
 local upstream = { grpc: { client: { address: '127.0.0.1:18980' } } };
+// readCaching takes CDC capabilities and writes from its slow backend (max).
 local readCache(slow, fast) = { readCaching: { slow: slow, fast: fast, replicator: { 'local': {} } } };
 local darwin = std.objectHas(edge, 'xcode');
 local coldIndexGiBPerTiB = std.get(edge, 'coldIndexGiBPerTiB', 1);

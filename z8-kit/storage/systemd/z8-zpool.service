@@ -2,7 +2,6 @@
 Description=Import Z8 RAIDZ1 by GUID
 BindsTo=z8-dmzoned.service
 After=z8-dmzoned.service
-Before=data.mount
 Conflicts=umount.target
 Before=umount.target
 

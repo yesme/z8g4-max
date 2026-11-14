@@ -1,5 +1,5 @@
 [Unit]
-Description=Mount Z8 storage dataset
+Description=Mount Z8 general data
 DefaultDependencies=no
 BindsTo=z8-zpool.service
 After=z8-zpool.service
@@ -7,8 +7,11 @@ Conflicts=umount.target
 Before=umount.target
 
 [Mount]
-What=z8data/data
-Where=/data
+What=z8data/other
+Where=/data/other
 Type=zfs
 Options=rw
 TimeoutSec=60
+
+[Install]
+WantedBy=z8-zpool.service

@@ -10,7 +10,7 @@
 | 2 | x16→x8/x8 直通板 | Gen3 x16，Bifurcation 选 x8/x8，两张 V100，各 x8 |
 | 3 | x16→x8/x8 直通板 | Gen3 x16，由第二颗 CPU 提供，Bifurcation 选 x8/x8，两张 V100，各 x8 |
 | 4 | Quadro P620 | 主显示设备，显示器/虚拟头接在这里 |
-| 5 | P4800X 1.5 TB AIC | Gen3 x4；核 NVMe 序列号、八分区和散热 |
+| 5 | P4800X 1.5 TB AIC | Gen3 x4；核 NVMe 序列号、九分区和散热 |
 | 6 | 空，受 P4800X 阻挡 | 保持空槽 |
 | 7 | AX210 转接卡 | x4 槽，Wi-Fi 实际 x1；蓝牙需 USB 线/接头 |
 

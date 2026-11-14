@@ -1,0 +1,14 @@
+[Unit]
+Description=Mount P4800X Buildbarn cold index
+DefaultDependencies=no
+After=local-fs.target
+Conflicts=umount.target
+Before=umount.target
+JobTimeoutSec=180
+
+[Mount]
+What=/dev/disk/by-partlabel/z8-cold-index
+Where=/srv/bbindex
+Type=xfs
+Options=rw,noatime,nodiscard,x-systemd.device-bound
+TimeoutSec=60

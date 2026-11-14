@@ -3,8 +3,6 @@ local base = import 'cache.jsonnet';
 local GiB = 1024 * 1024 * 1024;
 local MiB = 1024 * 1024;
 local chunking = { minChunkSizeBytes: 256 * 1024, horizonSizeBytes: 2 * MiB };
-local cold = import 'cold-layout.json';
-local coldIndexGiB = std.get(cold, 'indexGib', cold.tib);
 
 base + {
   global: {
@@ -22,9 +20,10 @@ base + {
   contentAddressableStorageServer+: {
     contentAddressableStorage+: {
       chunkStorage: {
+        local cold = import '../cold-index/cold-layout.json',
         readCaching: {
-          // Authoritative CS: P4618 index and state, RAIDZ1 block file.
-          slow: disk('/store/cs', '/cold/blocks', cold.tib * 1024 * GiB, coldIndexGiB * GiB, 3, chunking, 22, 66),
+          // Authoritative CS: P4800X p9 index and state, RAIDZ1 block file.
+          slow: disk('/cold-index', '/cold/blocks', cold.tib * 1024 * GiB, cold.indexGib * GiB, 3, chunking, 22, 66),
           fast: disk('/store/cs-hot', '/store/cs-hot/blocks', 512 * GiB, GiB, 3, chunking),
           replicator: { 'local': {} },
         },

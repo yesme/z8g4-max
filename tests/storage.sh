@@ -20,6 +20,7 @@ for i in {0..6}; do
     touch "$tmp/dev/disk/by-id/ata-disk$i" "$tmp/dev/disk/by-id/nvme-optane-part$((i+1))"
 done > "$Z8_STORAGE_CONFIG/hybrid.tsv"
 touch "$tmp/dev/disk/by-id/nvme-optane-part8"
+# p9 is deliberately absent: pool import is independent of the cold index.
 
 for cmd in modprobe udevadm; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/bin/$cmd"

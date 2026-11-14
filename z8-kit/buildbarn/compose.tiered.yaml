@@ -20,4 +20,9 @@ services:
         target: /cold
         bind:
           create_host_path: false
+      - type: bind
+        source: /srv/bbindex
+        target: /cold-index
+        bind:
+          create_host_path: false
     restart: "no"

@@ -104,7 +104,7 @@ case "$action" in
             fi
             sleep 1
         done
-        physical_layout_ready || { echo 'P4800X or one of its eight partitions is missing' >&2; exit 1; }
+        physical_layout_ready || { echo 'Missing P4800X write cache partition (p1-p7) or special vdev (p8)' >&2; exit 1; }
         check_distinct_disks
         for i in "${!names[@]}"; do
             if dmsetup info "${names[i]}" >/dev/null 2>&1; then

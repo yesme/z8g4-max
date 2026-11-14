@@ -1,70 +1,85 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
+
 target=/data/buildbarn
-source=$(findmnt -n -o SOURCE -M "$target") || {
-    echo "Expected z8data/data/buildbarn mounted at $target" >&2
+index_dir=/srv/bbindex
+index_device=/dev/disk/by-partlabel/z8-cold-index
+dataset=z8data/buildbarn
+layout=$index_dir/cold-layout.json
+index=$index_dir/key_location_map
+tib_bytes=$((1024**4))
+gib_bytes=$((1024**3))
+
+if [[ $(findmnt -n -o SOURCE,FSTYPE -M "$target") != "$dataset zfs" || ! -w "$target" ]]; then
+    echo "Expected writable $dataset mounted at $target" >&2
     exit 1
-}
-[[ $(findmnt -n -o FSTYPE -M "$target") == zfs && "$source" == z8data/data/buildbarn ]] || {
-    echo "Unexpected dataset at $target: $source" >&2
+fi
+if [[ $(findmnt -n -o FSTYPE -M "$index_dir") != xfs ]] ||
+    ! index_source=$(findmnt -n -o SOURCE -M "$index_dir") ||
+    ! expected_device=$(readlink -e -- "$index_device") ||
+    [[ $(readlink -e -- "$index_source") != "$expected_device" ]]; then
+    echo "Expected $index_device mounted as XFS at $index_dir" >&2
     exit 1
-}
-[[ -w "$target" ]] || { echo "Cold storage is not writable: $target" >&2; exit 1; }
+fi
 export BB_DATA_DIR=${BB_DATA_DIR:-/srv/buildbarn/tiered}
 if [[ $(findmnt -n -o FSTYPE -T "$BB_DATA_DIR") != xfs ]]; then
     echo "Create the Buildbarn directories on the P4618 XFS before starting." >&2
     exit 1
 fi
-for store in cs cs-hot cms ac; do
-    [[ -d "$BB_DATA_DIR/$store/persistent_state" && -w "$BB_DATA_DIR/$store/persistent_state" && -w "$BB_DATA_DIR/$store" ]] || {
-        echo "Missing or unwritable directory $BB_DATA_DIR/$store/persistent_state" >&2
+for store in "$index_dir" "$BB_DATA_DIR"/{cs-hot,cms,ac}; do
+    [[ -d "$store/persistent_state" && -w "$store/persistent_state" && -w "$store" ]] || {
+        echo "Missing or unwritable directory $store/persistent_state" >&2
         exit 1
     }
 done
 
-# Set geometry once in the empty pool. Preserve it even when the pool fills.
-# The service runs from /opt/z8-kit/buildbarn.
-layout=cold-layout.json
-tib_bytes=$((1024**4))
 if [[ -e "$target/i4-cas-aging.bin" ]]; then
     echo "Finish I4 and remove $target/i4-cas-aging.bin before starting Buildbarn." >&2
     exit 1
 fi
+reserved=$(zfs get -Hp -o value refreservation "$dataset")
+if [[ ! "$reserved" =~ ^[1-9][0-9]{0,15}$ ]] || (( reserved % tib_bytes != 0 )); then
+    echo "Expected a positive whole TiB refreservation for $dataset, got $reserved" >&2
+    exit 1
+fi
+tib=$((reserved / tib_bytes))
+state=$(find "$index_dir/persistent_state" -mindepth 1 -maxdepth 1 -print -quit)
+if [[ -n "$state" && ( ! -f "$target/blocks" || ! -f "$index" ) ]]; then
+    echo "Existing cold CAS state requires both the original block file and index." >&2
+    exit 1
+fi
 if [[ ! -e "$layout" ]]; then
-    if [[ -e "$target/blocks" || -e "$BB_DATA_DIR/cs/key_location_map" ]]; then
+    if [[ -e "$target/blocks" || -e "$index" ]]; then
         echo "Existing cold CAS needs its original $layout; recover its geometry before starting." >&2
         exit 1
     fi
-    available=$(zfs list -Hp -o available "$source")
-    [[ "$available" =~ ^[0-9]{1,16}$ ]] || {
-        echo "Unexpected ZFS available byte count for $source: $available" >&2
+    # Preserve 8 GiB for persistent state and filesystem overhead.
+    free=$(df -B1 --output=avail -- "$index_dir" | awk 'NR == 2 {print $1}')
+    if [[ ! "$free" =~ ^[1-9][0-9]{0,15}$ ]] || (( free / gib_bytes <= 8 )); then
+        echo "Insufficient space for the cold index at $index_dir" >&2
         exit 1
-    }
-    tib=$(( available * 72 / 100 / tib_bytes ))
-    (( tib > 0 && tib * tib_bytes * 100 >= available * 70 )) || {
-        echo "Initial cold capacity rounding would fall below 70% of available space." >&2
-        exit 1
-    }
+    fi
     temporary=$(mktemp "$layout.XXXXXX")
     trap 'rm -f -- "$temporary"' EXIT
-    # Size for about 8 KiB of encoded data per indexed chunk at 50% load.
-    printf '{"tib":%s,"indexGib":%s}\n' "$tib" "$((tib * 16))" > "$temporary"
+    printf '{"tib":%s,"indexGib":%s}\n' "$tib" "$((free / gib_bytes - 8))" > "$temporary"
     ln -- "$temporary" "$layout"
+    sync -- "$layout" "$index_dir"
 fi
-tib=$(jq -er '.tib | select(type == "number" and . == floor and . > 0 and . < 64)' "$layout") || {
-    echo "Invalid cold CAS geometry in $layout; recover its recorded TiB capacity." >&2
+
+if [[ $(jq -er '.tib | select(type == "number")' "$layout") != "$tib" ]]; then
+    echo "Cold CAS geometry in $layout differs from $dataset refreservation; restore the original value." >&2
     exit 1
-}
-index_gib=$(jq -er '(if has("indexGib") then .indexGib else .tib end) | select(type == "number" and . == floor and . > 0 and . <= 5960)' "$layout") || {
+fi
+index_gib=$(jq -er '.indexGib | select(type == "number" and . == floor and . > 0 and . < 1024)' "$layout") || {
     echo "Invalid cold CAS index size in $layout; recover its recorded GiB capacity." >&2
     exit 1
 }
-if [[ -e "$target/blocks" ]] && [[ $(stat -c %s -- "$target/blocks") != "$((tib * tib_bytes))" ]]; then
+if [[ -e "$target/blocks" ]] && [[ $(stat -c %s -- "$target/blocks") != "$reserved" ]]; then
     echo "Cold block file size differs from $layout; restore the original geometry." >&2
     exit 1
 fi
-if [[ -e "$BB_DATA_DIR/cs/key_location_map" ]] &&
-    [[ $(stat -c %s -- "$BB_DATA_DIR/cs/key_location_map") != "$((index_gib * 1024**3))" ]]; then
+if [[ -e "$index" ]] && [[ $(stat -c %s -- "$index") != "$((index_gib * gib_bytes))" ]]; then
     echo "Cold index size differs from $layout; restore the original geometry." >&2
     exit 1
 fi

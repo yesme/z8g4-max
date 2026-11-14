@@ -1,10 +1,11 @@
 [Unit]
 Description=Buildbarn with ZFS cold CAS and XFS hot cache
 Requires=docker.service
-BindsTo=data-buildbarn.mount
-After=docker.service data-buildbarn.mount
+BindsTo=data-buildbarn.mount srv-bbindex.mount
+After=docker.service data-buildbarn.mount srv-bbindex.mount
 RequiresMountsFor=/opt/z8-kit /srv/buildbarn
 AssertPathIsMountPoint=/data/buildbarn
+AssertPathIsMountPoint=/srv/bbindex
 
 [Service]
 Type=simple

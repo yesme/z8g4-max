@@ -45,7 +45,9 @@ sudo --preserve-env=BB_EDGE_HOT,BB_EDGE_COLD,BB_EDGE_WORK,BB_DATA_DIR \
 
 下载固定版本的三个 GitHub Actions 资产，分别解压，将文件放到 `$HOME/.local/libexec/z8-buildbarn`，命名为 `bb_storage`、`bb_worker`、`bb_runner`，设 0755。用 `file` 查 Mach-O arm64。若资产在部署时已过期，从对应 Git 提交构建 `//cmd/bb_storage`、`//cmd/bb_worker` 和 `//cmd/bb_runner`。 [bb-storage ca3d8b4](https://github.com/buildbarn/bb-storage/actions/runs/41419059475/artifacts/13130587121) · [bb-worker c9ba98c](https://github.com/buildbarn/bb-remote-execution/actions/runs/41423547182/artifacts/13131822142) · [bb-runner c9ba98c](https://github.com/buildbarn/bb-remote-execution/actions/runs/41423547182/artifacts/13132565093)
 
-以专用的普通账户安装 LaunchAgents。runner 原生执行农场提交的代码，该账户只需访问 Xcode 和农场数据目录。先停旧 Docker 缓存和手动隧道。该账户登录且 Mac 唤醒时提供 Darwin worker。工具链规则给 Darwin 动作传 `XCODE_VERSION_OVERRIDE` 和 `APPLE_SDK_PLATFORM=MacOSX`，runner 用本机映射解析 `DEVELOPER_DIR` 和 SDK。单元测试只依赖项目输入、工具链及 SDK。 [Buildbarn Xcode 解析](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/cmd/bb_runner/main.go#L145) · [Apple launchd](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
+以专用的普通账户安装 LaunchAgents。runner 原生执行农场提交的代码，该账户只需访问 Xcode 和农场数据目录。先停旧 Docker 缓存和手动隧道。该账户登录且 Mac 唤醒时提供 Darwin worker。重启后登录该账户，接电时在系统设置关闭显示器熄灭后的自动睡眠。将可重建的缓存卷或目录加入 Spotlight 搜索隐私和 Time Machine 排除列表。 [Mac 睡眠设置](https://support.apple.com/en-euro/guide/mac-help/mchle41a6ccd/mac) · [Spotlight 排除](https://support.apple.com/en-az/guide/mac-help/mchl1bb43b84/mac) · [Time Machine 排除](https://support.apple.com/en-am/guide/mac-help/mh14037/27/mac/27)
+
+工具链规则给 Darwin 动作传 `XCODE_VERSION_OVERRIDE` 和 `APPLE_SDK_PLATFORM=MacOSX`，runner 用本机映射解析 `DEVELOPER_DIR` 和 SDK。单元测试只依赖项目输入、工具链及 SDK。 [Buildbarn Xcode 解析](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/cmd/bb_runner/main.go#L145) · [Apple launchd](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
 
 ```
 out=$(mktemp -d)/agents
@@ -59,6 +61,8 @@ done
 ```
 
 日志保存在 `~/Library/Logs/z8-buildbarn`。Mac 不在线时调度器按 60 秒无 worker 的队列超时清理该平台的任务。
+
+若 LaunchAgent 日志对 `/Volumes/…` 报 `Operation not permitted`，先用专用账户核对卷已挂载及目录权限，再检查「隐私与安全性 → 文件与文件夹」中的可移动卷授权。Apple 将可移动卷列入该权限。调整后重启对应 LaunchAgent，从日志和 CAS 读写确认有效。 [Apple 文件访问控制](https://support.apple.com/en-ie/guide/security-pdf/secddd1d86a6/web)
 
 ### Mac 的四块 CMR 到货后
 
