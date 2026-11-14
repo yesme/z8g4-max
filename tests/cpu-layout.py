@@ -43,11 +43,14 @@ with tempfile.TemporaryDirectory() as temp:
         workers = layout.parse_cpu_list(values["Z8_XOLOTL_POOL_CPUS"])
         reserved = set(range(26 - count, 26)) | set(range(52 - count, 52))
         siblings = {cpu + 52 for cpu in reserved}
+        assert int(values["Z8_INFER_THREADS"]) == len(reserved)
+        assert layout.parse_cpu_list(values["Z8_IRQ_BANNED_CPUS"]) == reserved | siblings
         assert len(idle) == 104 - 2 * count and len(build) == 104 - 4 * count
         assert {0, 52}.issubset(build)
         assert idle - build == reserved and set(range(104)) - idle == siblings
         assert workers == reserved - {26 - count, 52 - count}
         assert f"AllowedCPUs={layout.cpu_list(reserved)}" in (output / "z8infer.slice").read_text(encoding="utf-8")
+        assert "MemoryLow=160G\n" in (output / "z8infer.slice").read_text(encoding="utf-8")
         assert (output / "10-z8-cpu.conf").read_text(encoding="utf-8") == f"[Slice]\nAllowedCPUs={layout.cpu_list(idle)}\n"
 
     (cpus / "cpu52/topology/thread_siblings_list").write_text("1,52\n", encoding="utf-8")

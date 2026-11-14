@@ -1,5 +1,4 @@
-function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null)
-  local MiB = 1024 * 1024;
+function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null, oldBlocks=8, currentBlocks=24)
   {
     'local': {
       keyLocationMap: {
@@ -9,8 +8,8 @@ function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null)
         maximumGetAttempts: 16,
         maximumPutAttempts: 64,
       },
-      oldBlocks: 8,
-      currentBlocks: 24,
+      oldBlocks: oldBlocks,
+      currentBlocks: currentBlocks,
       newBlocks: newBlocks,
       blocksOnBlockDevice: {
         source: { file: { path: blocks, sizeBytes: bytes } },

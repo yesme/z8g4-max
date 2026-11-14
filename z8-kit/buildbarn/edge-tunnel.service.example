@@ -1,0 +1,10 @@
+[Unit]
+Description=SSH tunnel to the Buildbarn farm on jackywang-xubuntu-max
+
+[Service]
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes z8-build
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

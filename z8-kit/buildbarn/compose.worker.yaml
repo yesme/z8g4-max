@@ -2,6 +2,8 @@ services:
   scheduler:
     image: ghcr.io/buildbarn/bb-scheduler:20261102T094740Z-c9ba98c@sha256:50789bdae47ee83905c059f88adbf22c9253139883723f76fbed27def8b0c566
     command: ["/config/shared-scheduler.jsonnet"]
+    ports:
+      - "127.0.0.1:8983:8983"
     volumes:
       - .:/config:ro
   runner-installer:
@@ -12,8 +14,9 @@ services:
     image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
     command: ["sh", "-ceu", "rm -f /run/bb-runner/runner.sock; exec /bb/bb_runner /config/shared-runner.jsonnet"]
     network_mode: none
-    cpus: 12
-    mem_limit: 32g
+    cpus: 72
+    mem_limit: 512g
+    memswap_limit: 512g
     volumes:
       - .:/config:ro
       - ${BB_DATA_DIR:-/srv/buildbarn/tiered}/runner-bin:/bb:ro

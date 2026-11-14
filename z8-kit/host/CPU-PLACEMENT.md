@@ -1,4 +1,4 @@
-# I7. 保留 HT，DeepSeek 启停时交还整颗物理核
+# 保留 HT，DeepSeek 启停时交还整颗物理核
 
 F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT、所有核心和 Turbo 开启。I6 完成推理放行后应用本节。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程，按每路独立分配。DDR4 节点号用 [T3 拓扑报告](PMEM.md#核对双路-numa-拓扑) 确认。
 
@@ -17,7 +17,7 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 
 `z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，只交还推理的 12 个主线程；同核的 12 个 HT 伙伴一直排除。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。服务常驻时即使暂时没有 API 请求也保留核心。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
-`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。推理核的独占由 CPU 集合分配实现。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。容器 `cpus: 12` 仍是 12 个 CPU 的时间配额，`mem_limit: 32g` 仍限制其内存。CPU 集合和两路 DDR4 的 `numactl` 分配是两项独立设置。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html) · [Ubuntu 26.04 systemctl set-property](https://manpages.ubuntu.com/manpages/resolute/man1/systemctl.1.html)
+`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。推理核的独占由 CPU 集合分配实现。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。runner 的 `cpus: 72` 是 CPU 时间配额，`mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。推理时普通任务共享 80 个逻辑 CPU，留 8 个逻辑 CPU 的时间预算给系统、存储和协调进程，runner 设 72 并发和 72 CPU 配额。这个余量由配额提供，四个物理核并未另做硬隔离。I7 验固定配置的混合负载。CPU 集合和两路 DDR4 的 `numactl` 分配是两项独立设置。推理 slice 与 service 使用 `MemoryLow=160G` 优先保护已用内存免于压力回收，包含相应的回收下沉路径。这是按使用量生效的分层回收保护。服务另设 `OOMScoreAdjust=-900`，使全机内核 OOM 优先考虑其他合格进程。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html) · [Ubuntu 26.04 systemctl set-property](https://manpages.ubuntu.com/manpages/resolute/man1/systemctl.1.html)
 
 ## 运行时的 NUMA 内存策略
 
@@ -68,26 +68,25 @@ cat "$layout"/{z8infer.slice,z8-infer-cpu.env,10-z8-cpu.conf}
 
 安装到这一步，四个 slice 的 `AllowedCPUs` 应与 `Z8_IDLE_CPUS` 一致，默认共 92 个。四份 drop-in 让重启后也应用空闲集合；启动推理时再用运行时属性缩到 80 个。若已有其它 CPU 限制，先用 `systemctl cat` 和 `EffectiveCPUs` 核对合并结果。
 
-如 I5 已启用 Buildbarn 远程执行，加下面的 runner 配置。Docker 应报告 `systemd 2`，对应 systemd cgroup 驱动和 cgroup v2。runner 启动真正的编译动作；scheduler、worker 协调进程和 CAS 继续用普通服务 CPU 集合。等当前远程动作结束再重启 worker。
+I5 启动 Buildbarn 前给 runner 加下面的分核配置。Docker 应报告 `systemd 2`，对应 systemd cgroup 驱动和 cgroup v2。runner 启动真正的编译动作。scheduler、worker 协调进程和 CAS 继续由普通服务 CPU 集合管理。
 
 ```bash
 (
     set -e
     test "$(sudo docker info --format '{{.CgroupDriver}} {{.CgroupVersion}}')" = 'systemd 2'
     cd /opt/z8-kit/buildbarn
-    sudo install -m 0644 "$kit/buildbarn/compose.cpu-layout.yaml" .
     sudo docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml \
         -f compose.cpu-layout.yaml config --quiet
     sudo install -Dm0644 "$kit/buildbarn/worker-cpu-layout.conf.example" \
         /etc/systemd/system/z8-buildbarn-worker.service.d/80-z8-cpu.conf
     sudo systemctl daemon-reload
-    sudo systemctl restart z8-buildbarn-worker.service
+    sudo systemctl try-restart z8-buildbarn-worker.service
 )
 ```
 
 ## 启停本地模型
 
-以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。仅当 I6 实际用了降级档，才保存相应的 `SLOTS` 或 `MOE_CACHE_MIB`。以下 `launch.sh` 设 0700。
+以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
 
 **llama.cpp 的 `launch.sh`**
 
@@ -148,7 +147,7 @@ buck2 --isolation-dir z8-build build --local-only -j 8 //path:target
 
 ### IRQ 与内核线程
 
-用户态 slice 的 CPU 集合与 IRQ／内核线程亲和性独立。只有推理尾延迟异常且 `mpstat -P ALL 1` 或 `/proc/interrupts` 显示存储／网卡 IRQ 持续落在推理核时，才按实际向量检查 `/proc/irq/<IRQ>/effective_affinity_list`。需迁移时用 irqbalance 的 `IRQBALANCE_BANNED_CPULIST` 排开推理 CPU 和 HT 伙伴。全局 workqueue、CAT/MBA 保持默认。 [Ubuntu irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
+用户态 slice 的 CPU 集合与 IRQ／内核线程亲和性独立。只有推理尾延迟异常且 `mpstat -P ALL 1` 或 `/proc/interrupts` 显示存储／网卡 IRQ 持续落在推理核时，才按实际向量检查 `/proc/irq/<IRQ>/effective_affinity_list`。需迁移时用 irqbalance 的 `IRQBALANCE_BANNED_CPULIST` 排开推理 CPU 和 HT 伙伴，屏蔽值取生成的 `/etc/z8-infer-cpu.env` 中 `Z8_IRQ_BANNED_CPUS`。全局 workqueue、CAT/MBA 保持默认。 [Ubuntu irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
 启动前、运行中、停止后分别检查。对实际 1Cat CUDA worker 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到空闲 CPU 集合，其中仍排除推理核的 HT 伙伴。`-j` 与容器的 CPU 时间配额仍分别限制构建并发和 CPU 时间。
 

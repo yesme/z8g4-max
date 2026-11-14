@@ -8,9 +8,12 @@ ConditionPathIsExecutable=/home/jackywang/.config/z8-infer/launch.sh
 Type=exec
 User=jackywang
 Slice=z8infer.slice
+EnvironmentFile=/etc/z8-infer-cpu.env
+MemoryLow=160G
+OOMScoreAdjust=-900
 Nice=-5
 WorkingDirectory=/home/jackywang
-ExecCondition=/usr/bin/findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always
+ExecCondition=/usr/bin/findmnt -rn -M /srv/pmem-model -t xfs -O dax=always
 ExecStartPre=+/usr/local/libexec/z8-cpu-mode reserve
 ExecStart=/home/jackywang/.config/z8-infer/launch.sh
 ExecStopPost=+/usr/local/libexec/z8-cpu-mode restore

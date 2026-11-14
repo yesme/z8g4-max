@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# != 2 || ( $1 != sequential && $1 != random ) || $EUID != 0 ]]; then
-    echo "Usage: sudo bash $0 sequential|random EXISTING_LOG_DIRECTORY" >&2
+if [[ $# != 2 || $1 != sequential || $EUID != 0 ]]; then
+    echo "Usage: sudo bash $0 sequential EXISTING_LOG_DIRECTORY" >&2
     exit 2
 fi
-profile=$1
 target=/data/buildbarn
 pool=z8data
 [[ $(findmnt -n -M "$target" -o SOURCE,FSTYPE) == 'z8data/data/buildbarn zfs' ]]
@@ -13,19 +12,13 @@ pool=z8data
 [[ $(zpool get -H -o value autotrim "$pool") == on ]]
 log_dir=$(realpath -e -- "$2")
 [[ -d "$log_dir" && $(findmnt -n -o FSTYPE -T "$log_dir") != zfs ]]
-log_dir=$(mktemp -d -- "$log_dir/cas-$profile.XXXXXXXX")
 file="$target/i4-cas-aging.bin"
-if [[ -L "$file" ]]; then
-    echo "Refusing symlink: $file" >&2
+if [[ -e "$file" || -L "$file" ]] || ! (set -o noclobber; : > "$file"); then
+    echo "Cannot create $file. If it is a previous test file, verify it and remove it before retrying." >&2
     exit 1
 fi
-case "$profile" in
-    sequential)
-        (set -o noclobber; : > "$file")
-        truncate -s 512G -- "$file"
-        ;;
-    random) [[ -f "$file" && $(stat -c %s -- "$file") == 549755813888 ]] ;;
-esac
+truncate -s 512G -- "$file"
+log_dir=$(mktemp -d -- "$log_dir/cas-sequential.XXXXXXXX")
 echo "Logs: $log_dir"
 
 history=/sys/module/zfs/parameters/zfs_txg_history
@@ -60,38 +53,53 @@ snapshot() {
 snapshot start
 : > "$log_dir/txgs-periodic.log"
 (
-    while sleep 60; do
+    sleeper=
+    trap 'if [[ -n "$sleeper" ]]; then kill "$sleeper" 2>/dev/null || true; wait "$sleeper" 2>/dev/null || true; fi; exit 0' TERM
+    while true; do
+        sleep 60 & sleeper=$!
+        wait "$sleeper"
+        sleeper=
         snapshot periodic
-    done
+    done </dev/null >/dev/null 2>&1
 ) & monitor_pid=$!
 zpool iostat -vpy -T u "$pool" 60 > "$log_dir/zpool-iostat.log" & iostat_pid=$!
 
 run_fio() {
-    local name=$1 pattern=$2 bytes=$3 started=$SECONDS
+    local name=$1 started=$SECONDS
     fio --name="$name" --filename="$file" --allow_file_create=0 \
-        --size=512G --io_size="$bytes" --rw="$pattern" --bs=1M --ioengine=psync \
+        --size=512G --rw=write --bs=1M --ioengine=psync \
         --direct=0 --overwrite=1 --fallocate=none --refill_buffers=1 \
-        --buffer_compress_percentage=0 --norandommap=1 --end_fsync=1 \
+        --buffer_compress_percentage=0 --end_fsync=1 \
         --write_bw_log="$log_dir/$name" --log_avg_msec=60000 \
         --percentile_list=50:95:99:99.9 --output-format=json --output="$log_dir/$name.json"
     zpool sync "$pool"
-    printf '%s %s seconds (including zpool sync)\n' "$name" "$((SECONDS - started))" | tee -a "$log_dir/timing.log"
+    elapsed=$((SECONDS - started))
+    printf '%s %s seconds (including zpool sync)\n' "$name" "$elapsed" | tee -a "$log_dir/timing.log"
     snapshot "$name"
 }
 
-if [[ "$profile" == sequential ]]; then
-    run_fio seed write 512G
-    last_seed_txg=$(awk '$1 ~ /^[0-9]+$/ && $12 > 0 { id=$1 } END { if (id == "") exit 1; print id }' "$log_dir/txgs-seed.log")
-    for pass in 1 2 3; do
-        run_fio "overwrite-$pass" write 512G
-    done
-    awk -v start="$last_seed_txg" '
-        $1 ~ /^[0-9]+$/ && $1 > start && $12 > max { max=$12; id=$1 }
-        END {
-            if (id == "") exit 1
-            printf "Max completed overwrite TXG %s sync time: %.3f seconds\n", id, max / 1e9
-        }
-    ' "$log_dir"/txgs-{periodic,overwrite-*}.log | tee -a "$log_dir/timing.log"
+run_fio seed
+last_seed_txg=$(awk '$1 ~ /^[0-9]+$/ && $12 > 0 { id=$1 } END { if (id == "") exit 1; print id }' "$log_dir/txgs-seed.log")
+passed=1
+for pass in 1 2 3; do
+    run_fio "overwrite-$pass"
+    if (( pass >= 2 && elapsed > 3665 )); then
+        passed=0
+    fi
+done
+if ! awk -v start="$last_seed_txg" '
+    $1 ~ /^[0-9]+$/ && $1 > start && $12 > max { max=$12; id=$1 }
+    END {
+        if (id == "") { print "No completed overwrite TXG recorded"; exit 1 }
+        printf "Max completed overwrite TXG %s sync time: %.3f seconds\n", id, max / 1e9
+        if (max > 60000000000) exit 1
+    }
+' "$log_dir"/txgs-{periodic,overwrite-*}.log | tee -a "$log_dir/timing.log"; then
+    passed=0
+fi
+if (( passed )); then
+    echo 'PASS: throughput and TXG duration' | tee -a "$log_dir/timing.log"
 else
-    run_fio random-overwrite randwrite 1T
+    echo 'FAIL: minimum 150 MB/s and maximum 60 s completed TXG duration required' | tee -a "$log_dir/timing.log"
+    exit 1
 fi

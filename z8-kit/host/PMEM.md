@@ -168,14 +168,14 @@ PY
 
 | 方式 | 出现在 Linux 的形式 | 在本机的用途 |
 |---|---|---|
-| `fsdax` | `/dev/pmemN` 块设备。ext4 提供普通文件名、权限和 DAX `mmap` | GGUF、Engram、DSpark 和引擎显式保存的文件型快照。读取映射页直接访问 PMem，文件仍可用普通工具管理 |
+| `fsdax` | `/dev/pmemN` 块设备。XFS 提供普通文件名、权限和 DAX `mmap` | GGUF、Engram、DSpark 和引擎显式保存的文件型快照。读取映射页直接访问 PMem，文件仍可用普通工具管理 |
 | `devdax` | `/dev/daxX.Y` 字符设备。程序需要显式映射和管理偏移 | 上线前可逐路测设备。随后交给 `daxctl` 转 `system-ram`，由 `dax_kmem` 把该范围加进 Linux 的系统内存 |
 
 转为 `system-ram` 后由 Linux 管理可移动页，按慢层测试冷页下沉。两路分别上线，不做条带。`fsdax` 文件仍固定在模型卷的物理地址上，内核慢层对可迁移页的处理与模型文件布局独立。CUDA 已长期 pin 的页留在原驻留内存中，也要从 DDR4 预算扣除。
 
 ## 模型卷
 
-**T3 一次建成正式卷**。两路各 258 GiB fsdax，合成 2 MiB `dm-stripe`，格式为 ext4 DAX。名义 516 GiB，块设备约 508 GiB，挂 `/srv/pmem-model`。保留 ext4 的 2 MiB stride 和 1% 保留块。条带以统一容量存放 GGUF、Engram 和 tokenizer，省去按引擎重排分片。同一路的 PMem 仍由固件做六通道交错。两路条带的任一成员失效都要从模型清单恢复整卷。 [dm-stripe DAX 路径](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-stripe.c) · [Linux 2 MiB DAX 对齐](https://nvdimm.docs.kernel.org/2mib_fs_dax.html)
+**T3 一次建成正式卷**。两路各 258 GiB fsdax，合成 2 MiB `dm-stripe`，格式为 XFS DAX。名义 516 GiB，块设备约 508 GiB，挂 `/srv/pmem-model`。使用 4 KiB 文件系统块，`su=2m,sw=2` 匹配条带，关闭模型卷的 reflink。在大文件目录设继承的 2 MiB extent 分配提示。条带以统一容量存放 GGUF、Engram 和 tokenizer，省去按引擎重排分片。同一路的 PMem 仍由固件做六通道交错。两路条带的任一成员失效都要从模型清单恢复整卷。 [dm-stripe DAX 路径](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-stripe.c) · [Linux 2 MiB DAX 对齐](https://nvdimm.docs.kernel.org/2mib_fs_dax.html)
 
 用 `sudo ndctl list -RNv` 核两个已记录的 fsdax namespace UUID，按 CPU0、CPU1 填变量。以下 `mkfs` 只用于 T3 的空 mapper。到了 I4 直接依 UUID 恢复挂载。
 
@@ -186,23 +186,26 @@ FS1_UUID=REPLACE_NAMESPACE_UUID_SOCKET1
 sudo apt install jq
 sudo bash host/pmem-dax-stripe.sh show "$FS0_UUID" "$FS1_UUID"
 sudo bash host/pmem-dax-stripe.sh create "$FS0_UUID" "$FS1_UUID"
-# 仅对首次创建的空 mapper 建文件系统。2 MiB chunk / 4 KiB = 512。
-sudo mkfs.ext4 -b 4096 -m 1 -E stride=512,stripe_width=1024 /dev/mapper/z8-pmem-model
+# 仅对首次创建的空 mapper 建文件系统。
+sudo mkfs.xfs -b size=4096 -d su=2m,sw=2 -m reflink=0 /dev/mapper/z8-pmem-model
 sudo install -d /srv/pmem-model
-sudo mount -t ext4 -o dax=always,noatime,data=ordered,nodiscard /dev/mapper/z8-pmem-model /srv/pmem-model
+sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"
+sudo xfs_info /srv/pmem-model
+# 提示仅给权重目录，tokenizer 仍可放在其他目录。
+sudo install -d -o "$(id -u)" -g "$(id -g)" /srv/pmem-model/ds41-llamacpp
+sudo xfs_io -c 'extsize 2m' /srv/pmem-model/ds41-llamacpp
 ```
 
-这里用 `noatime` 免去权重、Engram 热读触发的访问时间更新，保留 ext4 日志、`data=ordered` 和正常的写入同步语义。App Direct DAX 模型卷以读为主，使用 `nodiscard`。在该路径实际创建测试文件，执行 `xfs_io -r -c 'statx -r' /srv/pmem-model/burnin.bin`（也可对 ext4 文件运行）。核 `stx_attributes_mask` 和 `stx_attributes` 的 `STATX_ATTR_DAX` 位 `0x200000` 都为 1。此卷保存模型权重、Engram、DSpark 和支持持久化的 KV checkpoint，模型 revision、SHA-256 和下载清单留在 P4618。 [全机挂载表](MOUNTS.md) · [Linux 文件级 DAX 状态](https://docs.kernel.org/filesystems/dax.html) · [两个引擎的 KV 配置](../inference/README.md)
+这里用 `noatime` 免去权重、Engram 热读触发的访问时间更新，保留 XFS 日志和正常的写入同步语义。App Direct DAX 模型卷以读为主，使用 `nodiscard`。在该路径实际创建测试文件，执行 `xfs_io -r -c 'statx -r' /srv/pmem-model/burnin.bin`。核 `stx_attributes_mask` 和 `stx_attributes` 的 `STATX_ATTR_DAX` 位 `0x200000` 都为 1。此卷保存模型权重、Engram、DSpark 和支持持久化的 KV checkpoint，模型 revision、SHA-256 和下载清单留在 P4618。 [全机挂载表](MOUNTS.md) · [Linux 文件级 DAX 状态](https://docs.kernel.org/filesystems/dax.html) · [两个引擎的 KV 配置](../inference/README.md)
 
-ext4 DAX 可以使用 2 MiB PMD 映射。只有实际推理证据显示模型文件映射的 TLB miss 明显拖慢请求时，再用 `filefrag -v` 和 `trace-cmd record -e fs_dax:dax_pmd_fault_done` 查实际文件。事件 `NOPAGE` 表示成功，`FALLBACK` 表示落入小页路径。Xolotl 的 Engram 走 `pread`，直接查它的 I/O 时延。 [Linux 2 MiB DAX 验证](https://nvdimm.docs.kernel.org/2mib_fs_dax.html)
+`xfs_info` 应显示 `sunit=512 swidth=1024 blks` 和 `reflink=0`。2 MiB PMD 还要求物理范围、文件偏移和 mmap 地址相容，收紧分配对齐后仍可能回退。在 T5 模型下载后用 `xfs_io -r -c 'fiemap -v' "$DS41_GGUF"` 记录分片 extent；需要确认实际 PMD 命中时，用 `trace-cmd record -e fs_dax:dax_pmd_fault_done` 跟踪 `mmap` 负载。事件 `NOPAGE` 表示成功，`FALLBACK` 表示落入小页路径。Xolotl 的 Engram 走 `pread`，直接查它的 I/O 时延。 [Linux 2 MiB DAX 验证](https://nvdimm.docs.kernel.org/2mib_fs_dax.html)
 
 ### 交给启动服务
 
 首次测试后卸载并删除 mapper，再让服务接管。复制 `host/pmem-model.env.example` 为 `pmem-model.env`，填写两个 fsdax namespace UUID。
 
 ```bash
-sudo umount /srv/pmem-model
-sudo dmsetup remove z8-pmem-model
+sudo bash host/pmem-dax-stripe.sh unmount "$FS0_UUID" "$FS1_UUID"
 sudo install -d -m 0755 /etc/z8-storage
 sudo install -m 0600 pmem-model.env /etc/z8-storage/
 sudo install -m 0755 host/pmem-dax-stripe.sh host/pmem-device-wait.sh /usr/local/sbin/
@@ -214,7 +217,7 @@ findmnt -M /srv/pmem-model
 
 依赖该卷的推理 systemd 服务加 `BindsTo=z8-pmem-model.service` 与 `After=z8-pmem-model.service`，启动脚本查 `findmnt -M /srv/pmem-model` 后再读模型。
 
-若首次启动在 mount 步骤失败，核 kernel 日志和 `blkid /dev/mapper/z8-pmem-model`。修复挂载问题后，服务可复用底层设备、顺序和长度全部匹配的现有 mapper，以及来源和 DAX 选项均匹配的现有挂载。表结构不同或路径被其他文件系统占用时，先查清现有映射与用途。已有模型数据时保留文件系统。
+若首次启动在 mount 步骤失败，核 kernel 日志和 `blkid /dev/mapper/z8-pmem-model`。修复挂载问题后，服务可复用底层设备、顺序和长度全部匹配的现有 mapper，以及来源和 DAX 选项均匹配的现有挂载。表结构不同或路径被其他文件系统占用时，先查清现有映射与用途。已有 ext4 模型卷时，先保存可重下的文件清单或备份权重，再停服务卸载。转为 XFS 须重建文件系统，仅在确认允许清空后按 T3 步骤执行并恢复权重。
 
 ## 剩余 PMem 转 kmem
 
@@ -248,7 +251,7 @@ sysctl kernel.numa_balancing
 
 用 `lsmem` 检查两路新内存都为 `online`、`Movable`，并记录 `target_node` 和慢层列表。设备级开关返回 `Operation not supported` 时先核对启动参数、物理区间和内存块大小。若设备仍无法把页描述符放在 PMem，才用 `Z8_MEMMAP_ON_MEMORY=0`，并从 DDR4 可用空间扣掉实际元数据开销。
 
-MGLRU 管页回收顺序。`demotion_enabled` 控制回收时能否尝试把冷的可迁移页移往慢内存。`kernel.numa_balancing` 的标志 `2` 控制热点页向快层提升，首轮保留原 sysctl 值，先测下沉。用 `host/pmem-numa-report.sh <PID>` 对比 `pgdemote_*`、`pgpromote_*`、NUMA 页位置、memory PSI 和 swap 计数。Pinned 页不能下沉。T3 确认去向后，正式服务采用样例的 `Z8_ENABLE_DEMOTION=1`。需要退回 devdax 时先停止负载并检查内存能否 offline。 [daxctl system-ram](https://docs.pmem.io/ndctl-user-guide/daxctl-man-pages/daxctl-reconfigure-device) · [Linux NUMA balancing 位定义](https://docs.kernel.org/admin-guide/sysctl/kernel.html#numa-balancing)
+MGLRU 管页回收顺序。`demotion_enabled` 控制回收时能否尝试把冷的可迁移页移往慢内存。启用 kmem 时把 `kernel.numa_balancing` 设为 `2`，让热点页从慢层提升。Linux 7.0 在此模式为顶层 DDR4 页跳过本次 NUMA hinting PTE 扫描。T3 在两路 kmem 上线后运行 `sudo sysctl -w kernel.numa_balancing=2`，再做下沉验证。用 `host/pmem-numa-report.sh <PID>` 对比 `pgdemote_*`、`pgpromote_*`、NUMA 页位置、memory PSI 和 swap 计数。Pinned 页不能下沉。T3 确认去向后，正式服务采用样例的 `Z8_ENABLE_DEMOTION=1`。需要退回 devdax 时先停止负载并检查内存能否 offline。 [daxctl system-ram](https://docs.pmem.io/ndctl-user-guide/daxctl-man-pages/daxctl-reconfigure-device) · [Linux 7.0 顶层 NUMA 扫描条件](https://github.com/torvalds/linux/blob/v7.0/mm/mempolicy.c#L864)
 
 ### T3 记录 kmem 冷启动时间
 
@@ -260,7 +263,7 @@ systemctl show z8-pmem-kmem.service -p Result -p ExecMainStartTimestampMonotonic
 sudo daxctl list --devices
 ```
 
-两个服务按 UUID 各等最多 90 秒。fsdax 还等两个块设备节点出现，devdax 等两个设备都绑定 DAX 驱动。模型单元给枚举、创建 mapper 与挂载共 150 秒。kmem 单元给枚举与两路上线共 600 秒。以冷启耗时校准，给实测最慢的上线阶段留余量。若需要调，用 `sudo systemctl edit z8-pmem-kmem.service` 将下面的 `900s` 换成按实测采用的值。调 `Z8_PMEM_DEVICE_WAIT` 时，同步确保对应单元的 `TimeoutStartSec` 还覆盖余下操作。
+两个服务按 UUID 各等最多 90 秒。fsdax 还等两个块设备节点出现，devdax 等两个设备都绑定 DAX 驱动。模型单元给枚举、创建 mapper 与挂载共 150 秒。kmem 单元给枚举与两路上线共 600 秒。默认使用上述超时。只有正常上线因实际耗时触及 600 秒时才延长；需要改时用 `sudo systemctl edit z8-pmem-kmem.service`，按最慢日志留出余量。调 `Z8_PMEM_DEVICE_WAIT` 时，同步确保对应单元的 `TimeoutStartSec` 还覆盖余下操作。
 
 ```ini
 [Service]
@@ -344,11 +347,12 @@ GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} memory_hotplug.memmap_
 EOF
 sudo update-grub
 sudo systemctl daemon-reload
+sudo install -m 0644 host/90-z8-tiering.conf.example /etc/sysctl.d/90-z8-tiering.conf
 sudo systemctl enable z8-pmem-kmem.service
 sudo systemctl enable z8-pmem-model.service
 ```
 
-在 `pmem-kmem.env` 中填两路 devdax namespace UUID，照抄 T3 验证过的 `Z8_MEMMAP_ON_MEMORY` 和 `Z8_ENABLE_DEMOTION`。重启后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。
+在 `pmem-kmem.env` 中填两路 devdax namespace UUID，照抄 T3 验证过的 `Z8_MEMMAP_ON_MEMORY` 和 `Z8_ENABLE_DEMOTION`。重启后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem，`sysctl kernel.numa_balancing` 应为 `2`。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。
 
 ## 四卡 pinned DMA 验收
 

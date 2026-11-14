@@ -77,13 +77,15 @@ def main():
             ("z8build-remote", "Buildbarn remote execution", None, 100),
         ):
             allowed = f"AllowedCPUs={cpu_list(mask)}\n" if mask is not None else ""
+            memory = "MemoryLow=160G\n" if name == "z8infer" else ""
             (args.output / f"{name}.slice").write_text(
                 f"[Unit]\nDescription={desc}\n\n[Slice]\n{allowed}"
-                f"CPUWeight={weight}\n",
+                f"CPUWeight={weight}\n{memory}",
                 encoding="utf-8",
             )
         (args.output / "z8-infer-cpu.env").write_text(
             f"Z8_BUILD_CPUS={cpu_list(build)}\nZ8_IDLE_CPUS={cpu_list(build | infer)}\n"
+            f"Z8_INFER_THREADS={len(infer)}\nZ8_IRQ_BANNED_CPUS={cpu_list(infer | infer_siblings)}\n"
             f"Z8_XOLOTL_POOL_CPUS={cpu_list(xolotl_pool)}\n",
             encoding="utf-8",
         )

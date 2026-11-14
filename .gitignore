@@ -7,3 +7,5 @@ __pycache__/
 !*.env.example
 z8-kit/hybrid.tsv
 z8-kit/pairs.tsv
+z8-kit/buildbarn/edge-site.json
+z8-kit/buildbarn/cold-layout.json

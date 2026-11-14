@@ -21,3 +21,45 @@ for store in cs cs-hot cms ac; do
         exit 1
     }
 done
+
+# Set geometry once in the empty pool. Preserve it even when the pool fills.
+# The service runs from /opt/z8-kit/buildbarn.
+layout=cold-layout.json
+tib_bytes=$((1024**4))
+if [[ -e "$target/i4-cas-aging.bin" ]]; then
+    echo "Finish I4 and remove $target/i4-cas-aging.bin before starting Buildbarn." >&2
+    exit 1
+fi
+if [[ ! -e "$layout" ]]; then
+    if [[ -e "$target/blocks" || -e "$BB_DATA_DIR/cs/key_location_map" ]]; then
+        echo "Existing cold CAS needs its original $layout; recover its geometry before starting." >&2
+        exit 1
+    fi
+    available=$(zfs list -Hp -o available "$source")
+    [[ "$available" =~ ^[0-9]{1,16}$ ]] || {
+        echo "Unexpected ZFS available byte count for $source: $available" >&2
+        exit 1
+    }
+    tib=$(( available * 72 / 100 / tib_bytes ))
+    (( tib > 0 && tib * tib_bytes * 100 >= available * 70 )) || {
+        echo "Initial cold capacity rounding would fall below 70% of available space." >&2
+        exit 1
+    }
+    temporary=$(mktemp "$layout.XXXXXX")
+    trap 'rm -f -- "$temporary"' EXIT
+    printf '{"tib":%s}\n' "$tib" > "$temporary"
+    ln -- "$temporary" "$layout"
+fi
+tib=$(jq -er '.tib | select(type == "number" and . == floor and . > 0 and . < 64)' "$layout") || {
+    echo "Invalid cold CAS geometry in $layout; recover its recorded TiB capacity." >&2
+    exit 1
+}
+if [[ -e "$target/blocks" ]] && [[ $(stat -c %s -- "$target/blocks") != "$((tib * tib_bytes))" ]]; then
+    echo "Cold block file size differs from $layout; restore the original geometry." >&2
+    exit 1
+fi
+if [[ -e "$BB_DATA_DIR/cs/key_location_map" ]] &&
+    [[ $(stat -c %s -- "$BB_DATA_DIR/cs/key_location_map") != "$((tib * 1024**3))" ]]; then
+    echo "Cold index size differs from $layout; restore the original geometry." >&2
+    exit 1
+fi

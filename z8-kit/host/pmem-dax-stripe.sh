@@ -3,12 +3,21 @@ set -euo pipefail
 # shellcheck source=z8-kit/host/pmem-device-wait.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/pmem-device-wait.sh"
 
-if [[ $# != 3 || ( $1 != show && $1 != create && $1 != mount ) ]]; then
-    echo "Usage: bash $0 show|create|mount FSDAX_NAMESPACE_UUID0 FSDAX_NAMESPACE_UUID1" >&2
+if [[ $# != 3 || ( $1 != show && $1 != create && $1 != mount && $1 != unmount ) ]]; then
+    echo "Usage: bash $0 show|create|mount|unmount FSDAX_NAMESPACE_UUID0 FSDAX_NAMESPACE_UUID1" >&2
     exit 2
 fi
 mode=$1
 shift
+target=/srv/pmem-model
+mapper=/dev/mapper/z8-pmem-model
+if [[ "$mode" == unmount ]] && ! dmsetup info z8-pmem-model >/dev/null 2>&1; then
+    if findmnt -rn -M "$target" >/dev/null; then
+        echo "An unexpected filesystem is mounted at $target" >&2
+        exit 1
+    fi
+    exit 0
+fi
 chunk_sectors=4096  # 2 MiB
 devices=()
 size=0
@@ -39,7 +48,7 @@ if dmsetup info z8-pmem-model >/dev/null 2>&1; then
         echo 'Existing z8-pmem-model has a different device table' >&2
         exit 1
     fi
-else
+elif [[ "$mode" != unmount ]]; then
     for device in "${devices[@]}"; do
         if findmnt -rn -S "$device" >/dev/null; then
             echo "Unmount $device first" >&2
@@ -51,21 +60,28 @@ else
         fi
     done
     dmsetup create z8-pmem-model --table "$table"
+else
+    echo 'z8-pmem-model disappeared during shutdown' >&2
+    exit 1
 fi
-mapper=/dev/mapper/z8-pmem-model
 udevadm settle --timeout=10
 test -b "$mapper"
 [[ "$mode" != create ]] || exit 0
 
-target=/srv/pmem-model
 if mounted=$(findmnt -rn -M "$target" -o MAJ:MIN,FSTYPE,OPTIONS); then
     read -r source_id fstype options <<< "$mounted"
     mapper_id=$(lsblk -dnro MAJ:MIN "$mapper")
     if [[ "$mounted" == *$'\n'* || "$source_id" != "$mapper_id" ||
-          "$fstype" != ext4 || ",$options," != *,dax=always,* ]]; then
+          "$fstype" != xfs || ",$options," != *,dax=always,* ]]; then
         echo "An unexpected filesystem is mounted at $target" >&2
         exit 1
     fi
-    exit 0
+    if [[ "$mode" == mount ]]; then
+        exit 0
+    fi
+    umount "$target"
 fi
-exec mount -t ext4 -o dax=always,noatime,data=ordered,nodiscard "$mapper" "$target"
+if [[ "$mode" == unmount ]]; then
+    exec dmsetup remove z8-pmem-model
+fi
+exec mount -t xfs -o dax=always,noatime,nodiscard "$mapper" "$target"

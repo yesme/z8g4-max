@@ -60,4 +60,4 @@ dsh --profile headless '读取 README.md，用两句话说明项目用途。'
 
 ### 本地 1017 验机入口
 
-需要用 OMP 做本地闭环时，把 `omp-models.yml.example` 的 `z8-deepseek` 合并到 `~/.omp/agent/models.yml`，模型选择 `z8-deepseek/deepseek-v4.1-flash-1017`。默认通过 loopback 使用 8K llama.cpp 服务。启用 Xolotl 回退时把端口改为 8150。并发和性能用本地 1017 探针及固定任务验证。
+需要用 OMP 做本地闭环时，把 `omp-models.yml.example` 的 `z8-deepseek` 合并到 `~/.omp/agent/models.yml`，模型选择 `z8-deepseek/deepseek-v4.1-flash-1017`。默认通过 loopback 使用 8K llama.cpp 服务。I6 启用单槽 16K 时，同步把该条目的 `contextWindow` 设为 `16384`。启用 Xolotl 回退时把端口改为 8150。并发和性能用本地 1017 探针及固定任务验证。

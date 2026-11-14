@@ -6,22 +6,23 @@ I6 先启 **llama.cpp v1.0.0**。它用一套 ISTA 1017 权重提供 OpenAI 兼�
 
 ## 先挂 PMem，再准备文件
 
-先启 [PMem 模型卷](../host/PMEM.md#i4-在正式系统复用-pmem)。以 `jackywang` 登录，确认 ext4 的 DAX 挂载，再建权重目录。所有权重和 tokenizer 写到该卷。先下载约 232 GiB 的 ISTA IQ2_XXS + IQ4_NL Engram，一份供 llama.cpp 和 Xolotl 共用。 [ISTA 模型文件](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF)
+先启 [PMem 模型卷](../host/PMEM.md#i4-在正式系统复用-pmem)。确认 XFS 的 DAX 挂载和 T3 建立的权重目录。T5 用临时系统用户下载；I6 以 `jackywang` 复用已下载文件，若数字 UID/GID 不同先在正式系统对该目录执行一次 `chown -R`。所有权重和 tokenizer 写到该卷。先下载约 232 GiB 的 ISTA IQ2_XXS + IQ4_NL Engram，一份供 llama.cpp 和 Xolotl 共用。 [ISTA 模型文件](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF)
 
 ```bash
 PMEM=/srv/pmem-model
-findmnt -rn -M "$PMEM" -t ext4 -O dax=always || exit 1
-sudo install -d -m 0750 -o jackywang -g "$(id -gn jackywang)" "$PMEM/ds41-llamacpp"
+findmnt -rn -M "$PMEM" -t xfs -O dax=always || exit 1
+xfs_io -r -c extsize "$PMEM/ds41-llamacpp"
 df -h "$PMEM"
 ```
 
 ## llama.cpp v1.0.0 主服务
 
-在 I5 已安装 Docker 的系统，从 `/srv/work/jackywang` 执行。CUDA 容器用于编译，不需要访问 GPU。先取 CUDA runtime 库，两种引擎共享，R580 的设备驱动库由宿主提供。 [llama.cpp CUDA 构建配置](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/ggml/src/ggml-cuda/CMakeLists.txt)
+在 `z8-kit` 根目录设置 `kit=$(pwd -P)`。正式系统从 `/srv/work/jackywang` 执行，T5 从临时 SSD 上的 `$HOME/z8-smoke` 执行。以下编译和下载命令在选定的工作目录运行。CUDA 容器用于编译，不需要访问 GPU。先取 CUDA runtime 库，两种引擎共享，R580 的设备驱动库由宿主提供。 [llama.cpp CUDA 构建配置](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/ggml/src/ggml-cuda/CMakeLists.txt)
 
 ```bash
-cd /srv/work/jackywang
-mkdir -p cuda-12.9-runtime
+sudo apt install libgomp1 libssl3t64 numactl
+export Z8_CUDA_RUNTIME="$PWD/cuda-12.9-runtime"
+mkdir -p "$Z8_CUDA_RUNTIME"
 sudo docker run --rm --user "$(id -u):$(id -g)" \
     -v "$PWD/cuda-12.9-runtime:/runtime" nvidia/cuda:12.9.1-devel-ubuntu24.04 bash -euc '
         for library in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libnvJitLink.so.12; do
@@ -42,18 +43,20 @@ sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         chown -R "$HOST_UID:$HOST_GID" build
     '
 export LLAMA_BUILD="$(realpath llama.cpp/build)"
-LD_LIBRARY_PATH="/srv/work/jackywang/cuda-12.9-runtime" ldd "$LLAMA_BUILD/bin/llama-server"
-LD_LIBRARY_PATH="/srv/work/jackywang/cuda-12.9-runtime" ldd "$LLAMA_BUILD/bin/libggml-cuda.so"
+LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME" ldd "$LLAMA_BUILD/bin/llama-server"
+LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME" ldd "$LLAMA_BUILD/bin/libggml-cuda.so"
 ```
 
-`ldd` 须无 `not found`。安装运行库 `sudo apt install libgomp1 libssl3t64 numactl`。
+两个 `ldd` 输出均应无 `not found`。
 
-先装 `pipx`，执行 `pipx install huggingface_hub` 和 `pipx ensurepath`，重新登录后使用 `hf`。先给下载命令加 `--dry-run`，应列出五个主体文件和一个 Engram 文件。以下变量供两种引擎共用。链接在首次下载后创建一次。 [ISTA 分片链接约定](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF#llamacpp)
+若尚无 `hf`，装 `pipx`，执行 `pipx install huggingface_hub`，再将 `$HOME/.local/bin` 加入 PATH。先给下载命令加 `--dry-run`，应列出五个主体文件和一个 Engram 文件。以下变量供两种引擎共用。链接在首次下载后创建一次。 [ISTA 分片链接约定](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF#llamacpp)
 
 ```bash
 PMEM=/srv/pmem-model
-findmnt -rn -M "$PMEM" -t ext4 -O dax=always || exit 1
+findmnt -rn -M "$PMEM" -t xfs -O dax=always || exit 1
 DS41_MODEL_DIR="$PMEM/ds41-llamacpp"
+# T3 创建目录并设置了 extent 提示。I6 核对当前用户可写，必要时交给 jackywang。
+test -w "$DS41_MODEL_DIR" || exit 1
 DS41_STEM=DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS
 DS41_GGUF="$DS41_MODEL_DIR/$DS41_STEM-00001-of-00006.gguf"
 DS41_ENGRAM="$DS41_MODEL_DIR/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf"
@@ -62,22 +65,21 @@ hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
     --include "$DS41_STEM-*-of-00006.gguf" "${DS41_ENGRAM##*/}" \
     --local-dir "$DS41_MODEL_DIR"
 test -s "$DS41_GGUF" && test -s "$DS41_ENGRAM" || exit 1
-ln -s -- "${DS41_ENGRAM##*/}" "$DS41_MODEL_DIR/$DS41_STEM-00006-of-00006.gguf"
+ln -sfn -- "${DS41_ENGRAM##*/}" "$DS41_MODEL_DIR/$DS41_STEM-00006-of-00006.gguf"
 ```
 
-**固定部署档。** 四卡 layer split、2×8K、每请求独立活跃 KV。热点专家用 8192 MiB 合计 GPU 缓存，CUDA peer 已由 T5 验证。routed experts 留在 host，可按需从 PMem 的 `mmap` 读取，实际 pinned staging 由引擎分配。CPU miss share 固定 0，microbatch 固定 32，进入 v1.0.0 的缓存接纳范围。首次启动关闭 prompt prefix reuse，先核多槽正确性。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [32-token 接纳上限](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L340)
+**固定部署档。** 四卡 layer split、2×8K、每请求独立活跃 KV。热点专家用 8192 MiB 合计 GPU 缓存，CUDA peer 已由 T5 验证。routed experts 留在 host，可按需从 PMem 的 `mmap` 读取，实际 pinned staging 由引擎分配。CPU miss share 固定 0，microbatch 固定 32，进入 v1.0.0 的缓存接纳范围。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [32-token 接纳上限](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L340)
 
 ```bash
-export LLAMA_BUILD=/srv/work/jackywang/llama.cpp/build
-export DS41_GGUF
+export LLAMA_BUILD Z8_CUDA_RUNTIME DS41_GGUF
 export CUDA_VISIBLE_DEVICES=GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
 export Z8_DRAM_INTERLEAVE=0,1  # 改成 T3 记录的两个 DDR4 节点。
-bash /path/to/z8-kit/inference/serve-llama.sh
+bash "$kit/inference/serve-llama.sh"
 ```
 
 显存不足时先用 `MOE_CACHE_MIB=4096` 原样重启。若还因第二个槽的 KV 超预算，设 `SLOTS=1`，保留 8K 单槽。单槽仍无法启动或通过工具闭环时，转 [Xolotl Buster](#xolotl-buster-单用户回退) 并复用下载的权重；显存足够且单槽通过时，用同一个 llama-server 串行工作。
 
-**前缀复用只做一次正确性验收。** 两个槽通过后，使用同一份固定温度为 0 的请求，在请求体设 `"cache_prompt": true`，重复 A，再插入不同项目的 B 后续 A。核 `cache_n` 或 `cached_tokens`，以及固定答案、两个项目标记与实际工具往返。如果复用有收益且输出正确，受信任的 harness 才在客户端启用它。前缀出现异常时回到首装默认。活跃 KV 留在引擎，PMem 保留文件型持久缓存的存储位置；首装不启用 slot 快照。 [llama-server 前缀参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md) · [DeepSeek 4.1 前缀修复](https://github.com/ggml-org/llama.cpp/pull/31292)
+**前缀复用只做一次正确性验收。** 直接用 I6 探针的标准请求重复 A，再插入 B 后续 A。核 `cached_tokens`、固定答案、两个项目标记与实际工具往返。同槽匹配才有复用机会，若发生缓存相关的输出错误，用 `CACHE_PROMPT=0` 暂停这个路径再复现。活跃 KV 留在引擎，额外的 RAM 缓存、空闲槽迁移和文件快照关闭。 [llama-server 前缀参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md) · [DeepSeek 4.1 前缀修复](https://github.com/ggml-org/llama.cpp/pull/31292)
 
 ## 1Cat 长上下文专项
 
@@ -89,7 +91,7 @@ bash /path/to/z8-kit/inference/serve-llama.sh
 
 ```bash
 PMEM=/srv/pmem-model
-findmnt -rn -M "$PMEM" -t ext4 -O dax=always || exit 1
+findmnt -rn -M "$PMEM" -t xfs -O dax=always || exit 1
 sudo install -d -m 0750 -o jackywang -g "$(id -gn jackywang)" "$PMEM/ds41-1cat"
 hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
     --revision 0d8f49fb15df73789a9c237a1b8b7b088423dbc0 \
@@ -100,7 +102,7 @@ hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
 ```bash
 kit=$(realpath /path/to/z8-kit)
 repo=$(realpath /path/to/1Cat-vLLM)
-findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always || exit 1
+findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
 "$repo/.venv/bin/python" "$kit/inference/configure.py" 1cat \
     --upstream "$repo/benchmarks/deepseek_v41/serve-ds41-phase2.yaml" \
     --model "$GGUF_FIRST" --engram "$ENGRAM_GGUF" --tokenizer "$TOKENIZER_DIR" \
@@ -129,16 +131,16 @@ Niko1221/Strata 的 1017 官方包未列 V100 的 SM70 运行支持。本机用 
 Buster 脚本使用 user systemd bus、`flock` 和 `MemoryMax=140G`，遇到内存上限先查实际工作集与 cgroup。生成的 profile 带 `STRATA_ENGRAM_RAWDEV=0`，使用普通用户的文件读取路径。DAX 上的 `pread` 可绕开普通页缓存，排查 PMD fault 时看采用 `mmap` 的引擎。 [Buster 启动脚本](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/buster/buster-engine.sh)
 
 ```bash
-kit=$(realpath /path/to/z8-kit)
-findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always || exit 1
+sudo apt install cmake python3-venv
+findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
 XOL_DIR=/srv/pmem-model/ds41-xolotl
 XOL_TOKENIZER_DIR="$XOL_DIR/tokenizer"
-sudo install -d -m 0750 -o jackywang -g "$(id -gn jackywang)" "$XOL_DIR"
+sudo install -d -m 0750 -o "$(id -u)" -g "$(id -g)" "$XOL_DIR"
 hf download IndrasMirror/DeepSeek-V4.1-Flash-GSQ-Uncensored \
     --revision 0ae18f838e103fb03d952fa8ed73c7aa9c34002f \
     --include 'tokenizer/*' --local-dir "$XOL_DIR"
 test -s "$XOL_TOKENIZER_DIR/vocab.json" || exit 1
-cd /srv/work/jackywang
+cd "$(dirname -- "$Z8_CUDA_RUNTIME")"
 git clone https://github.com/Indras-Mirror/Xolotl.git
 cd Xolotl
 git switch --detach db25febda3e2869333d72eca6b17296142916a9b
@@ -153,7 +155,10 @@ sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         ninja -C build-buster -j 8 ds41_generate test_cuda_cc_policy test_ds41_pipeline test_ds41_geometry
         chown -R "$HOST_UID:$HOST_GID" build-buster
     '
-export LD_LIBRARY_PATH="/srv/work/jackywang/cuda-12.9-runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+ldd build-buster/ds41_generate > build-buster/ldd-ds41_generate.log || exit 1
+cat build-buster/ldd-ds41_generate.log
+if grep -Fq 'not found' build-buster/ldd-ds41_generate.log; then exit 1; fi  # 若缺 CUDA .so，从同版容器补拷后再验。
 DS41_TEST_GGUF="$DS41_GGUF" ctest --test-dir build-buster \
     -R 'test_cuda_cc_policy|test_ds41_pipeline|test_ds41_geometry' --output-on-failure
 
@@ -173,12 +178,11 @@ numactl --interleave="$Z8_DRAM_INTERLEAVE" .venv-serve/bin/python tools/v41/serv
 
 ## I6 推理放行
 
-先运行以下探针，再用真实 harness 连续完成 20 个工具回合。用 8K 槽，但为输出预留上下文长度。llama.cpp 的 `--parallel-pairs` 用于验证两路同时流式、各返自己的项目标记。单槽回退删去该参数。Xolotl 回退用端口 8150，加 `--reasoning-effort none`，删去 `--usage`。
+先运行以下探针，再用真实 harness 连续完成 20 个工具回合。默认双槽各 8K，读取真实 harness 首请求的 `usage.prompt_tokens`。若提示词和工具定义已超过 4K，或 8K 槽在实际循环中先满，试 `SLOTS=1 SLOT_CTX=16384` 并将 OMP 的 `contextWindow` 改成 `16384`，核启动日志中的 `n_ctx_slot` 和显存。显存不足时按上述降档处理。llama.cpp 的 `--parallel-pairs` 用于验证两路同时流式、各返自己的项目标记。单槽回退删去该参数。Xolotl 回退用端口 8150，加 `--reasoning-effort none`，删去 `--usage`。
 
 ```bash
 python3 inference/probe.py --base http://127.0.0.1:18000/v1 --usage \
-    --model deepseek-v4.1-flash-1017 --prompt-file /path/to/synthetic-context.txt \
-    --repeats 3 --tools --parallel-pairs
+    --model deepseek-v4.1-flash-1017 --repeats 3 --tools --parallel-pairs
 ```
 
 记录真实任务的首字延迟、生成速度与峰值显存，核 SSE、工具回传、项目标记和 OOM/Xid。两路任务需同时推进且输出正确。单槽通过但双槽无法稳定时保留单槽，生产配置直接进入 [I7](../host/BURN-IN.md#i7-正式安装后的整机混合负载)。若单用户生成中位数低于 10 tok/s，或代表性 8K 工单的 TTFT p95 超过 20 秒且影响使用，先查专家 miss 与显存。若大量 miss 且每卡仍有至少 3 GiB 峰值余量，将 GPU 专家缓存提高一次到 16384 MiB。仍无法满足实际工单时才验 Xolotl 回退。该速度目标用于判断是否需要调整配置。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)

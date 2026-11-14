@@ -88,6 +88,7 @@ case "$1" in
         touch "$Z8_FIXTURE/dev/mapper/z8-pmem-model"
         printf '0 32768 striped 2 4096 259:0 0 259:1 0\n' > "$Z8_FIXTURE/dm-table"
         ;;
+    remove) rm -- "$Z8_FIXTURE/dm-table" "$Z8_FIXTURE/dev/mapper/z8-pmem-model" ;;
     *) exit 2 ;;
 esac
 EOF
@@ -108,7 +109,13 @@ EOF
 cat > "$tmp/bin/mount" <<'EOF'
 #!/usr/bin/env bash
 test ! -e "$Z8_FIXTURE/mounted" || exit 1
-echo '252:0 ext4 rw,noatime,dax=always' > "$Z8_FIXTURE/mounted"
+[[ "$*" == *'-t xfs -o dax=always,noatime,nodiscard '* ]] || exit 1
+echo '252:0 xfs rw,noatime,dax=always' > "$Z8_FIXTURE/mounted"
+EOF
+cat > "$tmp/bin/umount" <<'EOF'
+#!/usr/bin/env bash
+test "$1" = /srv/pmem-model
+rm -- "$Z8_FIXTURE/mounted"
 EOF
 chmod +x "$tmp"/bin/*
 
@@ -134,8 +141,14 @@ mkdir -p "$tmp/sys/class/block/"{pmem0,pmem1.1}/holders
 bash "$tmp/pmem-dax-stripe.sh" create "$fs0" "$fs1"
 bash "$tmp/pmem-dax-stripe.sh" mount "$fs0" "$fs1"
 bash "$tmp/pmem-dax-stripe.sh" mount "$fs0" "$fs1"
-printf '252:1 ext4 rw,noatime,dax=always\n' > "$tmp/mounted"
+printf '252:1 xfs rw,noatime,dax=always\n' > "$tmp/mounted"
 expect_failure 'unexpected filesystem' bash "$tmp/pmem-dax-stripe.sh" mount "$fs0" "$fs1"
+expect_failure 'unexpected filesystem' bash "$tmp/pmem-dax-stripe.sh" unmount "$fs0" "$fs1"
+printf '252:0 xfs rw,noatime,dax=always\n' > "$tmp/mounted"
+bash "$tmp/pmem-dax-stripe.sh" unmount "$fs0" "$fs1"
+test ! -e "$tmp/mounted" && test ! -e "$tmp/dm-table"
+bash "$tmp/pmem-dax-stripe.sh" unmount "$fs0" "$fs1"
+bash "$tmp/pmem-dax-stripe.sh" create "$fs0" "$fs1"
 printf '0 32768 striped 2 4096 259:1 0 259:0 0\n' > "$tmp/dm-table"
 expect_failure 'different device table' bash "$tmp/pmem-dax-stripe.sh" create "$fs0" "$fs1"
 

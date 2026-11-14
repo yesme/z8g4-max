@@ -119,7 +119,7 @@ findmnt -T /srv/work/jackywang -o SOURCE,TARGET,FSTYPE
 findmnt -T /srv/buildbarn -o SOURCE,TARGET,FSTYPE
 ```
 
-两个查询应显示 P4618 的 md 根卷、挂载点 `/` 和 `xfs`。I5 创建并按容器权限配置 `/srv/buildbarn/tiered`。I4 用 `sudo install -d -m 0755 /srv/pmem-model` 创建空的挂载点，随后挂载 PMem ext4 DAX。只有 `findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always` 成功才下载模型或建 KV 文件目录。卸载后该路径再次指向 P4618 上的空目录。XFS reflink 的本地检查见 [Buck2 与工作树](../buildbarn/README.md#git-worktree-与-xfs-reflink)。
+两个查询应显示 P4618 的 md 根卷、挂载点 `/` 和 `xfs`。I5 创建并按容器权限配置 `/srv/buildbarn/tiered`。I4 用 `sudo install -d -m 0755 /srv/pmem-model` 创建空的挂载点，随后挂载 PMem XFS DAX。只有 `findmnt -rn -M /srv/pmem-model -t xfs -O dax=always` 成功才下载模型或建 KV 文件目录。卸载后该路径再次指向 P4618 上的空目录。XFS reflink 的本地检查见 [Buck2 与工作树](../buildbarn/README.md#git-worktree-与-xfs-reflink)。
 
 ## 安装并锁定 NVIDIA 显卡驱动
 

@@ -1,7 +1,8 @@
 [Unit]
 Description=Linux Buildbarn worker using the shared tiered CAS
 BindsTo=z8-buildbarn.service
-After=z8-buildbarn.service
+Requires=z8-pmem-kmem.service
+After=z8-buildbarn.service z8-pmem-kmem.service
 
 [Service]
 Type=oneshot

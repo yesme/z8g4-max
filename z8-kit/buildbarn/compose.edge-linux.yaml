@@ -1,0 +1,48 @@
+services:
+  cache:
+    image: ghcr.io/buildbarn/bb-storage:20261102T091443Z-ca3d8b4@sha256:fecab707a842ee1915f2eea06810a1eb2eacc876d498648c67ba32230717f212
+    command: ["/config/edge-cache.jsonnet"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - .:/config:ro
+      - type: bind
+        source: ${BB_EDGE_HOT:?Set BB_EDGE_HOT}
+        target: ${BB_EDGE_HOT}
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${BB_EDGE_COLD:?Set BB_EDGE_COLD}
+        target: ${BB_EDGE_COLD}
+        bind: {create_host_path: false}
+  runner-installer:
+    extends: {file: compose.worker.yaml, service: runner-installer}
+  runner:
+    image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
+    command: ["sh", "-ceu", "rm -f /worker/r.sock; exec /bb/bb_runner /config/edge-runner.jsonnet"]
+    network_mode: none
+    cpus: 16
+    mem_limit: 40g
+    memswap_limit: 40g
+    restart: unless-stopped
+    volumes:
+      - .:/config:ro
+      - ${BB_DATA_DIR:?Set BB_DATA_DIR}/runner-bin:/bb:ro
+      - ${BB_EDGE_WORK:?Set BB_EDGE_WORK}:/worker
+    depends_on:
+      runner-installer: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /worker/r.sock"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+  worker:
+    image: ghcr.io/buildbarn/bb-worker:20261102T094740Z-c9ba98c@sha256:ba07db89d5cd6ae750497a38037abe127426c771a55c8a3da48c4205b929a32a
+    command: ["/config/edge-worker.jsonnet"]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - .:/config:ro
+      - ${BB_EDGE_WORK:?Set BB_EDGE_WORK}:/worker
+    depends_on:
+      cache: {condition: service_started}
+      runner: {condition: service_healthy}

@@ -12,3 +12,12 @@ Host z8-ports
     ExitOnForwardFailure yes
     LocalForward 127.0.0.1:13389 127.0.0.1:3389
     LocalForward 127.0.0.1:18000 127.0.0.1:18000
+
+Host z8-build
+    HostName REPLACE_WITH_Z8_LAN_OR_VPN_IP
+    User jackywang
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+    ExitOnForwardFailure yes
+    LocalForward 127.0.0.1:18980 127.0.0.1:8980
+    LocalForward 127.0.0.1:18983 127.0.0.1:8983

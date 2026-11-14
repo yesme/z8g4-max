@@ -21,13 +21,13 @@ local digest = 'dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
     native: {
       buildDirectoryPath: '/worker/build',
       cacheDirectoryPath: '/worker/cache',
-      maximumCacheFileCount: 10000,
-      maximumCacheSizeBytes: 16 * 1024 * 1024 * 1024,
+      maximumCacheFileCount: 1000000,
+      maximumCacheSizeBytes: 128 * 1024 * 1024 * 1024,
       cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
     },
     runners: [{
       endpoint: { address: 'unix:///run/bb-runner/runner.sock' },
-      concurrency: 4,
+      concurrency: 72,
       instanceNamePrefix: 'hardlinking',
       platform: {
         properties: [
@@ -38,11 +38,11 @@ local digest = 'dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
       workerId: { hostname: 'jackywang-xubuntu-max' },
     }],
   }],
-  inputDownloadConcurrency: 8,
-  outputUploadConcurrency: 8,
+  inputDownloadConcurrency: 32,
+  outputUploadConcurrency: 32,
   directoryCache: {
-    maximumCount: 1000,
-    maximumSizeBytes: 1000 * 1024,
+    maximumCount: 100000,
+    maximumSizeBytes: 100 * 1024 * 1024,
     cacheReplacementPolicy: 'LEAST_RECENTLY_USED',
   },
 }

@@ -8,9 +8,9 @@
 | `/srv/work/jackywang`、`buck-out`、`/srv/buildbarn/tiered` | 根 XFS 内的目录 | 与 `/` 同一文件系统，工作树和本地产物在此范围可用 reflink。Buildbarn 容器将热层 bind 到 `/store`。 |
 | `/boot`，FIT p2 ext4 | fstab，文件系统 UUID，fsck pass 2 | `defaults,noatime,errors=remount-ro,X-fstrim.notrim`。保留日志，内核升级时可写，省掉 FIT 的读取更新时间和批量 TRIM。 |
 | `/boot/efi`，FIT p1 FAT32 | fstab，FAT 卷 UUID，fsck pass 2 | `defaults,noatime,umask=0077,X-fstrim.notrim`。挂载后文件只向 root 开放，GRUB 和 EFI 更新时可写。 |
-| `/srv/pmem-model`，两路 App Direct fsdax 的 dm-stripe/ext4 | `z8-pmem-model.service` | `dax=always,noatime,data=ordered,nodiscard`。普通文件走 DAX，避免权重/Engram 热读更新 atime，保留 ext4 日志供 KV 和模型文件更新。2 MiB stripe 与 ext4 stride 在建卷时设定。 |
-| `/data`，ZFS `z8data/data` | `data.mount`，`mountpoint=legacy` | mount 选项 `rw`。数据集用 `atime=off,compression=zstd-3,sync=standard,logbias=latency`，`special_small_blocks=24K`。 |
-| `/data/buildbarn`，ZFS `z8data/data/buildbarn` | `data-buildbarn.mount`，`mountpoint=legacy` | mount 选项 `rw`。数据集继承 `compression=zstd-3,atime=off,sync=standard,logbias=latency`，本地设 `primarycache=metadata,recordsize=1M,special_small_blocks=0`。容器将它 bind 到 `/cold`。 |
+| `/srv/pmem-model`，两路 App Direct fsdax 的 dm-stripe/XFS | `z8-pmem-model.service` | `dax=always,noatime,nodiscard`。普通文件走 DAX，避免权重/Engram 热读更新 atime，保留 XFS 日志供模型文件更新。建卷时设 2 MiB 条带单元并关闭 reflink。 |
+| `/data`，ZFS `z8data/data` | `data.mount`，`mountpoint=legacy` | mount 选项 `rw`。数据集用 `atime=off,compression=zstd-3,sync=standard,logbias=latency`，作为冷 CAS 父级挂载点。 |
+| `/data/buildbarn`，ZFS `z8data/data/buildbarn` | `data-buildbarn.mount`，`mountpoint=legacy` | mount 选项 `rw`。数据集继承 `compression=zstd-3,atime=off,sync=standard,logbias=latency,primarycache=all`，本地设 `recordsize=1M,special_small_blocks=0`。容器将它 bind 到 `/cold`。 |
 | HC620、P4800X p1–p8、七个 dm-zoned mapper | systemd 存储链与 zpool | 这些是块设备或池成员。只在 ZFS 数据集这一层挂载文件系统。池用 `autotrim=on`。 |
 | 两路 PMem devdax 转 system-ram | `z8-pmem-kmem.service` | 作为内核内存节点上线，无文件系统。 |
 
@@ -53,7 +53,7 @@ ZFS 在池导入后按 `/data → /data/buildbarn` 挂载，Buildbarn 等子挂�
 for mountpoint in /srv/pmem-model /data /data/buildbarn; do
     findmnt -n -M "$mountpoint" -o TARGET,SOURCE,FSTYPE,OPTIONS
 done
-findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always,noatime
+findmnt -rn -M /srv/pmem-model -t xfs -O dax=always,noatime
 sudo zfs get -r mountpoint,atime,compression,recordsize,special_small_blocks,sync,logbias,primarycache z8data/data
 sudo zpool get autotrim z8data
 ```

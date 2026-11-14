@@ -5,6 +5,6 @@ services:
     ports:
       - "127.0.0.1:8980:8980"
     volumes:
-      - ./cache.jsonnet:/config/cache.jsonnet:ro
+      - .:/config:ro
       - ${BB_DATA_DIR:-/srv/buildbarn/cache}:/store
     restart: unless-stopped

@@ -1,0 +1,16 @@
+def macos_worker_executor():
+    xcode = read_root_config("z8_farm", "macos_xcode")
+    if not xcode:
+        fail("Set [z8_farm] macos_xcode to the registered Xcode version")
+    return CommandExecutorConfig(
+        local_enabled = False,
+        remote_enabled = True,
+        allow_cache_uploads = False,
+        remote_execution_properties = {
+            "OSFamily": "macos",
+            "arch": "arm64",
+            "xcode": xcode,
+        },
+        remote_execution_use_case = "buck2-default",
+        remote_output_paths = "output_paths",
+    )

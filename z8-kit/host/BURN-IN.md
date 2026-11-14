@@ -189,7 +189,7 @@ sudo nvme id-ctrl -H "${ssds[2]}"
 
 记录 NVMe 的 Critical Warning、Available Spare、Percentage Used、Media and Data Integrity Errors。先按 [固件手册](FIRMWARE.md#t4-p4618p4800x-与-hc620) 判定两个 P4618 端点和 P4800X 是否需要更新。若更新，冷启后重新按序列号核两个 P4618 端点及 P4800X，再做以下测试。可分别用 `sudo fio --readonly --name=nvme-read --filename="$disk" --rw=read --bs=1M --ioengine=libaio --direct=1 --iodepth=16 --time_based --runtime=300 --group_reporting` 读每个已核身份的整盘五分钟，压前后比较 SMART 和温度。若内核报 I/O 错误、重置或介质错误增加，处理后重测。SSD 测完再开始 HDD 长自检。
 
-记录 P4800X 当前逻辑扇区大小，I4 新建 GPT 时由命令自动读取该值来计算对齐。要比较 P4800X 的 `none` 或 NVMe 轮询，用 [存储手册的只读探针](../storage/README.md#p4800x-的-lba-与-io-队列) 在这一步单独跑。
+记录 P4800X 当前逻辑扇区大小，I4 新建 GPT 时由命令自动读取该值来计算对齐。
 
 ### 七块 HC620 并行慢扫
 
@@ -239,7 +239,33 @@ lsblk -e 7 -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN,ZONED
 ## T5. 算力坞 V100 与 PCIe 拷机
 
 - T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，`nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI` 保存前后。GPU Burn 用 CUDA 12.9.1 `make COMPUTE=70` 构建。分别跑单卡 15 min，再四卡 `gpu_burn -m 80% -tc 3600`，查校验、温度、频率、功耗、泵、VRM/HBM 和接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
-- 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。测试结束关机、断开 V100。
+- 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。然后做 1017 冒烟。
+
+### T5 末的 1017 推理冒烟
+
+在 T5 开始时即可准备权重，约 232 GiB，Wi-Fi 下载时间单独安排。用临时 Xubuntu 的用户运行。编译和日志放临时 SSD，权重留在 T3 的正式模型卷。以下从 `z8-kit` 根目录执行；已挂载的卷也可用同一条 `mount` 命令核验。
+
+```bash
+kit=$(realpath .)
+sudo apt install docker.io libgomp1 libssl3t64 numactl pipx
+sudo systemctl enable --now docker.service
+export PATH="$HOME/.local/bin:$PATH"
+pipx install huggingface_hub
+sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"
+findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
+mkdir -p "$HOME/z8-smoke"
+cd "$HOME/z8-smoke"
+```
+
+复制 [llama.cpp 主服务](../inference/README.md#llamacpp-v100-主服务) 中的编译、下载和启动命令，先完成下载，四卡硬件测试通过后再启动模型。`CUDA_VISIBLE_DEVICES` 和 `Z8_DRAM_INTERLEAVE` 用 T5、T3 记录的实值。用 `xfs_io -r -c 'fiemap -v' "$DS41_GGUF"` 记录首分片的 extent。另开终端执行下列命令，从仓库 `z8-kit` 根运行。若已切到 Xolotl，用 `--base http://127.0.0.1:8150/v1 --reasoning-effort none` 替换 `--usage`，以 Xolotl 服务日志记录生成速度。`--prompt-file` 可省略，冒烟用探针自带的短提示即可。
+
+```bash
+python3 inference/probe.py --usage --repeats 1 --tools
+nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
+sudo journalctl -k -b -g 'NVRM|Xid' --no-pager
+```
+
+记录各卡显存、DDR4 页位置、是否能出字、工具往返和生成速度。显存不足时按推理手册依次降到 4 GiB 专家缓存、单槽，再试 Xolotl。工具往返成功且生成达到 5 tok/s 就进入 I1。2–5 tok/s 仍可进 I1，I6 给一天处理该差距。两种引擎均无法加载或降档后仍低于 2 tok/s 时，在验机窗口内决定算力坞的去留。完成后停服务、关机并断开 V100。
 
 ## I7. 正式安装后的整机混合负载
 
@@ -253,4 +279,4 @@ sudo zpool iostat -v z8data 5 > zpool-iostat.log
 sudo journalctl -kf -o short-monotonic > kernel-follow.log
 ```
 
-按真实项目轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。开始与结束各抓一次 `sudo bash host/pmem-numa-report.sh <PID>`。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。
+用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。开始与结束各抓一次 `sudo bash host/pmem-numa-report.sh <PID>`。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。

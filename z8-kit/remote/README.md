@@ -16,11 +16,11 @@ ip -br address
 
 如果重启停在登录界面时 Wi-Fi 未连接，在本机打开 Xfce 的连接编辑器。家庭 WPA-PSK/SAE 网络在 `Wi-Fi Security` 中选择为所有用户保存密码，重新连接，再测试一次。这样密码由系统连接配置保存，开机时即可使用。
 
-用 `hostnamectl --static` 核 `jackywang-xubuntu-max`。执行 `sudo apt install openssh-server tmux`，用 `sudo sshd -t` 校验配置。Ubuntu 26.04 默认 socket 激活，执行 `sudo systemctl enable --now ssh.socket` 并用 `ss -ltn 'sport = :22'` 确认监听。用本机控制台把公钥放入 `jackywang` 的 `~/.ssh/authorized_keys`，以第二条 SSH 连接验证后再关闭密码登录。重启后先停在登录界面，从 Mac 验证 Wi-Fi 与 SSH 能自行恢复。把样例 Host 块合并到客户端 `~/.ssh/config`，将两个 `HostName` 填为保留 IP 或实际可解析的 LAN DNS 名。`ssh jackywang-xubuntu-max` 或 `ssh z8` 都使用登录用户 `jackywang`。RDP 和推理端口按需走 `ssh -NT z8-ports`。
+用 `hostnamectl --static` 核 `jackywang-xubuntu-max`。执行 `sudo apt install openssh-server tmux`，用 `sudo sshd -t` 校验配置。Ubuntu 26.04 默认 socket 激活，执行 `sudo systemctl enable --now ssh.socket` 并用 `ss -ltn 'sport = :22'` 确认监听。用本机控制台把公钥放入 `jackywang` 的 `~/.ssh/authorized_keys`，以第二条 SSH 连接验证后再关闭密码登录。重启后先停在登录界面，从 Mac 验证 Wi-Fi 与 SSH 能自行恢复。把样例 Host 块合并到客户端 `~/.ssh/config`，将各块的 `HostName` 填为保留 IP 或实际可解析的 LAN DNS 名。`ssh jackywang-xubuntu-max` 或 `ssh z8` 都使用登录用户 `jackywang`。RDP 和推理端口按需走 `ssh -NT z8-ports`。Linux 客户端访问编译农场用 `ssh -NT z8-build`，客户端的 18980、18983 分别转到 max 的 8980 和 8983。
 
 ## xrdp
 
-`sudo apt install xrdp xorgxrdp`。以 `jackywang` 复制 `xsession.example` 到 `~/.xsession` 并设 0700。合并 `/etc/xrdp/xrdp.ini` 的 `[Globals]` 中 `port=tcp://127.0.0.1:3389`，用 `man xrdp.ini` 核对当前版本语法，保留其余会话定义。用 `sudo systemctl restart xrdp`、`ss -ltnp` 和 `journalctl -u xrdp -u xrdp-sesman` 验证。若日志指出 TLS 私钥不可读，按本机证书权限和包说明配置 `xrdp` 服务用户。通过 tunnel 用 RDP 客户端连 `127.0.0.1:13389`，选择 Xorg、用户 `jackywang`。首次测试前先登出该用户的本机 Xfce。若确需 Sunshine 控制台与 RDP 同时运行，并且同一用户的两个 Xfce 会话冲突，可为其中一个会话另建图形用户。
+`sudo apt install xrdp xorgxrdp dbus-daemon`。以 `jackywang` 复制 `xsession.example` 到 `~/.xsession` 并设 0700。合并 `/etc/xrdp/xrdp.ini` 的 `[Globals]` 中 `port=tcp://127.0.0.1:3389`，用 `man xrdp.ini` 核对当前版本语法，保留其余会话定义。用 `sudo systemctl restart xrdp`、`ss -ltnp` 和 `journalctl -u xrdp -u xrdp-sesman` 验证。若日志指出 TLS 私钥不可读，按本机证书权限和包说明配置 `xrdp` 服务用户。通过 tunnel 用 RDP 客户端连 `127.0.0.1:13389`，选择 Xorg、用户 `jackywang`。`xsession.example` 用 `dbus-run-session` 给远程 Xfce 启一条独立的 D-Bus 会话总线。I2 分别在本机 Xfce 已登录和未登录时测试。若仍冲突，记录 sesman 和 Xfce 日志；需要同时用两种图形入口时，为 xrdp 建独立图形用户。
 
 ## Sunshine
 

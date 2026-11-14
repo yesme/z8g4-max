@@ -4,3 +4,7 @@ action_cache_address = grpc://127.0.0.1:8980
 cas_address = grpc://127.0.0.1:8980
 tls = false
 instance_name = hardlinking
+
+[z8_farm]
+linux_image = docker://ghcr.io/catthehacker/ubuntu:act-22.04@sha256:dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
+# Set macos_xcode to the exact value of edge-site.json's xcode when enabling Darwin.

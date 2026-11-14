@@ -1,3 +1,4 @@
+# Local execution fallback. Select the project's local execution platform.
 [z8_buildbarn]
 enabled = true
 allow_uploads = true
