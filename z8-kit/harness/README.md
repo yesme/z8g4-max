@@ -2,16 +2,16 @@
 
 安装与账号模型文档见装机计划第 5 节。用自己的普通用户在目标机安装和登录，先在对应项目跑一次交互冒烟。将官方 CLI 的 bin 目录加入自己的 PATH。脚本中的 `muse` / `kimi` 按当前官方安装实际生成的可执行文件核验。tmux 会话按 CLI 和工作树路径区分。同一 CLI 同一工作树若要开两次，建议用两个 Git worktree。
 
-先按主机安装手册创建 `/srv/work/z8user`，再以 `z8user` 克隆或迁入项目。`repo` 换为已存在的 Git checkout。同一仓库的 worktree 共用 Git 对象库，检出的源码、index 和各自的 `buck-out` 仍由各工作树单独管理。
+先按主机安装手册创建 `/srv/work/jackywang`，再以 `jackywang` 克隆或迁入项目。`repo` 换为已存在的 Git checkout。同一仓库的 worktree 共用 Git 对象库，检出的源码、index 和各自的 `buck-out` 仍由各工作树单独管理。
 
 ```bash
 kit=$(realpath /path/to/z8-kit)
-repo=/srv/work/z8user/example
-git -C "$repo" worktree add -b task/codex /srv/work/z8user/example-codex
-git -C "$repo" worktree add -b task/claude /srv/work/z8user/example-claude
-bash "$kit/harness/agent-session.sh" codex /srv/work/z8user/example-codex
+repo=/srv/work/jackywang/example
+git -C "$repo" worktree add -b task/codex /srv/work/jackywang/example-codex
+git -C "$repo" worktree add -b task/claude /srv/work/jackywang/example-claude
+bash "$kit/harness/agent-session.sh" codex /srv/work/jackywang/example-codex
 # Ctrl-b d 后可继续启动另一个会话。
-bash "$kit/harness/agent-session.sh" claude /srv/work/z8user/example-claude
+bash "$kit/harness/agent-session.sh" claude /srv/work/jackywang/example-claude
 tmux list-sessions
 ```
 
@@ -25,7 +25,7 @@ tmux list-sessions
 
 DeepSeek 官方 API 的模型 ID 是 `deepseek-flash`，当前服务版本是 V4.1-Flash-1017。OMP 和 Pi 用内置 `deepseek` provider。DSH 的官方 `deepseek-official` 路由用 `https://api.deepseek.com/anthropic`，出厂默认模型是 `deepseek-flash`。三者共用你已有的 `DEEPSEEK_API_KEY`。 [DeepSeek 官方模型](https://api-docs.deepseek.com/quick_start/pricing/) · [OMP 模型选择](https://upd.dev/can1357/oh-my-pi/src/branch/main/docs/models.md) · [Pi 官方 DeepSeek provider 测试](https://github.com/earendil-works/pi/blob/main/packages/ai/test/stream.test.ts) · [DSH 默认路由](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/bundle/base/cordis.patch.yml#L81) · [DSH 凭证与协议](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/llm/llm-deepseek/README.md)
 
-用 `z8user` 在工作站上安装。OMP 可用 Bun 安装，Pi 和 DSH 用用户态 Node/npm。用 Node 24.9 或更高，先看各包实际声明的版本约束。将用户态 bin 目录加入登录环境，验证三个命令的版本。 [OMP 安装](https://github.com/can1357/oh-my-pi#installation) · [Pi 安装](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#installation) · [DSH CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md)
+用 `jackywang` 在工作站上安装。OMP 可用 Bun 安装，Pi 和 DSH 用用户态 Node/npm。用 Node 24.9 或更高，先看各包实际声明的版本约束。将用户态 bin 目录加入登录环境，验证三个命令的版本。 [OMP 安装](https://github.com/can1357/oh-my-pi#installation) · [Pi 安装](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#installation) · [DSH CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md)
 
 ```bash
 node --version
@@ -60,4 +60,4 @@ dsh --profile headless '读取 README.md，用两句话说明项目用途。'
 
 ### 本地 1017 验机入口
 
-需要用 OMP 做本地闭环时，把 `omp-models.yml.example` 的 `z8-deepseek` 合并到 `~/.omp/agent/models.yml`，模型选择 `z8-deepseek/deepseek-v4.1-flash-1017`。本地认证使用单独的 `DS41_API_KEY`。若 loopback 服务无鉴权，用 `auth: none` 并移除样例的 `apiKey`、`authHeader`。根据本地服务实际端口与上下文修改。并发和性能用本地 1017 探针及固定任务验证。
+需要用 OMP 做本地闭环时，把 `omp-models.yml.example` 的 `z8-deepseek` 合并到 `~/.omp/agent/models.yml`，模型选择 `z8-deepseek/deepseek-v4.1-flash-1017`。默认通过 loopback 使用 8K llama.cpp 服务。启用 Xolotl 回退时把端口改为 8150。并发和性能用本地 1017 探针及固定任务验证。

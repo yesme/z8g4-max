@@ -20,14 +20,14 @@
 
 | 路径 | 首装值 |
 |---|---|
-| Advanced → Boot Options | USB Media Boot Enable，Fast Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 首装设 Off，直到坞和主机上电顺序验证。UEFI Boot Order 先用 Samsung FIT 上的 Ubuntu 引导项，F9 可选 Memtest86+ 或救援 USB |
+| Advanced → Boot Options | USB Media Boot Enable，Fast Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 Off，手动按算力坞的上电顺序启动。UEFI Boot Order 先用 Samsung FIT 上的 Ubuntu 引导项，F9 可选 Memtest86+ 或救援 USB |
 | Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
 | Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），PCIe MMIO Assignment Mode Auto，1TB Memory Cap 首次设 Auto，PCIe ACS 保持当前默认 |
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 和 AX210 蓝牙接用的内部 USB 打开；sSATA 无连接可禁用，按板上实际丝印确认 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
 | Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8/x8`。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。`Intel VROC NVMe RAID = Disable`，NVMe 阵列由 Linux mdadm 管理 |
 | Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率 |
-| Advanced → Power Management Options | 首次联调可关 PCI Express Power Management（ASPM）和 SATA Power Management，减少链路休眠变量。基线通过后逐项恢复并复跑。SATA Power Management 不负责交错起转 |
+| Advanced → Power Management Options | PCI Express Power Management（ASPM）和 SATA Power Management 设 Disabled，固定用于验机和部署。SATA Power Management 不负责交错起转 |
 | Security → Security Configuration → System Security | Virtualization Technology (VTx) = Enable，Virtualization Technology for Directed I/O (VTd) = Enable。部分版本将这两项列在 Advanced → System Options |
 | Advanced → NVDIMM Management | 第一次混插只查 12 条模块、固件和当前状态，保留 `NVDIMM Configuration`，跳过 `Apply NVDIMM Configuration`。App Direct goal 在 Xubuntu 提交 |
 | Security → NVDIMM Security Freeze | 按 [T3 的 PMem 流程](PMEM.md#t3-配置-app-direct) 将 `Unfreeze NVDIMMs for this number of boot sequences` 暂设为 `5`，保存后从 F9 启动临时 Xubuntu |
@@ -77,8 +77,6 @@ sudo journalctl -k -b --no-pager | grep -Ei 'DMAR|IOMMU|Default domain'
 ### 接坞后的 PCIe P2P
 
 先确认四卡的 NVLink 拓扑与实际选用的传输路径。若将运行 **裸机 GPU 间 PCIe P2P**，在这类数据传输前按 NVIDIA 指引关闭 Intel IOMMU。可在机旁用 GRUB 编辑当次启动项，按 `e` 后在 `linux` 行末追加 `intel_iommu=off`，按 `Ctrl-x` 或 `F10` 启动。BIOS 的 VT-x 和 VT-d 可继续启用。这个内核参数会关闭该次启动的 Intel DMA remapping。用 `/proc/cmdline` 和内核日志确认，再跑带结果校验的 CUDA P2P 和 NCCL，记录六对链路、数据正确性和带宽。普通重启恢复原内核参数。若 PCIe 路径仍异常，再按 GPU 所在桥检查 `ACSCtl`，一次只变一个设置。
-
-**另测主机 pinned DDR4 → V100。** 保留固件 VT-d，先用默认启动跑 [pinned-copy](PMEM.md) 和真实 1017 请求，再从 GRUB 临时追加 `iommu.passthrough=1` 跑同一组。同一套 GPU UUID、DDR4 节点策略、模型和批量用来对照。用 `journalctl -k -b -g 'DMAR|Default domain'` 看默认域，若有 GPU 的 `iommu_group/type` 也一并核。直通域省去设备的 DMA 地址翻译，并降低这些设备的 DMA 隔离。101 GiB 除以 4 KiB 得到约 2648 万个基本页，实际 IOMMU 映射粒度和 IOTLB 开销看驱动、硬件和测试。以 H→D GB/s、TTFT 和 decode 的可复现变化决定是否保留本档。本节的主机 DMA 对照独立于上面的 NVIDIA PCIe P2P 要求。 [Linux IOMMU 启动参数](https://docs.kernel.org/admin-guide/kernel-parameters.html) · [NVIDIA 多 GPU IOMMU 指南](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/multi-gpu-systems.html#host-iommu-hardware-pci-access-control-services-and-vms)
 
 ```bash
 nvidia-smi topo -m

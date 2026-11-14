@@ -61,7 +61,7 @@ lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE
 stress-ng --vnni 1 --vnni-intrinsic --vnni-method vpdpbusd512 --verify -t 5s --metrics-brief
 ```
 
-先在另一个终端开始每 5 秒采样，留至少 30 秒空闲基线。用相同命令也可在通用 `matrixprod` 轮次记录一份对照文件。
+另开终端开始每 5 秒采样，留 30 秒空闲基线后开始 AVX-512 压测。
 
 ```bash
 sudo turbostat --quiet --cpu core --interval 5 \
@@ -136,25 +136,23 @@ sudo ipmctl start -diagnostic
 
 这次运行覆盖 Quick、Config、Security、FW。Security 结果对照实际冻结/锁定策略；未预期的告警、region 缺失、介质错误增量或训练失败先处理。需要按模块复查时用 `sudo ipmctl start -diagnostic Quick -dimm 0xNNNN`，DIMM ID 用工具实际返回值。验收前后保存传感器的 Media/Controller 温度和模块报告的阈值，并记录有无节流，使用该批模块/固件阈值。 [Intel ipmctl 命令](https://www.intel.com/content/www/us/en/support/articles/000032861/technologies/memory-and-storage.html) · [诊断参数](https://docs.pmem.io/ipmctl-user-guide/debug/run-diagnostic)
 
-2. 用 **fsdax 文件与 devdax 设备分别做持久写入和 CRC32C 回读**。装 Ubuntu 26.04 amd64 的 fio 3.41-2，按 [PMem 工具清单](PMEM.md) 核 `libpmem` / `dev-dax`。对两个 258 GiB namespace 在独立 DAX 挂载各写约 200 GiB 测试文件，也对 stripe 重跑一次。对两个约 500 GiB 的 devdax 仅在全新、未 kmem online 且可清空的 namespace 执行，先 8 GiB，再约 448 GiB 或按可用量下调。2 MiB 的块大小与 devdax 对齐一致。切勿把正在用的生产设备代入 fio。
+2. 用 **fsdax 文件与 devdax 设备分别做持久写入和 CRC32C 回读**。装 Ubuntu 26.04 amd64 的 fio 3.41-2，按 [PMem 工具清单](PMEM.md) 核 `libpmem` / `dev-dax`。按 [正式模型卷](PMEM.md#模型卷) 创建双路条带，在该卷写入并校验一份 400 GiB 测试文件，两个成员各承受约 200 GiB 的写入。对两个约 500 GiB 的 devdax 仅在全新、未 kmem online 且可清空的 namespace 执行，先 8 GiB，再约 448 GiB 或按可用量下调。2 MiB 的块大小与 devdax 对齐一致。切勿把正在用的生产设备代入 fio。
 
 ```bash
-sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=200G \
+sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=400G \
     fio --output-format=json --output=pmem-fsdax-verify.json host/pmem-fsdax.fio
 sudo env PMEM_TEST_DAX=/dev/dax0.1 PMEM_TEST_SIZE=8G \
     fio --output-format=json --output=pmem-devdax0-quick.json host/pmem-devdax.fio
 # 改成两个实际设备、合适的容量，分别执行 devdax job。
 ```
 
-对 fsdax 做跨重启持久性检查。给测试文件计算 SHA-256 并存到独立日志盘，`sync`、干净关机后切 AC，重启重新挂载并校验。另测两个挂载/stripe 的 `fio --readonly --name=engram-rand --filename=<已写测试文件> --ioengine=libpmem --rw=randread --bs=4k --size=8G --time_based --runtime=120 --iodepth=1`，比较 p95/p99，再按 [PMem 手册](PMEM.md#核实-engram-是否实际使用-2-mib-映射) 查 2 MiB DAX fault。安装后用真实 Engram replay 对照。测试后检查 fio `error=0`、所有 hash 一致，ipmctl 介质/热日志无新增错误。 [fio PMDK 文件引擎](https://github.com/axboe/fio/blob/master/engines/libpmem.c) · [fio devdax 引擎](https://github.com/axboe/fio/blob/master/engines/dev-dax.c)
+对 fsdax 做跨重启持久性检查。给测试文件计算 SHA-256 并存到独立日志盘，`sync`、干净关机后切 AC。重新启动临时系统后，填回两个 fsdax UUID，执行 `sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"` 挂载，再用 `sha256sum -c` 核已保存的清单。测试后检查 fio `error=0`、所有 hash 一致，ipmctl 介质/热日志无新增错误。通过后移除本次 `/srv/pmem-model/burnin.bin`，保留独立介质上的日志与校验值。 [fio PMDK 文件引擎](https://github.com/axboe/fio/blob/master/engines/libpmem.c) · [fio devdax 引擎](https://github.com/axboe/fio/blob/master/engines/dev-dax.c)
 
 3. 通过后按 [PMem 手册](PMEM.md#剩余-pmem-转-kmem) 打开全局和每设备的 `memmap_on_memory`，再把两个 devdax 转成 kmem。用 `numactl -H` 确认实际慢节点，逐节点试 `numactl --membind=<slow-node> stressapptest -s 7200 -M 131072 -m 12 -W`。检查测试进程的 `numastat -p`。这轮确认慢内存可以直接分配、写入和回读。记录介质错误、温度、节流及各慢节点在线容量。
 
-4. 保存 [双路 NUMA 拓扑](PMEM.md#核对双路-numa-拓扑)，用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，再用相同构建负载比较 kmem 开关下的构建时间、内存 PSI 和 OOM/交换。独立比较 zswap 时要有 backing swap，记录压缩内存、CPU 和 swap-in/out。通过后直接进入 T4。
+4. 保存 [双路 NUMA 拓扑](PMEM.md#核对双路-numa-拓扑)，用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，两路都通过后启用正常页下沉并进入 T4。
 
 ## T4. 存储、网络硬件和无坞基线
-
-### 加盘与确认链路
 
 ### P4618 链路与双控制器
 
@@ -240,12 +238,12 @@ lsblk -e 7 -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN,ZONED
 
 ## T5. 算力坞 V100 与 PCIe 拷机
 
-- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，`nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI` 保存前后。GPU Burn 用 CUDA 12.x `make COMPUTE=70` 构建。分别跑单卡 15 min，再四卡 `gpu_burn -m 80% -tc 3600`，查校验、温度、频率、功耗、泵、VRM/HBM 和接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
-- 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned H→D 与 UPI 命令](PMEM.md#量-upi-与-pinned-memory) 比较双路 DDR4 交错和按卡就近传输。测试结束关机、断开 V100。
+- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，`nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI` 保存前后。GPU Burn 用 CUDA 12.9.1 `make COMPUTE=70` 构建。分别跑单卡 15 min，再四卡 `gpu_burn -m 80% -tc 3600`，查校验、温度、频率、功耗、泵、VRM/HBM 和接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
+- 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。测试结束关机、断开 V100。
 
 ## I7. 正式安装后的整机混合负载
 
-先按 [CPU 分核手册](CPU-PLACEMENT.md) 记录默认调度和分核的对照，再用选定配置做 60 分钟本地推理与编译并跑，以及 8 小时使用场景回放，覆盖 Buck2 上传、冷读、热读，本地 DeepSeek 两会话串行交错与 SSH/RDP。单 stage 支持并行时再加两会话并发。放行条件是全程无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。若发生 RAS 纠错，记录位置、负载和增量，从对应独立阶段复现。
+按 [CPU 分核手册](CPU-PLACEMENT.md) 配置每路 6 核，核启停时普通任务 CPU 集合的变化。随后以这套正式配置跑一次 8 小时混合负载，涵盖 Buck2 上传、冷读和热读、1017 的实际工具请求、SSH/RDP。I6 通过双槽时使用两个并发 harness，单槽方案用串行请求。全程要求无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。出现错误回到相关硬件阶段复现。
 
 ```bash
 # 分开终端运行，日志落 P4618。先确认 log 与测试进程都能在当前用户运行。
@@ -255,4 +253,4 @@ sudo zpool iostat -v z8data 5 > zpool-iostat.log
 sudo journalctl -kf -o short-monotonic > kernel-follow.log
 ```
 
-按真实项目轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。开始与结束各抓一次 `sudo bash host/pmem-numa-report.sh <PID>`。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。对照主机无坞构建时间与 1017 独占时的 p95 TTFT、生成速度。
+按真实项目轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。开始与结束各抓一次 `sudo bash host/pmem-numa-report.sh <PID>`。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。

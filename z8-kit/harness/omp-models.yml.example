@@ -2,14 +2,13 @@ providers:
   z8-deepseek:
     baseUrl: http://127.0.0.1:18000/v1
     api: openai-completions
-    apiKey: DS41_API_KEY
-    authHeader: true
+    auth: none
     models:
       - id: deepseek-v4.1-flash-1017
         name: DeepSeek V4.1 Flash 1017 on Z8
         reasoning: false
         input: [text]
-        contextWindow: 4096
+        contextWindow: 8192
         maxTokens: 1024
         cost:
           input: 0

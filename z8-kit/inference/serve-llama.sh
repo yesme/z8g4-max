@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${LLAMA_BUILD:?Set the absolute path to the llama.cpp build directory}"
+: "${DS41_GGUF:?Set the first 1017 GGUF shard on the PMem model volume}"
+: "${CUDA_VISIBLE_DEVICES:?Set the four V100 GPU UUIDs in PCIe order}"
+: "${Z8_DRAM_INTERLEAVE:?Set the two DDR4 NUMA node numbers}"
+slots=${SLOTS:-2}
+cache_mib=${MOE_CACHE_MIB:-8192}
+case "$slots" in
+    1|2) ;;
+    *) echo 'SLOTS must be 1 or 2' >&2; exit 2 ;;
+esac
+[[ "$cache_mib" =~ ^[0-9]+$ ]] || { echo 'Expected an integer MOE_CACHE_MIB' >&2; exit 2; }
+model=$(realpath -e -- "$DS41_GGUF")
+[[ -f "$model" && "$model" == /srv/pmem-model/* ]] || {
+    echo 'Place the GGUF on /srv/pmem-model' >&2
+    exit 2
+}
+findmnt -rn -M /srv/pmem-model -t ext4 -O dax=always >/dev/null
+: "${Z8_CUDA_RUNTIME:=/srv/work/jackywang/cuda-12.9-runtime}"
+export LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GGML_CUDA_P2P=1
+
+exec numactl --interleave="$Z8_DRAM_INTERLEAVE" "$LLAMA_BUILD/bin/llama-server" \
+    --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017 \
+    --load-mode mmap --lazy-mode on --split-mode layer --tensor-split 1,1,1,1 \
+    --n-gpu-layers all --cpu-moe --fit off --no-mmproj \
+    --moe-cache-mib "$cache_mib" --moe-cache-cpu-share 0 \
+    --threads 12 --threads-batch 12 --batch-size 512 --ubatch-size 32 \
+    --parallel "$slots" --ctx-size "$((slots * 8192))" --no-kv-unified \
+    --cont-batching --cache-ram 0 --no-cache-idle-slots --no-cache-prompt \
+    --spec-type none --reasoning off --jinja --metrics --slots

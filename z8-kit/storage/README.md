@@ -1,6 +1,6 @@
 # HC620 SATA 与 P4800X RAIDZ1 部署
 
-最终设备链是 SATA0–6 的七块 HC620，各与 P4800X p1–p7 中一个 **160 GiB** 分区组成 dm-zoned target。七个 target 组成 RAIDZ1。P4800X p8 使用全部余量，约 **277 GiB**，是唯一 special vdev，承载元数据、符合阈值的小块和 ZIL。池名 `z8data`，用 `compression=zstd-3`、`sync=standard`、`logbias=latency`。7×14 TB RAIDZ1 理想数据容量约 84 TB，实际再扣元数据、padding 和预留。七块 HC620 中掉一块可降级，P4800X 是整个池的共同依赖。 [dm-zoned 元数据布局](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html) · [OpenZFS 2.4 特殊分配类](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zpoolconcepts.7.html#special-allocation-class)
+最终设备链是 SATA0–6 的七块 HC620，各与 P4800X p1–p7 中一个 **160 GiB** 分区组成 dm-zoned target。七个 target 组成 RAIDZ1。P4800X p8 使用全部余量，约 **277 GiB**，是唯一 special vdev，承载元数据、符合阈值的小块和 ZIL。池名 `z8data`，父数据集 `z8data/data` 和冷 CAS 都用 `compression=zstd-3`、`sync=standard`、`logbias=latency`。7×14 TB RAIDZ1 理想数据容量约 84 TB，实际再扣元数据、padding 和预留。七块 HC620 中掉一块可降级，P4800X 是整个池的共同依赖。 [dm-zoned 元数据布局](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html) · [OpenZFS 2.4 特殊分配类](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zpoolconcepts.7.html#special-allocation-class)
 
 ## 1. 列出实体设备
 
@@ -39,7 +39,6 @@ sudo blkzone report -o 274726912 -c 1 "$disk"
 
 ```bash
 sudo install -m 0644 host/zfs-arc.conf.example /etc/modprobe.d/z8-zfs-arc.conf
-sudo update-initramfs -u
 sudo reboot
 ```
 
@@ -59,18 +58,7 @@ sudo blockdev --getss "$P4800X"
 cat "/sys/class/block/$ns/queue/scheduler"
 ```
 
-方括号标出正在用的调度器。如果已是 `[none]`，直接采用。若当前为另一项且列表有 `none`，可单次切换 P4800X 做对照，重启恢复系统默认。轮询单独测，T4 从 GRUB 单次添加 `nvme.poll_queues=1`，它对使用该驱动的 NVMe 都生效，包括 P4618。保持队列与调度器配置相同，在相同空盘范围比较 fio `--hipri=0` 与 `--hipri=1` 的 p50/p99 和 CPU 时间。完成后正常重启。此结果只反映实际发出轮询请求的 fio 路径，生产 ZFS 与 dm-zoned 以 I4/I5 端到端测试决定。 [Linux 7.0 NVMe PCI 驱动](https://github.com/torvalds/linux/blob/v7.0/drivers/nvme/host/pci.c) · [fio 3.41 参数](https://github.com/axboe/fio/blob/fio-3.41/HOWTO.rst)
-
-```bash
-# 调度器对照，确认上面的路径属于 P4800X 再执行。
-printf 'none\n' | sudo tee "/sys/class/block/$ns/queue/scheduler"
-# 轮询对照，在使用单次 GRUB 参数启动后执行。两轮只读。
-for hipri in 0 1; do
-    sudo fio --readonly --name="p4800x-hipri-$hipri" --filename="$P4800X" \
-        --rw=randread --bs=4k --ioengine=io_uring --direct=1 --hipri="$hipri" \
-        --iodepth=1 --size=8G --time_based --runtime=60 --group_reporting
-done
-```
+方括号标出实际使用的调度器。P4800X、P4618 和七块 HC620 沿用 Linux 7.0 默认队列配置，记录值供出错时定位。 [Linux 7.0 NVMe PCI 驱动](https://github.com/torvalds/linux/blob/v7.0/drivers/nvme/host/pci.c)
 
 ### 新建 GPT 八分区
 
@@ -213,11 +201,11 @@ sudo zfs create -o mountpoint=legacy -o compression=zstd-3 -o atime=off \
     -o xattr=sa -o dnodesize=auto -o primarycache=all \
     -o sync=standard -o logbias=latency -o special_small_blocks=24K z8data/data
 sudo zfs create -o mountpoint=legacy -o recordsize=1M \
-    -o special_small_blocks=0 z8data/data/buildbarn
+    -o special_small_blocks=0 -o primarycache=metadata z8data/data/buildbarn
 sudo zpool list -H -o guid z8data
 sudo zpool status -P z8data
 sudo zpool get autotrim z8data
-sudo zfs get -r compression,recordsize,special_small_blocks,mountpoint,sync,logbias z8data/data
+sudo zfs get -r compression,recordsize,special_small_blocks,mountpoint,sync,logbias,primarycache z8data/data
 sudo zfs get -r checksum,dedup,copies,redundant_metadata,xattr,dnodesize,primarycache,atime z8data/data
 sudo zdb -l "$special" | grep -E 'metaslab_shift:|asize:'
 sudo zpool export z8data
@@ -225,44 +213,22 @@ sudo zpool export z8data
 
 父数据集设 24 KiB 的小块阈值，CAS 子数据集覆盖为 0，两者均应显示 local。CAS 最终数据块以 1 MiB 的记录尺寸写 RAIDZ1，文件间接块、其他元数据和同步日志仍可走 special。CAS 占用 special 的数量按 `zpool list -v` 和实际轮转测，容量规划不依赖 1 GiB 估计。其它数据集只添大体顺序写入、写后少覆盖的模型归档、备份和数据集。活跃模型照常走 PMem，VM 镜像、数据库和容器层放 P4618。p8 用 `zdb -l` 核实际 `metaslab_shift`，31 对应 2 GiB，按 `asize >> metaslab_shift` 算区数并和 64 比较。记录当前 `hostid` 和 `/etc/hostid` 供重装后诊断导入。 [OpenZFS 2.4 数据集属性](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zfsprops.7.html) · [zdb 标签检查](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zdb.8.html)
 
-`xattr=sa` 和 `dnodesize=auto` 用于 Z8 的本机 ZFS。`atime=off` 省掉 CAS 命中后的访问时间写入。`redundant_metadata=all` 保留 ZFS 的完整元数据冗余策略，p8 仍是单物理设备。先用 `primarycache=all` 且不加 L2ARC。如果 P4618 的 Buildbarn 热层已经覆盖主要热点，在 CAS 子集上用 `zfs set primarycache=metadata z8data/data/buildbarn` 单独做一次 A/B，测冷读、热读、重读和 DDR4 压力，恢复继承用 `zfs inherit primarycache z8data/data/buildbarn`。 [OpenZFS 2.4 数据集属性](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zfsprops.7.html)
+`xattr=sa`、`dnodesize=auto`、`atime=off` 与 `redundant_metadata=all` 固定。父数据集缓存数据与元数据，冷 CAS 用 `primarycache=metadata`。重复 blob 读取由 Buildbarn 的 64 GiB P4618 热层负责，ARC 预算留给元数据和其它数据集。全池不设 L2ARC。 [OpenZFS dataset 属性](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zfsprops.7.html)
 
 `autotrim=on` 由后台线程汇集近期释放的范围，再向支持 discard 的叶设备提交回收提示。删除和覆盖时仍可能与后台 TRIM 争用队列。七个 mapper 收到 discard 后由 dm-zoned 把相应块标为无效，p8 则走 NVMe 自身的 discard。尚未收到 discard 的旧 LBA 可能继续占用有效位，直到覆盖或收到 discard。保持 2.4.1 的 `zfs_trim_txg_batch=32`、`zfs_trim_extent_bytes_min=32768` 和 `zfs_trim_extent_bytes_max=134217728`，队列和并发也保持默认。mapper 报告的 4 KiB 粒度、最多 256 MiB，是设备这一层的限制。对实体 HC620、P4800X 的 p1–p8 与池成员均不要手动运行 `blkdiscard`。 [OpenZFS 2.4.1 TRIM 实现](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev_trim.c#L65) · [Linux 7.0 dm-zoned discard](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L355)
 
-### 冷 CAS 压缩怎么定
+### 冷 CAS 压缩
 
-**首装保留 `zstd-3`。** 配套 Buildbarn 配置做内容切块，再由 `local.blocksOnBlockDevice` 将多个 blob 装入 `/cold/blocks`。本方案未给块文件配置应用层压缩，也未启用 ByteStream zstd。ByteStream 写入代码会先解开 RPC 的 zstd 包装，再把输入交给 CAS 切块路径。若 blob 本身是 ZIP 或 zstd 归档，文件内容依然是压缩字节。未压缩的二进制、对象文件和文本则可能通过 ZFS 少写一些磁盘数据。 [Buildbarn 固定版的传输配置](https://raw.githubusercontent.com/buildbarn/bb-storage/ca3d8b4/pkg/proto/configuration/bb_storage/bb_storage.proto) · [Buildbarn 本地后端配置](https://github.com/buildbarn/bb-storage/blob/main/pkg/proto/configuration/blobstore/blobstore.proto) · [Buildbarn ByteStream 写入实现](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/grpcservers/byte_stream_server.go#L139)
+`compression=zstd-3` 在父数据集 `z8data/data` 设置一次，冷 CAS 子数据集继承。OpenZFS 2.4.1 默认对至少 128 KiB 的记录先试 LZ4，未达阈值再试 Zstd-1。任一试压通过后，才用 Zstd-3 生成最终压缩结果，两次都未通过则按未压缩写入。试压仍消耗 CPU，实际减少落到七块 HC620 的写入字节取决于数据。 [OpenZFS 2.4 参数](https://openzfs.github.io/openzfs-docs/man/v2.4/4/zfs.4.html#zstd_earlyabort_pass) · [OpenZFS 2.4.1 试压实现](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zstd/zfs_zstd.c#L506)
 
-**OpenZFS 2.4.1 会实际试压。** 默认对至少 **128 KiB**、zstd 级别 ≥3 的记录先试 LZ4。LZ4 结果够小就继续做 zstd-3；LZ4 未达标时再试 zstd-1，后者仍未达标才提前放弃 zstd-3。小于 128 KiB 的非全零记录可直接走所选压缩级别。它按记录内容和压缩结果判断，文件扩展名、zstd 帧头或 Buildbarn 的传输标记都不会触发跳过。提前退出仍花 CPU 时间和内存带宽，最终按原数据写入也就没有这部分磁盘带宽收益。对可以压缩的记录，物理写入少了，读取时则会解压。 [OpenZFS 2.4.1 压缩试探源码](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zstd/zfs_zstd.c#L506) · [OpenZFS 2.4.1 ZIO 压缩路径](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/zio.c#L1847) · [OpenZFS 2.4 默认参数](https://openzfs.github.io/openzfs-docs/man/v2.4/4/zfs.4.html#zstd_earlyabort_pass)
+Buildbarn 固定镜像 `ca3d8b4` 在写入 512 GiB 冷块文件前已对每个 CAS chunk 做 Zstd 编码。ZFS 试压针对写入文件系统的整条记录，仍可能压缩记录里的填充等内容。I4 照常做高熵覆盖验收，I5 用真实 Buck2 产物填充后，可用 `sudo zfs get refcompressratio z8data/data/buildbarn` 查看 ZFS 层额外取得的压缩比。 [Buildbarn 本地 Chunk Storage](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/configuration/cs_blob_access_creator.go#L65) · [Buildbarn 磁盘编码](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/coder/chunk_coder.go#L13)
 
-I5 先在同池的临时 dataset 做筛选。准备 P4618 上来自真实项目的未压缩 `cas-sample.tar`，包含有代表性的对象文件、可执行文件、压缩包和调试产物，别用全零文件。依次写入三组，记录写入及 `fsync` 的墙钟时间、CPU 和实际写入量。每组重新写入同样的字节，再做一轮顺序读取，实际冷读 p95 留给后面的 Buildbarn 回放测。命令只创建临时测试数据集，首次执行前确认名称和路径尚未占用。
+如果按旧文档建过冷 CAS 且父数据集已设 `zstd-3`，用下列命令移除子数据集的本地覆盖。子数据集应显示 `zstd-3`，来源为 `inherited from z8data/data`。属性只影响新写入的块。 [OpenZFS compression 属性](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zfsprops.7.html#compression)
 
 ```bash
-sample=/srv/work/z8user/cas-sample.tar
-(
-    set -e
-    test -s "$sample"
-    findmnt -rn -M /data -t zfs
-    for mode in zstd-3 lz4 off; do
-        ds="z8data/data/cas-compression-$mode"
-        target="/data/cas-compression-$mode"
-        sudo mkdir "$target"
-        sudo zfs create -o mountpoint=legacy -o compression="$mode" \
-            -o recordsize=1M -o special_small_blocks=0 -o primarycache=metadata "$ds"
-        sudo mount -t zfs -o rw "$ds" "$target"
-        time (
-            sudo dd if="$sample" of="$target/sample.tar" bs=1M conv=fsync status=progress
-            sudo zpool sync z8data
-        )
-        sudo zfs get -Hp refcompressratio,logicalreferenced,referenced "$ds"
-        time sudo dd if="$target/sample.tar" of=/dev/null bs=1M status=progress
-    done
-)
+sudo zfs inherit compression z8data/data/buildbarn
+sudo zfs get -r compression z8data/data
 ```
-
-另开终端用 `zpool iostat -v z8data 2` 和 `mpstat -P ALL 2`，记下各组起止时刻与盘侧回收活动。`primarycache=metadata` 仅用于这次临时对照，降低刚写的文件被 ARC 数据缓存命中所带来的偏差。需要看压缩试探参数时读 `cat /sys/module/zfs/parameters/{zstd_earlyabort_pass,zstd_abort_size}`。报告池级写入量时计入 RAIDZ1 校验与设备层回收，不直接用文件长度当物理 I/O。筛选后在独立的空 CAS 实例回放同一批真实上传和随机冷取，分开统计热缓存回填与冷盘读，并加一轮与推理同跑，比较 Buildbarn 上传/冷读 p95、decode 和构建时间。临时样本结束后按 `umount → zfs destroy → rmdir` 逐个清掉上述三个确定的测试路径和数据集。
-
-如果 `zstd-3` 在真实回放里确实降低盘写且 p95 可接受，保留继承。如果空间收益相近而 `lz4` 的 CPU 或 p95 更好，只切换冷 CAS 子集。若两者都接近 1.00× 且试压产生可测的开销，再试子集 `off`。改用 `sudo zfs set compression=lz4 z8data/data/buildbarn` 或 `compression=off`，恢复用 `sudo zfs inherit compression z8data/data/buildbarn`。更改只影响以后写入的记录，旧记录继续按原格式读。 [OpenZFS 2.4 压缩属性](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zfsprops.7.html#compression)
 
 ## 4. I4 安装存储依赖链
 
@@ -313,26 +279,24 @@ sudo systemctl daemon-reload
 
 ## 5. I4 验证实际写入、scrub 与缺盘
 
-先在空的冷 CAS 数据集跑顺序覆盖，Buildbarn、scrub 和手工 TRIM 暂停。脚本先写满一个 512 GiB 高熵文件，再连续覆写同一文件三遍。随后可选做 1 TiB 随机 1 MiB 覆盖，范围仍是原 512 GiB 文件，允许重复访问。两套测试保持 `autotrim=on`，每分钟记录七组 cache 区数、ZFS 叶设备吞吐和 TXG 历史。每遍包含 fio 的最终 fsync 和池 `zpool sync`。 [fio I/O 范围和写入量](https://fio.readthedocs.io/en/latest/fio_doc.html#i-o-size) · [OpenZFS TXG 统计字段](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/spa_stats.c#L193)
+先在空的冷 CAS 数据集跑顺序覆盖，Buildbarn、scrub 和手工 TRIM 暂停。脚本先写满一个 512 GiB 高熵文件，再连续覆写同一文件三遍。测试保持 `autotrim=on`，每分钟记录七组 cache 区数、ZFS 叶设备吞吐和 TXG 历史。每遍包含 fio 的最终 fsync 和池 `zpool sync`。 [fio I/O 范围和写入量](https://fio.readthedocs.io/en/latest/fio_doc.html#i-o-size) · [OpenZFS TXG 统计字段](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/spa_stats.c#L193)
 
 ```bash
 sudo apt install fio sysstat
 sudo systemctl start data-buildbarn.mount
 logs=/path/to/external-log-disk
 sudo bash storage/cas-aging.sh sequential "$logs"
-# 边界测试。随机写速度单列，不套用顺序写的放行线。
-sudo bash storage/cas-aging.sh random "$logs"
 sudo zpool scrub -w z8data
 sudo zpool status -vP z8data
 ```
 
-顺序覆盖先以 **150 MB/s（十进制）和已完成 TXG 的 `stime` ≤60 秒**作为放行线。最后两遍各自用 `549755813888 ÷ 实际秒数 ÷ 1000000` 计算吞吐，该遍约 61 分钟是 150 MB/s 的边界。用分钟级 fio 带宽和 `cache` 水位确认确实进入回收期，并记录长停顿和 p99。若三遍结束仍未观察到忙时回收，延长同一文件的覆盖并保留采样，或用 I5 的真实轮转补测。TXG 的 `stime` 只统计实际同步完成的时长，卡住不完成的 TXG 还需看分钟日志和 `zpool sync` 是否返回。150/60 是本站起始门槛，I5 再用实测上传量、尾延迟和并发冷读验证。512 GiB 四遍在 150 MB/s 约 4.1 小时；1 TiB 随机写的时间另按实测估。scrub 无新增错误后删除本轮唯一的 `/data/buildbarn/i4-cas-aging.bin`，再做缺盘演练。
+顺序覆盖先以 **150 MB/s（十进制）和已完成 TXG 的 `stime` ≤60 秒**作为放行线。最后两遍各自用 `549755813888 ÷ 实际秒数 ÷ 1000000` 计算吞吐，该遍约 61 分钟是 150 MB/s 的边界。用分钟级 fio 带宽和 `cache` 水位确认确实进入回收期，并记录长停顿和 p99。若三遍结束仍未观察到忙时回收，延长同一文件的覆盖并保留采样，或用 I5 的真实轮转补测。TXG 的 `stime` 只统计实际同步完成的时长，卡住不完成的 TXG 还需看分钟日志和 `zpool sync` 是否返回。150/60 是本站起始门槛，I5 再用实测上传量、尾延迟和并发冷读验证。512 GiB 四遍在 150 MB/s 约 4.1 小时。scrub 无新增错误后删除本轮唯一的 `/data/buildbarn/i4-cas-aging.bin`，再做缺盘演练。
 
 ### 低峰 TRIM 与回退
 
-首装保留 `autotrim=on`。ZFS 把已释放的 LBA 通知下层，dm-zoned 收到 discard 才知道这类旧块可作废；同一 LBA 被重写时也由 mapper 更新有效性。首次只在池健康、无 scrub/resilver、构建空闲时，对七个数据成员试 `zpool trim -w -r 32M z8data /dev/mapper/hc620-{0..6}`，设备参数以 `zpool status -P` 里的路径为准。32 MiB/s 按叶设备计，名义约 14 TB/盘即使并行也可能要数日。查 `zpool status -t z8data`、`iostat -dx 60` 和七组 cache 水位，比较下一轮 I/O。看到稳定收益且作业可在低峰窗口内完成，再按月安排同一命令。默认不开 stock 月 timer，它会无速率限制扫全池，错过后也可能在开机补跑。 [OpenZFS 手工 TRIM](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zpool-trim.8.html) · [OpenZFS 月 timer](https://github.com/openzfs/zfs/blob/zfs-2.4.1/etc/systemd/system/zfs-trim-monthly%40.timer.in)
+保持 `autotrim=on`。只有冷库使用一段时间后空闲 cache 水位长期无法恢复、且日志支持旧块失效传播不足时，才在池健康、无 scrub/resilver、构建空闲时手动执行 `zpool trim -w -r 32M z8data /dev/mapper/hc620-{0..6}`。设备路径以 `zpool status -P` 为准，执行中看 `zpool status -t z8data`。按叶设备限速 32 MiB/s，全盘操作可能持续数日。本机不启用每月全量 TRIM。 [OpenZFS 手工 TRIM](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zpool-trim.8.html)
 
-顺序覆盖未过线时，先用分钟日志区分 CPU 压缩、忙时回收和队列等待。若 HDD 路径仍达不到要求，CAS 回退到 P4618 的独立 XFS 目录，ZFS 和七个 mapper 仍可留作归档。停用 `z8-buildbarn-worker.service` 和 `z8-buildbarn.service`，按 [Buildbarn 全 XFS 回退](../buildbarn/README.md#全-xfs-回退) 从新状态启动。Buildbarn 支持 `devicePath`，但当前七个 mapper 已经是 RAIDZ1 成员，直接写其中任何一个会破坏池。若以后要将七组 mapper 专用于直连 CAS，要独立规划聚合、冗余、discard 和恢复，先迁走数据再重建。Linux md RAID5 默认有额外的 discard 安全限制，直接替换 ZFS 的收益需另做验证。 [Buildbarn 块设备配置](https://raw.githubusercontent.com/buildbarn/bb-storage/ca3d8b4/pkg/proto/configuration/blockdevice/blockdevice.proto) · [Linux md RAID5 discard](https://github.com/torvalds/linux/blob/v7.0/drivers/md/raid5.c)
+顺序覆盖未过线时，先用分钟日志区分 CPU 压缩、忙时回收和队列等待。若 HDD 路径仍达不到要求，CAS 回退到 P4618 的独立 XFS 目录，ZFS 和七个 mapper 仍可留作归档。停用 `z8-buildbarn-worker.service` 和 `z8-buildbarn.service`，按 [Buildbarn 全 XFS 回退](../buildbarn/README.md#全-xfs-回退) 从新状态启动。七个 mapper 已被 RAIDZ1 占用，故障回退直接用独立的 XFS 目录。
 
 ### 同步写与 ZIL 验证
 

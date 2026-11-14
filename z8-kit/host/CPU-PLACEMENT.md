@@ -1,21 +1,19 @@
 # I7. 保留 HT，DeepSeek 启停时交还整颗物理核
 
-F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT、所有核心和 Turbo 开启。用默认调度跑一轮真实模型和 Buck2，再启用本节。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程，按每路独立分配。DDR4 节点号用 [T3 拓扑报告](PMEM.md#核对双路-numa-拓扑) 确认。
+F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT、所有核心和 Turbo 开启。I6 完成推理放行后应用本节。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程，按每路独立分配。DDR4 节点号用 [T3 拓扑报告](PMEM.md#核对双路-numa-拓扑) 确认。
 
 | 每路推理预留 | 双路可运行的推理线程 | 双路系统与编译可用线程 | Xolotl CPU expert worker 起点 |
 |---|---:|---:|---:|
-| 4 颗物理核 | 8 | 88 | 6 |
 | **6 颗物理核（首装）** | **12** | **80** | **10** |
-| 8 颗物理核 | 16 | 72 | 14 |
 | **推理服务已停止（仍预留 6 核/路的 HT 伙伴）** | — | **92** | — |
 
-以上按双路各 26 核、每核两个 HT 线程计算。已有 8269CY 的实机实验记录每颗 26 核、52 线程。每路用 K=N+1 颗核。停推理时每路系统与编译可用 52−K 个逻辑 CPU，双路 104−2K。运行时每路可用 2×(26−K)，双路 4×(26−K)。 [8269CY 实机实验平台](https://www.vldb.org/pvldb/vol17/p4827-li.pdf)
+按双路各 26 核、每核两个 HT 线程计算。每路固定留 6 颗物理核给推理。 [8269CY 实机实验平台](https://www.vldb.org/pvldb/vol17/p4827-li.pdf)
 
 用每路内部的示意编号 `0↔26、1↔27、…、25↔51`，每路取最后六颗物理核时，推理用 20–25，对应 HT 伙伴 46–51 始终保留。普通任务在推理停机时用 0–45，推理启动后用 0–19 与 26–45。每路推理核中的第一颗留给主控，其余五颗进入 Xolotl 的 worker 列表。
 
 Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对取编号较小的 CPU 作“主线程”，每路按这个编号排序取最后 K 对。这样 CPU0 所在物理核留给普通任务和系统。cgroup 的 CPU 集合约束其中的进程。硬件 IRQ 与内核线程有自己的亲和性，用 `/proc/interrupts` 和 `ps -eLo pid,tid,psr,comm` 核正在跑的网卡、存储和推理负载。CPU 核的执行资源分开，socket 的 Turbo、功耗、末级缓存、DDR4、PMem 和 UPI 仍然共享。 [Linux CPU 拓扑](https://docs.kernel.org/admin-guide/cputopology.html) · [Linux cgroup v2 cpuset](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpuset) · [Linux IRQ 亲和性](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
-**6 核/路的估算。** Xolotl 的 DS4.1 支持 `--threads` 和 `STRATA_POOL_CORES`。首轮给 expert pool 每路 5 颗物理核，共 10 个 worker，再每路留 1 颗给引擎控制、CUDA 提交和其他 helper。此配置允许 12 个 CPU 线程同时运行，10 是 worker 的设定值。四张 V100 执行的 GPU kernel、pinned DDR4 到 GPU 的 DMA 与 CPU expert 路径分开计。实际 CPU 工作量由模型量化、expert 命中、CPU 回退比例、请求长度和并发决定。1Cat 的已公开路径有冷 expert staging 和长 prefill 的 Engram 并行读取，不能套 Xolotl 的 worker 数。沿用 launcher 的 `OMP_NUM_THREADS=1`，分别测 4/6/8 核每路；8 核/路是本轮扫参上界，若 6→8 仍显著改善并且 CPU 忙，再扩测。 [Xolotl DS4.1 参数](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_generate.cpp) · [1Cat V4.1 cold expert 与 Engram 路径](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md)
+**固定每路 6 核。** llama.cpp 的工作线程设 12。Xolotl 回退时每路 5 个 CPU expert worker，另各留 1 核给引擎控制和 helper。只有真实工单出现 CPU 连续饱和且推理未达要求时，再增加用核。
 
 `z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，只交还推理的 12 个主线程；同核的 12 个 HT 伙伴一直排除。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。服务常驻时即使暂时没有 API 请求也保留核心。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
@@ -27,14 +25,10 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 
 | 工作负载 | 起步配置 | 怎样看分配结果 |
 |---|---|---|
-| 系统、SSH、Xfce、普通 harness | 两路都保留普通任务的 CPU，沿用 Linux 本地优先。页初次实际分配时，内核优先使用当时运行线程所在的节点，紧张时可回退 | 用 `numastat -m` 看两路 DDR4 余量，用 `numastat -p PID` 看吃内存最多的服务 |
-| Buck2 本地编译、Buildbarn worker | 先保留两路对称 CPU 集合和本地优先，由并行编译进程就近分配。现有 `z8build-local.slice` 和 worker 的 `z8build-remote.slice` 都跨两路 | 看整个构建 cgroup 的 `memory.numa_stat`，分别比较 `anon` 和 `file`，以及真实构建时间。单个 linker 偏一侧可以接受。若持续挤满同一侧，先在多个独立构建间分配 socket，或对大工作集做两 DDR4 节点交错对照 |
-| 1Cat、Xolotl 四卡推理 | 推理核每路等量，约 101 GiB 共享 pinned 缓冲以 `Z8_DRAM_INTERLEAVE=0,1` 启动，目标约 50.5 GiB/路。0、1 是示例 DDR4 节点，不含 kmem。独立 staging 后续再试让每个 rank 的线程和缓冲贴近它对应的 V100 | 查实际 CUDA worker/引擎的 `/proc/PID/numa_maps`、`numastat -p PID` 和 pinned 峰值。用 `nvidia-smi topo -m` 对照 GPU 归属，再看 H→D、UPI、TTFT 和 decode |
-| llama.cpp 四卡推理 | 首轮同样在两路保留等量 CPU，以 DDR4 交错启动。`mmap` 的 GGUF/Engram 按条带的物理布局读取，进程策略影响可受该策略约束的 DRAM 分配。用 `--load-mode none` 对照时重新核 DDR4 预算 | 分开看文件映射、匿名页和 pinned buffer。按 `/proc/PID/smaps`、`numastat -p PID`、`VmPin` 与引擎日志核对，再比较 PCIe / UPI 和 TTFT |
+| 系统、SSH、Xfce、harness 与 Buck2 | 使用两路对称 CPU 集合，Linux 默认本地优先。冷页可下沉到对应 PMem 慢节点 | 查实际构建或服务 cgroup 的 `memory.numa_stat` |
+| llama.cpp 或 Xolotl 四卡 | 固定在两个 DDR4 节点之间交错，按 T3 填 `Z8_DRAM_INTERLEAVE`。模型文件统一在 PMem 条带 | 查实际进程的 `numastat -p PID`、`numa_maps` 和 `VmPin/VmLck`，与节点预算核对 |
 
-DDR4 交错是进程启动时的分配策略。具体映射若由引擎、共享内存或 CUDA 驱动另行设置，核实际节点分布。101 GiB 是总预算，还要留出系统和编译的空间。顶层 slice 的 `AllowedMemoryNodes` 维持默认，允许正常回退及冷页下沉。严格只给 DDR4 节点的 cgroup 会失去向 PMem 下沉的目标。 [Linux 7.0 下沉掩码](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L978) · [cgroup `memory.numa_stat`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)
-
-**逐卡本地 DDR4 对照。** 先把 CUDA rank／stage 对到 GPU UUID、PCI BDF 和 `/sys/bus/pci/devices/<BDF>/numa_node`。固定模型文件布局和 arena 预算，单独比较 staging 放置。Xolotl 的四个 stage 共用一个引擎进程。外层 `numactl` 只能给出进程默认策略，逐 stage 对照需要在引擎分配时按对应 GPU 给缓冲区设内存策略，在注册 pinned 页之前就近触页。1Cat 可逐 rank 量进程策略，还需确认共享区和 staging 实际由哪个线程分配并首次访问。以每 stage 24 GiB 算，每路两张卡预算各 48 GiB。用 `numastat -p`、`numa_maps`、实际 H→D 带宽和 PCM 的 UPI 数据核分布和收益。卡的 pinned 页确实全在本地时，该缓冲的 H→D payload 可以走本地 PCIe；模型冷读、跨 stage、TP 通信和系统流量仍各走自己的路径。全进程交错也只约束适用的页，单卡实际跨 UPI 的比例从计数器看。 [Xolotl stage 初始化](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/engine/ds41_pipeline.cpp#L382) · [1Cat staging](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md#G2-cold-expert-staging-ring)
+顶层 slice 的 `AllowedMemoryNodes` 维持默认，构建页可正常回退和下沉。进程级交错申请的页按照应用和驱动实际分配行为核对。只有看到持续的单节点 DRAM 压力或 UPI 饱和时，才检查该 worker 的 first-touch 或 staging。 [Linux 7.0 下沉掩码](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L978)
 
 ## 生成并安装
 
@@ -93,23 +87,18 @@ cat "$layout"/{z8infer.slice,z8-infer-cpu.env,10-z8-cpu.conf}
 
 ## 启停本地模型
 
-按已通过的 I6 profile 写入 `~/.config/z8-infer/launch.sh`。以 `z8user` 创建目录与脚本，执行 `install -d -m 0700 ~/.config/z8-infer`、`chmod 0700 ~/.config/z8-infer/launch.sh`。`env.sh` 由该用户保存，权限设为 0600，填 GPU UUID、本地密钥以及对应引擎配置需要的变量，使用 `export NAME=值`。按 `numactl -H` 和 T3 报告填两个 **DDR4** 节点号，例如 `export Z8_DRAM_INTERLEAVE=0,1`。服务以 `z8user` 运行，要求 PMem 模型卷已挂载。
+以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。仅当 I6 实际用了降级档，才保存相应的 `SLOTS` 或 `MOE_CACHE_MIB`。以下 `launch.sh` 设 0700。
 
 **llama.cpp 的 `launch.sh`**
-
-沿用 [实测通过的 llama-server 命令](../inference/README.md#llamacpp-v100-首选多会话服务候选)。文件首部加 `#!/usr/bin/env bash` 和 `set -euo pipefail`，加载 `source "$HOME/.config/z8-infer/env.sh"`。将服务命令的开头改为 `exec /usr/bin/numactl --interleave="$Z8_DRAM_INTERLEAVE" /path/to/llama.cpp/build/bin/llama-server`。在 `env.sh` 填 `CUDA_VISIBLE_DEVICES`、`DS41_GGUF` 及跑通的 `SLOTS`、`SLOT_CTX` 和专家缓存预算。把 `--threads` 和 `--threads-batch` 两处初始值 12 一起改成实际预留 CPU 数。若为 Xolotl 配过服务的 `MemoryMax`，切换前按 llama.cpp 工作集调整同一个 drop-in。
-
-**1Cat 的 `launch.sh`**
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 source "$HOME/.config/z8-infer/env.sh"
-exec /usr/bin/numactl --interleave="$Z8_DRAM_INTERLEAVE" /usr/bin/bash \
-    /path/to/z8-kit/inference/serve-1cat.sh /path/to/1Cat-vLLM /path/to/1cat-4x16.yaml
+exec /usr/bin/bash /path/to/z8-kit/inference/serve-llama.sh
 ```
 
-**Xolotl 的 `launch.sh`**
+**I6 触发 Xolotl 回退时的 `launch.sh`**
 
 Buster 上游启动器会另用 `systemd-run --user` 创建 scope，使实际引擎回到 `user.slice`。在固定 SHA 的 checkout 中先运行 `git apply --check /path/to/z8-kit/inference/buster-inherit-scope.patch`，再执行同路径的 `git apply`。配套补丁保留锁和默认路径，下面的环境变量让引擎继承外层 cgroup。`STRATA_POOL_CORES` 使用生成的 worker 清单，生成的 Xolotl profile 保持 `--threads` 未设，让引擎按列表决定 worker 数。`STRATA_ENGINE_NICE=0` 关闭 launcher 对子进程额外增加 nice 的逻辑，让它继承 service 的 `Nice=-5`。 [Xolotl Buster launcher](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/buster/buster-engine.sh) · [DS4.1 worker 参数](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_generate.cpp) · [Xolotl 的 engine nice 逻辑](https://github.com/Indras-Mirror/Xolotl/blob/main/serve/server.py#L4053)
 
@@ -121,13 +110,14 @@ source /etc/z8-infer-cpu.env
 export Z8_BUSTER_INHERIT_SCOPE=1
 export STRATA_POOL_CORES="$Z8_XOLOTL_POOL_CPUS"
 export STRATA_ENGINE_NICE=0
-cd /path/to/Xolotl
+cd /srv/work/jackywang/Xolotl
+export LD_LIBRARY_PATH="/srv/work/jackywang/cuda-12.9-runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export STRATA_BUILD_DIR="$PWD/build-buster"
 exec /usr/bin/numactl --interleave="$Z8_DRAM_INTERLEAVE" .venv-serve/bin/python tools/v41/serve/serve_ds41.py \
     --engine strata --config local-1017.json --port 8150
 ```
 
-Xolotl 原来给引擎单独设 `MemoryMax=140G`、`MemorySwapMax=0`。在 `sudo systemctl edit z8-infer.service` 中加下面两行资源设置，使外层同时覆盖 API 和引擎，再以峰值复核。切到 1Cat 时按其独立的内存基线调整该 drop-in。
+Xolotl 原来给引擎单独设 `MemoryMax=140G`、`MemorySwapMax=0`。在 `sudo systemctl edit z8-infer.service` 中加下面两行资源设置，使外层同时覆盖 API 和引擎，再以峰值复核。
 
 ```ini
 [Service]
@@ -142,9 +132,7 @@ journalctl -fu z8-infer.service
 sudo systemctl stop z8-infer.service
 ```
 
-`Type=exec` 只确认启动器已执行，加载模型与 API 就绪继续从日志和 [I7 请求探针](../inference/README.md) 验证。llama.cpp 和 1Cat 可先看各自的 `/health`，Xolotl 用实际短生成跑过首次加载。需要持久化的 KV／slot 先通过引擎接口保存并确认完成再停服务。服务的停止超时为 300 秒，真实落盘耗时在验收时记录。
-
-先用已验证的启动策略。若需要硬限制推理 cgroup 的分配范围，可以另设 `AllowedMemoryNodes=` 为实际 DDR4 节点，并用 `numastat -p`、pinned 峰值和 PSI 核对。Linux 7.0 的页回收会用 cgroup 的内存节点集合过滤可用的下沉目标，收紧后这个 cgroup 可能更早遇到 DRAM 压力。 [Linux 7.0 vmscan](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L978)
+`Type=exec` 只确认启动器已执行，加载模型与 API 就绪继续从日志和 [I7 请求探针](../inference/README.md) 验证。llama.cpp 看 `/health`，Xolotl 用实际短生成跑过首次加载。服务的停止超时为 300 秒。
 
 ## 本地构建与验证
 
@@ -158,61 +146,9 @@ sudo systemd-run --scope --slice=z8build-local.slice \
 buck2 --isolation-dir z8-build build --local-only -j 8 //path:target
 ```
 
-如果一个大构建持续用尽同一路 DDR4，可在同一 scope 内另起 Buck2 daemon 对照。第一次启动就用 `numactl --interleave=0,1 buck2 --isolation-dir z8-build-interleave build --local-only -j 8 //path:target`，只填实际 DDR4 节点。使用同一目标、同一构建并发，保持两轮的本地物化和缓存状态可比。只给已经连上旧 daemon 的客户端加 `numactl`，旧 daemon 的策略不会随之切换。
-
 ### IRQ 与内核线程
 
-推理的 HT 伙伴只对配置过的用户态 slice 留空。IRQ 和内核线程可能仍在其中运行。先在模型与冷 CAS 同时运行时采样，确认是否和 TTFT 毛刺同时间发生。
-
-```bash
-mpstat -P ALL 1
-ps -eLo pid,tid,psr,comm | grep -E 'z_wr_iss|z_rd_int|kworker'
-grep -Ei 'nvme|ahci|nvidia|iwlwifi' /proc/interrupts
-# 把 IRQ 换成 /proc/interrupts 中正在增长的向量编号。
-IRQ=REPLACE_IRQ_NUMBER
-cat "/proc/irq/$IRQ/effective_affinity_list"
-```
-
-若确认可迁移 IRQ 造成干扰并且启用了 irqbalance，用 `sudo systemctl edit irqbalance.service` 在 `[Service]` 下加 `Environment="IRQBALANCE_BANNED_CPULIST=实际推理主线程,实际HT伙伴"`。填两路实际 CPU 列表并重启 irqbalance。已在 `/etc/default/irqbalance` 设置同变量的机器可直接修改该处。重跑并查看有效亲和性。具体存储 IRQ 要手动绑时，用对应设备本地的编译核。内核管理的 MSI-X 队列以实际有效掩码为准，逐个验证后再留设置。 [Ubuntu 26.04 irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
-
-dm-zoned 回收用有序的 unbound workqueue。若它与尾延迟相关，单独试收窄全局 unbound 掩码。ZFS SPL 的 taskq 是独立线程，需通过线程采样和 [冷 CAS 压缩对照](../storage/README.md) 另行判断。首装不自动设置全局掩码。 [Linux workqueue](https://docs.kernel.org/core-api/workqueue.html) · [dm-zoned 回收队列](https://raw.githubusercontent.com/torvalds/linux/v7.0/drivers/md/dm-zoned-reclaim.c)
-
-```bash
-source /etc/z8-infer-cpu.env
-wq=/sys/devices/virtual/workqueue/cpumask
-old_wq=$(cat "$wq")
-build_wq=$(python3 - "$Z8_BUILD_CPUS" <<'PY'
-import sys
-mask = 0
-for item in sys.argv[1].split(","):
-    start, _, end = item.partition("-")
-    for cpu in range(int(start), int(end or start) + 1):
-        mask |= 1 << cpu
-words = (mask.bit_length() + 31) // 32
-print(",".join(f"{(mask >> (word * 32)) & 0xffffffff:08x}" for word in reversed(range(words))))
-PY
-)
-printf '%s\n' "$build_wq" | sudo tee "$wq"
-```
-
-跑完同一组推理和冷 CAS，再在原 shell 恢复原值。
-
-```bash
-printf '%s\n' "$old_wq" | sudo tee "$wq"
-```
-
-### 混合负载的 RDT 对照
-
-保留目前的 CPU 集合与 HT 伙伴隔离。若推理与构建同跑时 p95 明显恶化，先检查 PCIe、UPI、DDR4 带宽和 LLC。`resctrl` 作为后续实验手段，先看两路 8269CY 与实际内核暴露的功能。只在试验机当前没有其他程序管理该挂载时手动挂载。 [Linux 7.0 resctrl](https://www.kernel.org/doc/html/v7.0/filesystems/resctrl.html)
-
-```bash
-awk '/^flags[[:space:]]*:/ { for (i=1; i<=NF; i++) if ($i ~ /^(cat_l3|mba|cqm_mbm_total|cqm_mbm_local)$/) print $i; exit }' /proc/cpuinfo
-findmnt -M /sys/fs/resctrl || sudo mount -t resctrl resctrl /sys/fs/resctrl
-cat /sys/fs/resctrl/schemata
-ls /sys/fs/resctrl/info
-```
-
-有 MBM 时先观察实际编译任务的带宽。对远程执行，检查 runner 与实际编译器的宿主 PID/TID。`resctrl` 按 task 或 CPU 归组，写 `tasks` 时核实际执行者和后续子任务的归属，Buildbarn 的 cgroup 路径本身不能当成 `tasks` 的成员。若证实是内存带宽竞争，再手动试一个 MBA 档，按 `info/MB/min_bandwidth`、`bandwidth_gran`、`thread_throttle_mode` 和 `schemata` 的实际缓存域选值。看 MBM 实际读数、推理 p95 及构建时间。默认百分比表示节流档位，整组实际带宽还受线程数和硬件影响。LLC 争用则单独测 CAT。GPU DMA 和跨 UPI 瓶颈仍用各自计数器判定。 [Linux 7.0 资源归组规则](https://www.kernel.org/doc/html/v7.0/filesystems/resctrl.html#resource-allocation-rules) · [MBA 与 MBM](https://www.kernel.org/doc/html/v7.0/filesystems/resctrl.html#memory-bandwidth-allocation-and-monitoring)
+用户态 slice 的 CPU 集合与 IRQ／内核线程亲和性独立。只有推理尾延迟异常且 `mpstat -P ALL 1` 或 `/proc/interrupts` 显示存储／网卡 IRQ 持续落在推理核时，才按实际向量检查 `/proc/irq/<IRQ>/effective_affinity_list`。需迁移时用 irqbalance 的 `IRQBALANCE_BANNED_CPULIST` 排开推理 CPU 和 HT 伙伴。全局 workqueue、CAT/MBA 保持默认。 [Ubuntu irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
 启动前、运行中、停止后分别检查。对实际 1Cat CUDA worker 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到空闲 CPU 集合，其中仍排除推理核的 HT 伙伴。`-j` 与容器的 CPU 时间配额仍分别限制构建并发和 CPU 时间。
 
@@ -239,6 +175,6 @@ sudo cat "/proc/$pid/cgroup"
 sudo grep '^Cpus_allowed_list:' "/proc/$pid/status"
 ```
 
-用同一模型、请求回放和 Buck2 目标对照推理单跑、编译单跑、默认调度并跑和分核并跑。每轮保持相同的构建并行度和缓存状态。记录 decode tok/s、TTFT p95、构建墙钟时间，用 `pidstat -t -p <推理 PID> 2` 看忙线程数，再用 `sudo turbostat --quiet --interval 2` 看每核的 `Bzy_MHz` 以及每路的 `PkgWatt` 与温度。选择性能已接近本轮最好值、用核最少的配置。更改 K 时先停 `z8-infer.service`，重新生成并安装 slice 和 env，再 `sudo systemctl daemon-reload` 后启动。 [Linux 7.0 turbostat](https://github.com/torvalds/linux/blob/v7.0/tools/power/x86/turbostat/turbostat.8)
+I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。运行中执行一次 `sudo systemctl daemon-reload`，核普通任务仍为 80 个逻辑 CPU。停止推理后应还到 92 个。
 
 平时停 `z8-infer.service` 即归还推理主线程。若日志报告恢复失败，停服务后手动执行 `sudo /usr/local/libexec/z8-cpu-mode restore` 再核 CPU mask。完全撤销时，先停推理以及已启用的 worker，删除本节安装的 slice、服务与专用 drop-in，执行 `sudo systemctl daemon-reload` 后重启主机。普通任务恢复使用 104 个逻辑 CPU，已启用的 Buildbarn worker 按原 I5 配置启动。

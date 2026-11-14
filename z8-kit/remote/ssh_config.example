@@ -1,12 +1,12 @@
-Host z8g4-max z8
+Host jackywang-xubuntu-max z8
     HostName REPLACE_WITH_Z8_LAN_OR_VPN_IP
-    User z8user
+    User jackywang
     ServerAliveInterval 30
     ServerAliveCountMax 3
 
 Host z8-ports
     HostName REPLACE_WITH_Z8_LAN_OR_VPN_IP
-    User z8user
+    User jackywang
     ServerAliveInterval 30
     ServerAliveCountMax 3
     ExitOnForwardFailure yes
