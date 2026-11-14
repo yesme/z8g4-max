@@ -4,8 +4,15 @@ local GiB = 1024 * 1024 * 1024;
 local MiB = 1024 * 1024;
 local chunking = { minChunkSizeBytes: 256 * 1024, horizonSizeBytes: 2 * MiB };
 local cold = import 'cold-layout.json';
+local coldIndexGiB = std.get(cold, 'indexGib', cold.tib);
 
 base + {
+  global: {
+    diagnosticsHttpServer: {
+      httpServers: [{ listenAddresses: [':9980'], authenticationPolicy: { allow: {} } }],
+      enablePrometheus: true,
+    },
+  },
   schedulers: {
     hardlinking: { endpoint: { address: 'scheduler:8982' }, addInstanceNamePrefix: 'hardlinking' },
   },
@@ -17,7 +24,7 @@ base + {
       chunkStorage: {
         readCaching: {
           // Authoritative CS: P4618 index and state, RAIDZ1 block file.
-          slow: disk('/store/cs', '/cold/blocks', cold.tib * 1024 * GiB, cold.tib * GiB, 3, chunking, 22, 66),
+          slow: disk('/store/cs', '/cold/blocks', cold.tib * 1024 * GiB, coldIndexGiB * GiB, 3, chunking, 22, 66),
           fast: disk('/store/cs-hot', '/store/cs-hot/blocks', 512 * GiB, GiB, 3, chunking),
           replicator: { 'local': {} },
         },

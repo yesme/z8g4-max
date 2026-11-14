@@ -358,7 +358,7 @@ sudo docker compose --project-directory /opt/z8-kit/buildbarn \
 
 固定的 `bb-storage` 镜像的 OCI 配置是 `User=0`，默认 rootful Docker 无 userns-remap 时，首次创建的 root 目录即可使用。用 `docker image inspect <Compose 镜像引用> --format '{{.Config.User}}'` 复核。改镜像用户或启用 userns-remap 时，用实际映射 UID 初始化冷、热目录，随后用该容器做 CAS/AC 写读检查。 [Buildbarn 部署](../buildbarn/README.md)
 
-首次启用存储前，I4 压测文件须已移除。`z8-buildbarn-check` 读取空冷库数据集的字节级 `available`，按 72% 向下取整到 TiB，预计约 54 TiB。结果写入 `/opt/z8-kit/buildbarn/cold-layout.json`；保存该文件随同农场配置备份。后续启动使用已记录的容量并核对现有块文件和索引。若旧 512 GiB 冷库已用过，按 [冷 CS 几何与容量](../buildbarn/README.md#冷-cs-几何与容量) 改用空库后再启动。
+首次启用存储前，I4 压测文件须已移除。`z8-buildbarn-check` 读取空冷库数据集的字节级 `available`，按 72% 向下取整到 TiB，预计约 54 TiB，同时按每 TiB 配 26 GiB 的冷索引，预计 1,404 GiB。两项写入 `/opt/z8-kit/buildbarn/cold-layout.json`，与农场配置一并备份。后续启动使用已记录的容量并核对现有块文件和索引。已初始化旧索引时，按 [冷 CS 几何与容量](../buildbarn/README.md#冷-cs-几何与容量) 的旧库处理流程更新。
 
 先完成 [CPU 分核与 runner 归属](../host/CPU-PLACEMENT.md#生成并安装)，再启用下面两个服务。
 

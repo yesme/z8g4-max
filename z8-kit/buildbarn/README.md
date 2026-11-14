@@ -12,11 +12,33 @@
 
 七盘 RAIDZ1、4 KiB 扇区下，一个未压缩 1 MiB 记录用 256 个数据扇区和 43 个校验扇区，向上补齐为 300 个扇区。ZFS 的 `available` 用 128 KiB 记录的换算比例，并计入 vdev 实际容量与池预留。首次保存的 `/opt/z8-kit/buildbarn/cold-layout.json` 是启动时的容量依据。守卫拒绝用剩余空间重算已有几何。冷库数据集专用且无快照，留约 28% 给写时复制、池分配与 dm-zoned 回收。 [OpenZFS RAIDZ 分配](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev_raidz.c#L2305) · [OpenZFS 空间换算](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2078)
 
-冷 CS 使用 22 个 old、66 个 current、3 个 new 和 3 个 spare，共 94 块。按 54 TiB 计算，每块约 588 GiB，单次回收粒度约 1.06%。上游允许至多 100 块，保留上游推荐的 3:1 current/old 比及三个 new。索引每 TiB 冷 CS 配 1 GiB，预计 54 GiB。锁定版每槽 66 B，约 8.8 亿槽；按上游示例 50% 装载率预算，平均编码 chunk 达约 132 KiB 时可覆盖 54 TiB。遇大量更小的对象时索引可能先淘汰。 [Buildbarn 块划分](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/configuration/new_blob_access.go#L199) · [索引槽格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_location_record_array.go#L12) · [索引估算示例](https://github.com/buildbarn/bb-clientd/blob/main/configs/bb_clientd.jsonnet)
+冷 CS 使用 22 个 old、66 个 current、3 个 new 和 3 个 spare，共 94 块。54 TiB 块文件的单块约 588 GiB。扣三块 spare 后，活跃块字节上限约 52.28 TiB，未填满的新块、块尾空隙和刷新产生的重复副本会再减少独立对象容量。 [Buildbarn 块划分](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/configuration/new_blob_access.go#L199)
 
-热 CS 索引 1 GiB，CMS 和 AC 各配 4 GiB 索引。CMS 只存多 chunk 对象的清单，每个 SHA-256 条目为 36 B（32 B 摘要加 4 B 大小）。按 54 TiB、每 256 KiB 对应一个条目估算，条目约 7.6 GiB，64 GiB 给压缩率、chunk 复用和清单开销留出余量。AC 容量按动作结果独立配置。P4618 上的缓存和索引满额约 855 GiB，不含 128 GiB worker 输入缓存与工作目录。冷块文件由 `ftruncate` 建为稀疏文件后再 `mmap`。I4 的 512 GiB 覆写只验回收链和写入门槛，未来接近七成使用率时才会出现该容量的真实轮转。 [Buildbarn 清单格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/chunk/mapping.go) · [块文件创建](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/new_block_device_from_file_unix.go#L38)
+**冷索引定为每 TiB 块文件配 26 GiB，预计 1,404 GiB。** 固定版把索引文件按每槽 66 B 换算成槽数，并向下取到最近的质数。当前 CS 每个独立 chunk digest 占一个索引项。同一 digest 在不同 RE 实例间共享。小文件和 RE 目录消息也能直接成为单个 chunk。256 KiB 是大对象的分块参数，压缩后的 chunk 和小对象可以短得多。公式为 `活跃块字节 × 66 / (压缩后每个独立 chunk 的平均字节数 × 0.50)`。Buildbarn 客户端示例使用 5 KiB 与 50%。这里把 5 KiB 作为规划值，P4618 的余量允许按这个值首装。50% 是装载率预算。 [索引槽格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_location_record_array.go#L12) · [质数槽数](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/configuration.go) · [CS 的键和编码](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/configuration/cs_blob_access_creator.go) · [上游估算示例](https://github.com/buildbarn/bb-clientd/blob/main/configs/bb_clientd.jsonnet)
 
-已初始化旧缓存时，停 worker 和存储，将冷块文件、P4618 的 `cs`、`cs-hot`、`cms`、`ac` 与旧 layout 作为一组退役。核对这些路径仅含可重建缓存，释放旧冷块占用后按 I5 新建空目录。源代码、工作树和 worker 目录无需迁动。
+作为量级参照，上游 Docker Compose 示例为 32 GiB CS 配 400 MiB 索引，折合每 TiB 12.5 GiB。原方案的每 TiB 1 GiB 比这个比例小 12.5 倍。 [Buildbarn Docker Compose 配置](https://github.com/buildbarn/bb-deployments/blob/main/docker-compose/config/storage.jsonnet)
+
+| 平均编码 chunk | 覆盖 52.28 TiB 所需索引（50% 装载） | 旧 54 GiB 索引到 50% 时对应的数据量 |
+|---:|---:|---:|
+| 128 KiB | 54 GiB | 52.4 TiB |
+| 32 KiB | 216 GiB | 13.1 TiB |
+| 16 KiB | 431 GiB | 6.5 TiB |
+| 8 KiB | 863 GiB | 3.3 TiB |
+| 5 KiB | 1,380 GiB | 2.0 TiB |
+| 4 KiB | 1,725 GiB | 1.6 TiB |
+
+1,404 GiB 约有 228 亿槽。5 KiB 时满库预计占 49.1%，4 KiB 时约 61.4%。索引按新旧位置处理碰撞，旧条目可能被挤出。达到探测上限时 `Put` 仍可返回成功，随后按 digest 查找可能 miss，即使数据块还在。索引和块文件都由 `ftruncate` 建为稀疏文件再 `mmap`，只触及所需页面。索引条目散写到整个文件，底层以文件系统块分配，活跃键只占少数槽时也可能分配大量磁盘空间。热页由系统页缓存管理。P4618 按整个索引文件预算。 [碰撞与弃项](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go) · [文件创建](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/new_block_device_from_file_unix.go#L38) · [读取映射与写入路径](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/memory_mapped_block_device_unix.go)
+
+连同 512 GiB 热 CS、CMS、AC 和各自索引，P4618 文件预算约 **2,205 GiB**。加 128 GiB worker 输入缓存后约 **2.28 TiB**，标称 6.4 TB 的 P4618 还余约 **3.54 TiB** 给系统、工作树和 `buck-out`，未扣 XFS 元数据。CMS 容量另按多 chunk 对象的清单估计，每个 SHA-256 清单项 36 B。I4 的 512 GiB 覆写验回收链和写入门槛。 [Buildbarn 清单格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/chunk/mapping.go)
+
+平时排查提前 miss 可在 max 查本机随 `bb-storage` 提供的计数。优先看 `TooManyAttempts` 和 `put_too_many_iterations_total` 持续增加，两者分别捕获探测深度和插入总迭代耗尽。CS 标签汇总 max 的冷热两张表。blob 尺寸直方图使用 digest 的未压缩字节数，且同类型本地 backend 汇总，冷索引占用需按压缩后独立 chunk 计算。 [计数定义](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go) · [对象尺寸指标](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/metrics_blob_access.go)
+
+```bash
+curl -fsS http://127.0.0.1:9980/metrics |
+  awk '/^buildbarn_lossymap_hash_map_put_iterations_count\{/ && /name="KeyLocationMap:cs"/ && /outcome="TooManyAttempts"/ || /^buildbarn_lossymap_hash_map_(put_too_many_iterations|get_too_many_attempts)_total\{/ && /name="KeyLocationMap:cs"/'
+```
+
+已初始化的 `cold-layout.json` 沿用保存的 `indexGib`。旧版只有 `tib` 的文件继续对应原来每 TiB 1 GiB 的索引。槽数参与哈希取模，直接放大原文件会使旧键按错误地址查找。已经存过数据时，要采用新比例，先停 worker 和存储，将冷块文件、P4618 的 `cs`、`cs-hot`、`cms`、`ac` 与旧 layout 作为一组退役。核对这些路径仅含可重建缓存，释放旧冷块占用后按 I5 新建空目录。源代码、工作树和 worker 目录无需迁动。 [索引寻址实现](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go)
 
 镜像里的 `LocalBlobAccess` 在新块内递增分配偏移，旧块轮转后复用偏移。并发写可交错，文件覆写会触发 ZFS CoW。淘汰动作只把逻辑块归还给 Buildbarn 自己的 allocator，文件对应范围仍存在于 ZFS，下一次覆写后旧物理块才有机会释放。冷 CAS 是可重建数据，给这份 dataset 配快照策略时将它排除，避免把轮转后的历史 extent 长期留在池内。现有布局继续用 HC620 放权威冷块，P4618 放热块和元数据。 [固定镜像的块分配实现](https://github.com/buildbarn/bb-storage/blob/ca3d8b4/pkg/blobstore/local/block_device_backed_block_allocator.go) · [backend 配置定义](https://github.com/buildbarn/bb-storage/blob/main/pkg/proto/configuration/blobstore/blobstore.proto)
 
@@ -29,7 +51,7 @@ sudo docker compose -p z8-tiered -f compose.tiered.yaml pull cache
 sudo systemctl start z8-buildbarn.service
 sudo docker compose -p z8-tiered -f compose.tiered.yaml ps
 sudo docker compose -p z8-tiered -f compose.tiered.yaml logs --tail 100 cache
-sudo stat /data/buildbarn/blocks
+sudo stat /data/buildbarn/blocks /srv/buildbarn/tiered/cs/key_location_map
 sudo ls -ld /srv/buildbarn/tiered/{cs,cs-hot,cms,ac}
 ```
 

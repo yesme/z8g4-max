@@ -184,7 +184,7 @@ I6 放行看 20 次连续工具往返、SSE、项目标记和零 OOM/Xid。真�
 
 | 位置 | 部署 |
 |---|---|
-| P4618 RAID0/XFS | `/srv/work` 和 `buck-out`；`/srv/buildbarn/tiered` 存 AC、CMS、CS 索引与状态、512 GiB 热 CS |
+| P4618 RAID0/XFS | `/srv/work` 和 `buck-out`；`/srv/buildbarn/tiered` 存 AC、CMS、512 GiB 热 CS、状态与冷 CS 索引。按 26 GiB/TiB 配冷索引，预计 1,404 GiB |
 | HC620 RAIDZ1 | `/data/buildbarn` 仅挂在 Z8，存按空池可用量计算的冷 CS 大块文件，预计约 54 TiB |
 | Linux | max 托管 AC/CAS、唯一调度器和 Linux worker。mini 用 PM9F1 热层、S3610 冷层，另提供 Linux worker |
 | Mac | Mac mini M4 提供原生 Darwin worker 和边缘读缓存。系统与 Xcode 用内置盘，其余先用外接 PM9F1 |

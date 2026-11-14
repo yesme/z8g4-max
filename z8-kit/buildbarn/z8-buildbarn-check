@@ -47,11 +47,16 @@ if [[ ! -e "$layout" ]]; then
     }
     temporary=$(mktemp "$layout.XXXXXX")
     trap 'rm -f -- "$temporary"' EXIT
-    printf '{"tib":%s}\n' "$tib" > "$temporary"
+    # Size for about 5 KiB per indexed chunk at 50% load.
+    printf '{"tib":%s,"indexGib":%s}\n' "$tib" "$((tib * 26))" > "$temporary"
     ln -- "$temporary" "$layout"
 fi
 tib=$(jq -er '.tib | select(type == "number" and . == floor and . > 0 and . < 64)' "$layout") || {
     echo "Invalid cold CAS geometry in $layout; recover its recorded TiB capacity." >&2
+    exit 1
+}
+index_gib=$(jq -er '(if has("indexGib") then .indexGib else .tib end) | select(type == "number" and . == floor and . > 0 and . <= 5960)' "$layout") || {
+    echo "Invalid cold CAS index size in $layout; recover its recorded GiB capacity." >&2
     exit 1
 }
 if [[ -e "$target/blocks" ]] && [[ $(stat -c %s -- "$target/blocks") != "$((tib * tib_bytes))" ]]; then
@@ -59,7 +64,7 @@ if [[ -e "$target/blocks" ]] && [[ $(stat -c %s -- "$target/blocks") != "$((tib 
     exit 1
 fi
 if [[ -e "$BB_DATA_DIR/cs/key_location_map" ]] &&
-    [[ $(stat -c %s -- "$BB_DATA_DIR/cs/key_location_map") != "$((tib * 1024**3))" ]]; then
+    [[ $(stat -c %s -- "$BB_DATA_DIR/cs/key_location_map") != "$((index_gib * 1024**3))" ]]; then
     echo "Cold index size differs from $layout; restore the original geometry." >&2
     exit 1
 fi

@@ -6,7 +6,8 @@ local GiB = 1024 * MiB;
 local upstream = { grpc: { client: { address: '127.0.0.1:18980' } } };
 local readCache(slow, fast) = { readCaching: { slow: slow, fast: fast, replicator: { 'local': {} } } };
 local darwin = std.objectHas(edge, 'xcode');
-local coldDisk(path, metadata, gib) = disk(metadata, path + '/cs/blocks', gib * GiB, gib * MiB, 3);
+local coldIndexGiBPerTiB = std.get(edge, 'coldIndexGiBPerTiB', 1);
+local coldDisk(path, metadata, gib) = disk(metadata, path + '/cs/blocks', gib * GiB, gib * coldIndexGiBPerTiB * MiB, 3);
 local cold = if std.objectHas(edge, 'coldShards') then
   assert darwin && std.length(edge.coldShards) == 4 : 'Set four Darwin cold shard mount paths';
   assert std.length(std.set(edge.coldShards)) == 4 : 'Cold shard paths must be distinct';

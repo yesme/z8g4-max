@@ -4,6 +4,7 @@ services:
     command: ["/config/tiered-cache.jsonnet"]
     ports:
       - "127.0.0.1:8980:8980"
+      - "127.0.0.1:9980:9980"
     volumes:
       - type: bind
         source: .

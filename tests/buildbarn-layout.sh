@@ -30,10 +30,21 @@ if bash check; then
 fi
 rm cold/i4-cas-aging.bin
 bash check
-grep -Fx '{"tib":54}' cold-layout.json
+grep -Fx '{"tib":54,"indexGib":1404}' cold-layout.json
 
 # On restart the layout is reused, without reading remaining pool space.
 rm available
+index="$BB_DATA_DIR/cs/key_location_map"
+truncate -s "$((1404 * 1024**3))" "$index"
+bash check
+truncate -s "$((54 * 1024**3))" "$index"
+if bash check; then
+    echo 'Accepted a mismatched existing cold index' >&2
+    exit 1
+fi
+
+# A layout from before indexGib was recorded still uses its original index.
+printf '%s\n' '{"tib":54}' > cold-layout.json
 bash check
 touch cold/blocks
 if bash check; then
