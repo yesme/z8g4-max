@@ -12,6 +12,32 @@ show() {
     fi
 }
 
+network_hardware() {
+    local nic driver address link_speed duplex
+    printf '\n[PCI network controllers]\n'
+    if command -v lspci >/dev/null; then
+        lspci -Dnnk | grep -A3 -Ei 'Ethernet controller|Network controller' || true
+    fi
+    for nic in /sys/class/net/*; do
+        [[ -e "$nic/device" ]] || continue
+        driver=$(readlink "$nic/device/driver") || driver=unknown
+        address=$(<"$nic/address")
+        printf 'Interface %s: driver=%s mac=%s\n' "${nic##*/}" "${driver##*/}" "$address"
+        if [[ -e "$nic/phy80211" || -d "$nic/wireless" ]]; then continue; fi
+        if link_speed=$(cat "$nic/speed" 2>/dev/null) && [[ "$link_speed" =~ ^[1-9][0-9]*$ ]]; then
+            duplex=$(cat "$nic/duplex" 2>/dev/null) || duplex=unknown
+            printf '  negotiated speed=%s Mb/s duplex=%s\n' "$link_speed" "$duplex"
+        else
+            printf '  no negotiated link speed\n'
+        fi
+    done
+}
+
+if [[ "${1:-}" == --network ]]; then
+    network_hardware
+    exit 0
+fi
+
 show timestamp date -Is
 show kernel uname -a
 show kernel-cmdline cat /proc/cmdline
@@ -35,6 +61,7 @@ show nvlink nvidia-smi nvlink -s
 show disks lsblk -e 7 -o NAME,PATH,TYPE,SIZE,MODEL,SERIAL,REV,TRAN,ZONED,LOG-SEC,PHY-SEC,FSTYPE,MOUNTPOINTS
 show nvme nvme list
 show network nmcli device status
+network_hardware
 show arrays cat /proc/mdstat
 show maps dmsetup ls --target zoned
 show zfs zpool status

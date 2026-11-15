@@ -2,21 +2,42 @@
 
 ## SSH
 
-I2 使用槽 7 的 AX210 接内网。正式 Xubuntu 首次登录后连接同一 Wi-Fi，把连接设为开机自动连接且可供所有用户使用。若使用路由器的 DHCP 保留地址，在本机控制台给该连接设固定硬件 MAC，并用 `ip -br link` 看实际地址。Xubuntu 桌面安装使用 NetworkManager，可在该配置上执行下例，连接名从第一条命令抄。[NetworkManager 连接属性](https://networkmanager.dev/docs/api/latest/nm-settings-nmcli.html)
+I2 优先用板载 RJ-45。HP QuickSpecs 列板载 Intel I219-LM 和 Intel X722 1GbE，Linux 分别用 `e1000e` 和 `i40e`。HP 的双口 10GbE 模块是选配。有线插通后，在本机控制台记录实际接口、驱动和协商速率。 [HP Z8 G4 网络规格](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=77) · [NetworkManager 连接属性](https://networkmanager.dev/docs/api/latest/nm-settings-nmcli.html)
+
+```bash
+sudo apt install ethtool
+nmcli device status
+nmcli connection show --active
+nic='REPLACE_WITH_ETHERNET_INTERFACE'
+profile='REPLACE_WITH_ETHERNET_PROFILE'
+sudo ethtool -i "$nic"
+sudo ethtool "$nic"
+sudo ethtool -P "$nic"
+sudo nmcli connection modify "$profile" connection.autoconnect yes connection.permissions '' \
+    802-3-ethernet.cloned-mac-address permanent ipv4.route-metric 100 ipv6.route-metric 100
+sudo nmcli connection up "$profile"
+ip -br address show dev "$nic"
+ip route show default
+```
+
+用 `ethtool -P` 打印的有线 MAC 在路由器做 DHCP 地址保留。千兆板载口接通时预期 `Speed: 1000Mb/s`、`Duplex: Full`，按实际读数记录。mini 与 Mac 也各自检查实际协商速率。
+
+**没有网线时用 AX210 过渡。** 从 Xfce 面板连 Wi-Fi，再用下面的命令保存系统级连接；做 DHCP 保留时用 AX210 的实际永久 MAC。
 
 ```bash
 nmcli connection show --active
 profile='REPLACE_WITH_WIFI_PROFILE'
 sudo nmcli connection modify "$profile" connection.autoconnect yes \
-    connection.permissions '' 802-11-wireless.cloned-mac-address permanent
+    connection.permissions '' 802-11-wireless.cloned-mac-address permanent \
+    ipv4.route-metric 600 ipv6.route-metric 600
 sudo nmcli connection up "$profile"
 ip -br link
 ip -br address
 ```
 
-如果重启停在登录界面时 Wi-Fi 未连接，在本机打开 Xfce 的连接编辑器。家庭 WPA-PSK/SAE 网络在 `Wi-Fi Security` 中选择为所有用户保存密码，重新连接，再测试一次。这样密码由系统连接配置保存，开机时即可使用。
+如果重启停在登录界面时 Wi-Fi 未连接，在本机打开 Xfce 的连接编辑器。家庭 WPA-PSK/SAE 网络在 `Wi-Fi Security` 中选择为所有用户保存密码，重新连接，再测试一次。这样密码由系统连接配置保存，开机时即可使用。有线连通并在登录界面确认 SSH 可用后，正常关机断电，拆下 AX210 和其蓝牙内部 USB 线，再用有线重验。若 DHCP 地址变了，把客户端 SSH 别名指向新的地址。
 
-用 `hostnamectl --static` 核 `jackywang-xubuntu-max`。执行 `sudo apt install openssh-server tmux`，用 `sudo sshd -t` 校验配置。Ubuntu 26.04 默认 socket 激活，执行 `sudo systemctl enable --now ssh.socket` 并用 `ss -ltn 'sport = :22'` 确认监听。用本机控制台把公钥放入 `jackywang` 的 `~/.ssh/authorized_keys`，以第二条 SSH 连接验证后再关闭密码登录。重启后先停在登录界面，从 Mac 验证 Wi-Fi 与 SSH 能自行恢复。把 [SSH 样例](ssh_config.example)的 Host 块合并到客户端 `~/.ssh/config`，将各块的 `HostName` 填为保留 IP 或实际可解析的 LAN DNS 名。`ssh jackywang-xubuntu-max` 或 `ssh z8` 都使用登录用户 `jackywang`。RDP 和推理端口按需走 `ssh -NT z8-ports`。Linux 客户端访问编译农场用 `ssh -NT z8-build`，客户端的 18980、18983 分别转到 max 的 8980 和 8983。
+用 `hostnamectl --static` 核 `jackywang-xubuntu-max`。执行 `sudo apt install openssh-server tmux`，用 `sudo sshd -t` 校验配置。Ubuntu 26.04 默认 socket 激活，执行 `sudo systemctl enable --now ssh.socket` 并用 `ss -ltn 'sport = :22'` 确认监听。用本机控制台把公钥放入 `jackywang` 的 `~/.ssh/authorized_keys`，以第二条 SSH 连接验证后再关闭密码登录。重启后先停在登录界面，从 Mac 验证当前网络与 SSH 能自行恢复。把 [SSH 样例](ssh_config.example)的 Host 块合并到客户端 `~/.ssh/config`，将各块的 `HostName` 填为保留 IP 或实际可解析的 LAN DNS 名。`ssh jackywang-xubuntu-max` 或 `ssh z8` 都使用登录用户 `jackywang`。RDP 和推理端口按需走 `ssh -NT z8-ports`。Linux 客户端访问编译农场用 `ssh -NT z8-build`，客户端的 18980、18983 分别转到 max 的 8980 和 8983。
 
 ## xrdp
 

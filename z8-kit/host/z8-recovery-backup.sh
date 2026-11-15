@@ -5,14 +5,33 @@ umask 077
 die() { printf '%s\n' "$*" >&2; exit 1; }
 (( EUID == 0 )) || die 'Run this backup as root.'
 mode=${1:-backup}
-if (( $# > 1 )) || [[ "$mode" != backup && "$mode" != --refresh-boot && "$mode" != --stdout ]]; then
-    die 'Usage: z8-recovery-backup [--refresh-boot | --stdout]'
-fi
+if (( $# > 1 )); then die 'Use one mode at a time.'; fi
+case "$mode" in
+    backup|--refresh-boot|--stdout|--apt-pre|--apt-post) ;;
+    *) die 'Usage: z8-recovery-backup [--refresh-boot | --stdout | --apt-pre | --apt-post]' ;;
+esac
 
 boot_dir=/boot
+apt_history=/var/log/apt/history.log
+apt_state=/run/z8-fit-apt.state
 lock=/run/z8-recovery-backup.lock
+# APT holds its frontend lock across the two hooks. Invalidate a pre-hook left
+# by an interrupted transaction before attempting the FIT lock.
+if [[ "$mode" == --apt-pre ]]; then rm -f -- "$apt_state"; fi
 exec 9>"$lock"
-flock -n 9 || die 'Another recovery backup is running.'
+if [[ "$mode" == --apt-* ]]; then
+    flock -w 30 9 || die 'Timed out waiting for FIT backup.'
+else
+    flock -n 9 || die 'Another recovery backup is running.'
+fi
+
+if [[ "$mode" == --apt-post ]]; then
+    [[ -f "$apt_state" ]] || exit 0
+    read -r old_device old_inode old_size old_hash < "$apt_state"
+    rm -f -- "$apt_state"
+    [[ "$old_size" =~ ^[0-9]+$ && "$old_hash" =~ ^[0-9a-f]{64}$ ]] ||
+        die 'Invalid FIT APT pre-check state.'
+fi
 
 boot_source=$(findmnt -rn -M "$boot_dir" -t ext4 -o SOURCE) ||
     die 'The ext4 FIT boot partition must be mounted.'
@@ -43,6 +62,7 @@ volume="$work/fit"
 stage=
 pending_link=
 mounted=0
+# shellcheck disable=SC2329 # The EXIT trap runs this after every mounted path.
 cleanup() {
     local status=$?
     trap - EXIT
@@ -57,27 +77,117 @@ cleanup() {
     rm -rf --one-file-system -- "$work" || status=1
     exit "$status"
 }
-trap cleanup EXIT
+trap 'cleanup' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p -- "$volume" "$snapshot"/{gpt,config,hardware,storage}
 
-(
-    cd -- "$boot_dir"
+boot_status=ok
+if ! (
+    cd -- "$boot_dir" || exit 1
     # GRUB changes grubenv during one-shot boots. Comparing it would fail on a healthy FIT.
     find . -type f ! -path './grub/grubenv' -print0 |
         LC_ALL=C sort -z | xargs -0 -r sha256sum --
-) > "$snapshot/boot.sha256"
-[[ -s "$snapshot/boot.sha256" ]] || die 'No boot files were hashed.'
+) > "$snapshot/boot.sha256" 2> "$work/boot-read-errors"; then
+    boot_status=unreadable
+elif [[ ! -s "$snapshot/boot.sha256" ]]; then
+    boot_status=unreadable
+    printf 'No boot files were hashed.\n' > "$work/boot-read-errors"
+fi
+if [[ -s "$work/boot-read-errors" ]]; then
+    mv -- "$work/boot-read-errors" "$snapshot/boot-read-errors.txt"
+fi
 
-if [[ "$mode" != --stdout ]]; then
+publish_file() {
+    local source=$1 target=$2 pending
+    pending=$(mktemp "$target.XXXXXX")
+    if ! cp -- "$source" "$pending" || ! mv -Tf -- "$pending" "$target"; then
+        rm -f -- "$pending"
+        return 1
+    fi
+}
+
+refresh_after_apt() {
+    [[ "$boot_status" == ok ]] || die 'Cannot read boot files after APT. FIT baseline unchanged.'
+    [[ -s "$volume/boot.sha256" ]] || die 'FIT boot baseline disappeared during APT.'
+    local hash device inode size
+    hash=$(sha256sum < "$volume/boot.sha256")
+    [[ "${hash%% *}" == "$old_hash" ]] || die 'FIT boot baseline changed during APT.'
+    if cmp -s -- "$snapshot/boot.sha256" "$volume/boot.sha256"; then return 0; fi
+
+    read -r device inode size < <(stat -c '%d %i %s' -- "$apt_history")
+    [[ "$device" == "$old_device" && "$inode" == "$old_inode" && "$size" -gt "$old_size" ]] ||
+        die 'APT history changed identity or has no new transaction. FIT baseline unchanged.'
+    # Post-Invoke may run after a dpkg failure. Require one finished, successful history record.
+    if ! tail -c "+$((old_size + 1))" -- "$apt_history" | awk '
+        /^Start-Date:/ { starts++ }
+        /^End-Date:/ { ends++ }
+        /^Error:/ { failed = 1 }
+        /^(Install|Upgrade|Downgrade|Remove|Purge|Reinstall):/ { print; packages++ }
+        END { if (starts != 1 || ends != 1 || failed || !packages) exit 1 }
+    ' > "$work/apt-packages"; then
+        die 'No successful, complete package transaction in APT history. FIT baseline unchanged.'
+    fi
+
+    {
+        printf 'updated_at_utc=%s\n' "$(date -u -Is)"
+        printf 'previous_manifest_sha256=%s\n' "$old_hash"
+        hash=$(sha256sum < "$snapshot/boot.sha256")
+        printf 'new_manifest_sha256=%s\n' "${hash%% *}"
+        cat -- "$work/apt-packages"
+    } > "$work/apt-record"
+    publish_file "$work/apt-record" "$volume/boot-baseline-apt.txt"
+    publish_file "$snapshot/boot.sha256" "$volume/boot.sha256"
+    sync -f "$volume"
+    logger -t z8-fit-apt -f "$work/apt-record" || true
+}
+
+if [[ "$mode" == --stdout ]]; then
+    if [[ "$boot_status" == ok ]]; then boot_status=not-compared; fi
+else
     mount -t ext4 -o rw,noatime,nosuid,nodev,noexec "$recovery_device" "$volume"
     mounted=1
-    if [[ "$mode" != --refresh-boot ]]; then
-        cmp -s -- "$snapshot/boot.sha256" "$volume/boot.sha256" ||
-            die 'Boot checksum mismatch or no baseline. Investigate FIT before using --refresh-boot.'
+    case "$mode" in
+        --apt-pre)
+            if [[ "$boot_status" != ok ]] || ! cmp -s -- "$snapshot/boot.sha256" "$volume/boot.sha256"; then
+                die 'Pre-APT boot comparison failed or baseline is missing. FIT baseline unchanged.'
+            fi
+            history_location=$(stat -c '%d %i %s' -- "$apt_history")
+            hash=$(sha256sum < "$snapshot/boot.sha256")
+            printf '%s %s\n' "$history_location" "${hash%% *}" > "$work/apt-state"
+            publish_file "$work/apt-state" "$apt_state"
+            exit 0
+            ;;
+        --apt-post)
+            refresh_after_apt
+            exit 0
+            ;;
+        --refresh-boot)
+            if [[ "$boot_status" == ok ]]; then boot_status=refreshed; fi
+            ;;
+        backup)
+            if [[ "$boot_status" == ok ]]; then
+                if [[ ! -s "$volume/boot.sha256" ]]; then
+                    boot_status=missing-baseline
+                elif ! cmp -s -- "$snapshot/boot.sha256" "$volume/boot.sha256"; then
+                    boot_status=mismatch
+                fi
+            fi
+            ;;
+    esac
+    if [[ -f "$volume/boot.sha256" && "$boot_status" != ok && "$boot_status" != refreshed ]]; then
+        cp -- "$volume/boot.sha256" "$snapshot/boot-baseline.sha256"
+    fi
+    if [[ -f "$volume/boot-baseline-apt.txt" ]]; then
+        cp -- "$volume/boot-baseline-apt.txt" "$snapshot/boot-baseline-apt.txt"
     fi
 fi
+
+printf 'checked_at_utc=%s\nstatus=%s\n' "$(date -u -Is)" "$boot_status" > "$snapshot/boot-check.txt"
+boot_exit=0
+case "$boot_status" in
+    mismatch|unreadable|missing-baseline) boot_exit=1 ;;
+esac
 
 copy_config() {
     local path=$1
@@ -125,7 +235,8 @@ shopt -s nullglob
 for path in /etc/fstab /etc/mdadm/mdadm.conf /etc/default/grub \
     /etc/default/grub.d/*z8*.cfg /etc/dracut.conf.d/*z8*.conf /etc/grub.d/{40_custom,42_z8_recovery} \
     /etc/apt/preferences.d/z8-no-hwe /etc/apt/preferences.d/z8-nvidia-580 \
-    /etc/apt/apt.conf.d/51z8-kernel-manual /etc/udev/rules.d/*z8*.rules /etc/default/irqbalance \
+    /etc/apt/apt.conf.d/{51z8-kernel-manual,99z8-fit-boot} /etc/sudoers.d/z8-recovery-export \
+    /etc/udev/rules.d/*z8*.rules /etc/default/irqbalance \
     /etc/sysctl.d/90-z8-tiering.conf /etc/modprobe.d/*zfs*.conf /etc/z8-infer-cpu.env \
     /etc/z8-storage/{hybrid.tsv,storage.env,pmem-model.env,pmem-kmem.env,recovery-notes.txt,model-manifest.txt} \
     /etc/systemd/system/{z8-*.service,z8-*.timer,z8*.slice,data-buildbarn.mount,data-other.mount,srv-bbindex.mount} \
@@ -141,7 +252,7 @@ infer=/home/jackywang/.config/z8-infer/env.sh
 if [[ -f "$infer" && ! -L "$infer" ]]; then
     mkdir -p "$snapshot/config/home/jackywang/.config/z8-infer"
     while IFS= read -r line; do
-        if [[ "$line" =~ ^export[[:blank:]]+(LLAMA_BUILD|DS41_GGUF|CUDA_VISIBLE_DEVICES|Z8_DRAM_INTERLEAVE|Z8_CUDA_RUNTIME|Z8_NVLINK_P2P|SLOTS|SLOT_CTX|MOE_CACHE_MIB|CACHE_PROMPT)=([[:alnum:]./,:_+-]+)[[:blank:]]*$ ]]; then
+        if [[ "$line" =~ ^export[[:blank:]]+(LLAMA_BUILD|DS41_GGUF|CUDA_VISIBLE_DEVICES|Z8_DRAM_INTERLEAVE|Z8_CUDA_RUNTIME|Z8_NVLINK_P2P|SLOTS|SLOT_CTX|KV_TYPE|KV_OFFLOAD|MOE_CACHE_MIB|CACHE_PROMPT)=([[:alnum:]./,:_+-]+)[[:blank:]]*$ ]]; then
             printf 'export %s=%q\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
         fi
     done < "$infer" > "$snapshot/config$infer"
@@ -171,7 +282,7 @@ fi
 ) > "$snapshot/SHA256SUMS"
 if [[ "$mode" == --stdout ]]; then
     tar -C "$snapshot" -cf - .
-    exit 0
+    exit "$boot_exit"
 fi
 
 name=$(date -u +%Y%m%dT%H%M%S.%NZ)
@@ -180,10 +291,8 @@ cp -a -- "$snapshot/." "$stage/"
 (cd -- "$stage"; sha256sum --check --strict --quiet SHA256SUMS)
 mv -T -- "$stage" "$volume/$name"
 stage=
-if [[ "$mode" == --refresh-boot ]]; then
-    new_baseline=$(mktemp "$volume/.boot-sha256.XXXXXX")
-    cp -- "$snapshot/boot.sha256" "$new_baseline"
-    mv -Tf -- "$new_baseline" "$volume/boot.sha256"
+if [[ "$boot_status" == refreshed ]]; then
+    publish_file "$snapshot/boot.sha256" "$volume/boot.sha256"
 fi
 pending_link="$volume/.latest.$name"
 ln -s -- "$name" "$pending_link"
@@ -204,3 +313,7 @@ sync -f "$volume"
 umount "$volume"
 mounted=0
 printf 'Verified recovery metadata backup: %s\n' "$name"
+if (( boot_exit )); then
+    printf 'FIT boot check: %s. See boot-check.txt in snapshot %s.\n' "$boot_status" "$name" >&2
+fi
+exit "$boot_exit"

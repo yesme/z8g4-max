@@ -6,7 +6,7 @@
 
 I1 接两只 USB 设备。**三星 Portable SSD T3 250 GB（Ventoy）** 启动 `xubuntu-26.04.1-desktop-amd64.iso` 并存放安装 YAML，**三星 FIT 128 GB** 是引导盘的写入目标。T1–T5 的临时 Xubuntu 和验机记录留在 SanDisk CZ430 128 GB。按 [T5 交接步骤](FIRST-BOOT.md#2-t5-验算力坞) 保存记录并关机，拔下 SanDisk，再接 FIT。
 
-T5 通过后关机断电，断开 V100、七块 HC620 和 D4800X。保留 DDR4、PMem、P620、P4618 和接好天线的 AX210。用 F9 选 Ventoy 的 UEFI 入口，在菜单选现有 Xubuntu 26.04.1 Desktop ISO。ISO 的 SHA-256 可在 Windows 用 `Get-FileHash -Algorithm SHA256` 核对。 [Xubuntu 26.04.1 ISO 与 SHA256SUMS](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/)
+T5 通过后关机断电，断开 V100、七块 HC620 和 D4800X。保留 DDR4、PMem、P620 和 P4618。优先接板载网口；还在用无线过渡时保留接好天线的 AX210。用 F9 选 Ventoy 的 UEFI 入口，在菜单选现有 Xubuntu 26.04.1 Desktop ISO。ISO 的 SHA-256 可在 Windows 用 `Get-FileHash -Algorithm SHA256` 核对。 [Xubuntu 26.04.1 ISO 与 SHA256SUMS](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/)
 
 正式安装时，图形界面负责导入 YAML 和确认，Subiquity 把明确列出的磁盘动作交给 Curtin 创建阵列和文件系统。桌面安装器的 [#1210](https://github.com/canonical/ubuntu-desktop-provision/issues/1210) 涉及手动分区页找不到预建 md 阵列。I1 直接走自动安装，P4618 在这一阶段由安装器分区和组阵。 [桌面安装器导入配置](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#type-of-installation) · [Subiquity RAID 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/howto/configure-storage.html#raid)
 
@@ -63,7 +63,7 @@ fi
 
 ### I1.3 在桌面安装器导入并确认写盘
 
-1. 进 **Try Xubuntu**，从 Xfce 面板连 AX210 Wi-Fi。打开终端，更新 APT 列表并给当前 Live 会话补上 `mdadm`。安装器需要它创建 RAID0，目标系统也需要通过 APT 安装它以便下次开机组阵。样例选择标准 `xubuntu-desktop` 源，APT 找不到可用镜像时中止。 [镜像软件包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Curtin 的存储依赖](https://github.com/canonical/curtin/blob/main/curtin/block/deps.py) · [安装源和 APT 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#source)
+1. 进 **Try Xubuntu**，用 [有线优先的 Live 联网步骤](BURN-IN.md#首次-live-联网与临时验机系统)确认有线或 AX210 过渡联网。打开终端，更新 APT 列表并给当前 Live 会话补上 `mdadm`。安装器需要它创建 RAID0，目标系统也需要通过 APT 安装它以便下次开机组阵。样例选择标准 `xubuntu-desktop` 源，APT 找不到可用镜像时中止。 [镜像软件包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Curtin 的存储依赖](https://github.com/canonical/curtin/blob/main/curtin/block/deps.py) · [安装源和 APT 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#source)
 
    ```bash
    sudo apt update && sudo apt install mdadm
@@ -89,7 +89,7 @@ fi
 
 5. 看到 `Imported YAML matches`，三个 `ID_SERIAL` 与 T4 一致，根卷用两个 P4618 端点且 FIT 有 EFI、`/boot`、`Z8TOOLS`、`Z8RECOVERY` 四分区，才运行 `sudo touch /run/z8-storage-confirmed`。回到图形界面，在 **Ready to install** 再确认后点 **Install**。这会重建 FIT 和两个 P4618 端点的分区表。若导入报错或身份不一致，停在这一步检查。需要重新导入时先重启到新的 Live 会话，再从 I1.3 开始。这样会重新运行 early-commands 等待点。 [按序列号匹配磁盘](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#disk-selection-extensions) · [桌面安装器的最终确认](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#ready-to-install)
 
-6. 安装配置设了 `shutdown: poweroff`。安装器完成并关机后拔下 **Ventoy**，FIT 留在原 USB 口。再开机进入装好的 Xubuntu Desktop。必要时从 F9 选择指向 FIT 的 UEFI 引导项。用 Xfce 网络图标重新连 Wi-Fi，再执行 I1.4。
+6. 安装配置设了 `shutdown: poweroff`。安装器完成并关机后拔下 **Ventoy**，FIT 留在原 USB 口。再开机进入装好的 Xubuntu Desktop。必要时从 F9 选择指向 FIT 的 UEFI 引导项。核当前有线连接。无线过渡时从 Xfce 网络图标重连，再执行 I1.4。
 
 ### I1.4 核验 FIT 引导并做救援验证
 
@@ -158,7 +158,7 @@ sudo umount /mnt/z8root
 
 实际维修时，按根、`/boot`、ESP 的顺序挂载，再 bind-mount `/dev`、`/proc`、`/sys`、`/run` 并 chroot 检查；只有实际引导文件损坏时才重装引导。阵列成员失效按根备份重建。
 
-用本机控制台确认 AX210 已连接 Wi-Fi，安装基础组件，然后按 [远程入口](../remote/README.md) 做 I2。先从另一台机器验 SSH 与 xrdp，之后才动显卡驱动。
+用本机控制台确认板载有线已连接；无线过渡时用 AX210。安装基础组件，然后按 [远程入口](../remote/README.md) 做 I2。先从另一台机器验 SSH 与 xrdp，之后才动显卡驱动。
 
 ```bash
 sudo apt update
@@ -267,7 +267,7 @@ sudo grub-editenv list
 sudo systemctl reboot
 ```
 
-新内核起来后，核 `uname -r`、`grub-editenv list` 中 `next_entry` 已消费，并从客户端验证 Wi-Fi SSH。再查 `nvidia-smi -L`、`zpool status -x z8data`、`sudo dmsetup status --target zoned` 的七个成员、模型卷的实际挂载点、`sudo daxctl list` 两路 online 和 `sudo journalctl -k -b -p err`。成功才 `sudo grub-set-default "$new_entry"`，并执行 `sudo z8-recovery-backup --refresh-boot`，再[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。若试启失联，机旁优先用控制台重启或从 GRUB 选择旧项。先在本机验证一次性项确实被消费，才依赖下一次重启回旧项。
+新内核起来后，核 `uname -r`、`grub-editenv list` 中 `next_entry` 已消费，并从客户端验证 SSH。再查 `nvidia-smi -L`、`zpool status -x z8data`、`sudo dmsetup status --target zoned` 的七个成员、模型卷的实际挂载点、`sudo daxctl list` 两路 online 和 `sudo journalctl -k -b -p err`。成功才 `sudo grub-set-default "$new_entry"`，执行 `sudo z8-recovery-backup`，再[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。APT 正常改动启动文件时由 [FIT 钩子](FIT-RECOVERY.md#apt-改动启动文件时自动更新基线)更新校验基线。手工改动引导文件时，验过后用 `sudo z8-recovery-backup --refresh-boot`。若试启失联，机旁优先用控制台重启或从 GRUB 选择旧项。先在本机验证一次性项确实被消费，才依赖下一次重启回旧项。
 
 ## 算力坞验收
 

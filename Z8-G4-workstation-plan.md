@@ -1,6 +1,6 @@
 # HP Z8 G4 双路工作站装机与部署计划
 
-2026 年 11 月 16 日 · v2.20 实施版
+2026 年 11 月 16 日 · v2.21 实施版
 
 主机名 `jackywang-xubuntu-max`，登录用户 `jackywang`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。槽 5 的实物为 Intel D4800X 1.5 TB U.2，已硬改为单口 Gen3 x4，装在 PCIe 转接卡上并加风扇。HC620 与 D4800X 组成可重建的冷 CAS 和归档池，冷索引放在 D4800X 的独立 XFS。模型从首装开始直接放在 App Direct。PMem 从 T3 起使用正式条带。
 
@@ -17,12 +17,12 @@
 | 部分 | 配置 |
 |---|---|
 | 操作系统 | 从现有 Ventoy 的 Xubuntu 26.04.1 Desktop ISO 导入本地 YAML，直接安装桌面和 md RAID0。FIT 1 GiB ESP、8 GiB `/boot`、24 GiB `Z8TOOLS`、8 GiB `Z8RECOVERY`，其余约 78 GiB 留空。P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
-| 主板与驱动 | 纯 UEFI，Secure Boot、SNC 关，NUMA、HT、ASPM、SATA 电源管理、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
-| 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，每路 6 核，HT 伙伴留空 |
+| 主板与驱动 | 纯 UEFI，Secure Boot、SNC、ASPM 和 SATA 电源管理关，NUMA、HT、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
+| 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，默认每路 2 核，运行时 HT 伙伴留空，停服后全部归还 |
 | 冷库 | D4800X p1–p7 各 96 GiB，七组 dm-zoned → RAIDZ1。p8 192 GiB，做 special 与内嵌 ZIL；p9 约 533 GiB，做冷索引 XFS。池开启 `autotrim`，冷库用 `zle`，普通数据用 `zstd-3` |
 | 构建 | max 冷 CS 取冷数据集的 `refreservation`，首装按空池可用量的 55% 向下取整（约 41 TiB）。P4618 热 CS 512 GiB。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 运行权威 AC/CAS 和唯一调度器。Linux 与 Darwin 在同一实例下用平台属性分流 |
-| 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、2×8K、8 GiB GPU 专家缓存；显存限制时减缓存或留单槽，单槽无法使用时切 Xolotl Buster |
-| 远程 | AX210 Wi-Fi、DHCP 保留、SSH/tmux，独立图形用 xrdp/Xfce，控制本机桌面用 P620 的 X11/NVENC + Sunshine/Moonlight |
+| 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、8 GiB GPU 专家缓存，按显存与工具闭环结果降档 |
+| 远程 | 板载有线为主，AX210 Wi-Fi 过渡，DHCP 保留、SSH/tmux，独立图形用 xrdp/Xfce，控制本机桌面用 P620 的 X11/NVENC + Sunshine/Moonlight |
 
 T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确认 1017 能在四卡加载并完成工具往返。I1 确认 FIT 冷启动可找到 RAID0，I4 确认 ZFS 老化写入和缺盘行为，I5 确认 Buck2 缓存与物化，I6–I7 确认推理显存、工具闭环和实际混合负载。只有未通过的项目进入对应排查或回退。
 
@@ -36,10 +36,10 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 
 | 顺序 | 这一步接什么 | 做到什么再继续 |
 |---|---|---|
-| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P620、槽 7 AX210 和天线、显示器、Ventoy 与可清空的 SanDisk | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 用 AX210 先连 Wi-Fi，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-wi-fi-与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
+| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P620、显示器、网线（无线过渡时加槽 7 AX210 和天线）、Ventoy 与可清空的 SanDisk | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 先接板载有线，缺网线时用 AX210，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-联网与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
 | **T2 · DDR4** | 沿用 T1 硬件，从 Ventoy 启动 Memtest86+，再回 SanDisk 上的临时 Linux | 每路 96 GiB、共 192 GiB。Memtest86+ 默认测试集四个完整 pass，跳过 Rowhammer。再跑 Linux 144 GiB、4 小时，比较前后的 ECC 与 CPU 硬件事件。 [怎么读硬件错误](z8-kit/host/BURN-IN.md#怎么读硬件错误) |
 | **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。复测混插 DDR4，再验 DAX 与裸 devdax。两路 devdax 转 kmem 后，逐路确认 DDR4 到慢节点的下沉并记录 kmem 冷启上线时间。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [kmem 冷启计时](z8-kit/host/PMEM.md#t3-记录-kmem-冷启动时间) |
-| **T4 · 存储** | 槽 1 加 P4618，确认 Gen3 x8 上行、两个 x4 下行和两个各约 3.2 TB 的 NVMe 端点，再加槽 5 的 D4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验 AX210 与七盘同跑。 [P4618 链路检查](z8-kit/host/BURN-IN.md#p4618-链路与双控制器) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
+| **T4 · 存储** | 槽 1 加 P4618，确认 Gen3 x8 上行、两个 x4 下行和两个各约 3.2 TB 的 NVMe 端点，再加槽 5 的 D4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验当前网络与七盘同跑。 [P4618 链路检查](z8-kit/host/BURN-IN.md#p4618-链路与双控制器) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
 | **T5 · 算力坞** | 临时 Linux 先装 NVIDIA 显卡驱动。主机硬件通过后断电，槽 2/3 装直通卡，接 V100 | 逐卡 → 每槽两卡 → 四卡，验 Gen3 x8、六对 NVLink P2P、NCCL、单卡/四卡拷机、pinned H→D。最后跑 1017 冒烟，再关机断开 V100，转正式安装。 [T5 推理冒烟](z8-kit/host/BURN-IN.md#t5-末的-1017-推理冒烟) |
 
 ### 第二阶段 · 正式安装和上线
@@ -47,11 +47,11 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 | 顺序 | 装什么与验证方式 |
 |---|---|
 | **I1 · 操作系统** | 断开 V100 与数据盘，USB 只接三星 T3（Ventoy）和三星 FIT。从 Xubuntu Desktop Live 联网补 `mdadm`，导入 Ventoy 上的 `autoinstall.yaml`，复核序列号后重建 FIT 的 EFI、`/boot` 和 P4618 RAID0/XFS 根。核首启、Dracut、FIT 的 GRUB 救援菜单与元信息备份。 [FIT 救援方案](z8-kit/host/FIT-RECOVERY.md) [系统盘安装](z8-kit/host/INSTALL.md) |
-| **I2 · 远程入口** | AX210 连 Wi-Fi，设开机自动连接和 DHCP 地址保留，再验 SSH 公钥、tmux 与 xrdp/Xfce。Sunshine 的 P620 硬件编码放 I3。 [远程入口](z8-kit/remote/README.md) |
+| **I2 · 远程入口** | 板载有线优先，缺网线时用 AX210。设开机自动联网和 DHCP 地址保留，再验 SSH 公钥、tmux 与 xrdp/Xfce。Sunshine 的 P620 硬件编码放 I3。 [远程入口](z8-kit/remote/README.md) |
 | **I3 · NVIDIA 显卡驱动与复接 V100** | V100 仍断开，在 Xubuntu 装 `nvidia-driver-580`。这是本方案为 P620 和 V100 选用的 NVIDIA Linux 显卡驱动。重启后用 P620 验桌面、Sunshine/NVENC 和 SSH，再关机接回 V100，核四卡枚举、NVLink 与快速 CUDA/NCCL。 [驱动安装和锁分支](z8-kit/host/INSTALL.md#安装并锁定-nvidia-显卡驱动) |
 | **I4 · 存储与 PMem** | 接回已慢扫的盘，首次划 D4800X 九分区，建七个 dm-zoned target 与 RAIDZ1，按 GUID 导入和挂载。跑持续写、ZFS scrub、两种缺盘冷启和恢复。按 T3 留下的 namespace UUID 恢复 DAX 模型卷和 kmem。 [存储](z8-kit/storage/README.md) · [PMem](z8-kit/host/PMEM.md) |
-| **I5 · Buildbarn 与 Buck2** | max 按每路预留 6 核安装 CPU slice 和 runner 配置，依次启动 AC/CAS、调度器和 Linux worker。接入 mini 及 Mac 的边缘存储与 worker，验证一次 Linux/Darwin 跨平台构建、单测及按需物化。 [CPU 分核安装](z8-kit/host/CPU-PLACEMENT.md#生成并安装) · [Buildbarn](z8-kit/buildbarn/README.md) |
-| **I6 · 推理与 harness** | 用 llama.cpp v1.0.0、四张 V100 和一套 PMem 上的 1017 权重，验证双槽、工具闭环和实际 harness，再保存参数并启动推理服务。OMP、Pi、DSH 可用已有密钥直连 DeepSeek 官方 API。各 CLI 验证账号、模型和工作树。 [推理](z8-kit/inference/README.md) · [服务配置](z8-kit/host/CPU-PLACEMENT.md#启停本地模型) · [CLI](z8-kit/harness/README.md) |
+| **I5 · Buildbarn 与 Buck2** | max 按每路预留 2 核安装 CPU slice 和 88 并发 runner 配置，依次启动 AC/CAS、调度器和 Linux worker。接入 mini 及 Mac 的边缘存储与 worker，验证一次 Linux/Darwin 跨平台构建、单测及按需物化。 [CPU 分核安装](z8-kit/host/CPU-PLACEMENT.md#生成并安装) · [Buildbarn](z8-kit/buildbarn/README.md) |
+| **I6 · 推理与 harness** | 用 llama.cpp v1.0.0、四张 V100 和一套 PMem 上的 1017 权重，验 128K 单槽目标、工具闭环和实际 harness，再保存参数并启动推理服务。OMP、Pi、DSH 可用已有密钥直连 DeepSeek 官方 API。各 CLI 验证账号、模型和工作树。 [推理](z8-kit/inference/README.md) · [服务配置](z8-kit/host/CPU-PLACEMENT.md#启停本地模型) · [CLI](z8-kit/harness/README.md) |
 | **I7 · 正式联调与恢复** | 冷启动检查 SSH、存储链和远程显示。验证本地 DeepSeek 启停时让出和归还 I5 已配置的核心，然后做一次 8 小时的编译、推理和 I/O 混合负载。保存引导、盘表、GUID、驱动/内核版本、服务配置及项目数据的独立副本。 [CPU 分核与启停](z8-kit/host/CPU-PLACEMENT.md) · [整机拷机](z8-kit/host/BURN-IN.md) |
 
 DIMM 上的 **PMem100** 在 T3 验，测试时提交的 goal 和 namespace 供正式系统沿用。槽 5 的 **D4800X** 是 NVMe SSD，在 T4 随 HC620 一起做裸盘检查，正式安装 I4 再用于建池。
@@ -68,7 +68,7 @@ DIMM 上的 **PMem100** 在 T3 验，测试时提交的 goal 和 namespace 供�
 | 4 | P620，主显示 |
 | 5 | D4800X，Gen3 x4 |
 | 6 | 空，被槽 5 的转接卡和风扇挡住 |
-| 7 | AX210，蓝牙经内部 USB |
+| 7 | AX210 过渡，蓝牙经内部 USB。有线确认后拔卡，槽位空出 |
 | SATA0–6 / SATA7 | 7×HC620 SATA / 原装光驱 |
 
 F10 首装使用 **纯 UEFI，Legacy/CSM 和 Secure Boot 都关闭**。Fast Boot 关、SATA Controller Enable / RAID Mode Disable、SATA0–7 打开、Primary Graphics Slot 4、Slot 2/3 Bifurcation x8/x8、NUMA 和 HT 开、SNC 关。DDR4-only 先在 CPU0 和 CPU1 **各**插 DIMM 1/3/5/8/10/12。混插时 DDR4 留原位，CPU0 和 CPU1 各往 DIMM 2/4/6/7/9/11 加 PMem，再配置 App Direct。槽号以 CPU0/CPU1 各自的主板丝印为准。 [F10 配置手册](z8-kit/host/BIOS.md) · [HP QuickSpecs，双路 192 GB 配置](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=22) · [HP Optane 白皮书，24 条混插](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=22)
@@ -145,15 +145,15 @@ ss -ltn 'sport = :8980'
 | App Direct fsdax（2×258 GiB） | 2 MiB dm-stripe，约 508 GiB 块设备容量，XFS DAX，挂 `/srv/pmem-model`。存一套 GGUF、Engram 与 tokenizer |
 | 两路剩余 App Direct | 各自以可迁移 kmem 上线，启用 memmap on memory 和冷页下沉。活跃推理 KV 由引擎分配 |
 
-**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。共享 arena 交错避免单侧 96 GiB 先耗尽。DAX 文件通过 CPU 访问，普通 DDR4 做 CUDA staging。每路留最后 6 个物理核的主线程给推理。推理运行时普通任务用 80 个逻辑 CPU，停止后回到 92 个；推理核的 HT 伙伴始终留空。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
+**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。共享 arena 交错避免单侧 96 GiB 先耗尽。DAX 文件通过 CPU 访问，普通 DDR4 做 CUDA staging。默认每路留最后 2 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 96 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
 
 ### 推理上线顺序
 
-1. **部署 llama.cpp v1.0.0。** CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、两槽各 8K、专家缓存 8192 MiB、ubatch 32，CPU miss share 0。两路同时做一次真实工具回合。服务端默认开启槽内前缀复用，用固定答案、项目标记与实际命中 token 验证。活跃 KV 使用引擎默认布局。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
-2. **显存压力才降级。** 先将专家缓存减到 4096 MiB；第二槽仍挤不下时保留一个 8K 槽。单槽若仍无法跑通，或实际工单速度无法使用，切 Xolotl Buster 四卡单用户，复用同一份 GGUF。 [Xolotl 回退](z8-kit/inference/README.md#xolotl-buster-单用户回退)
+1. **部署 llama.cpp v1.0.0。** CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、单槽 128K f16 GPU KV、专家缓存 8192 MiB、ubatch 32，CPU miss share 0。默认启用槽内前缀复用，以真实工具往返、前缀命中 token 和输出验证。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
+2. **显存压力按阶梯降档。** 依次试 q8 KV、4 GiB 专家缓存、q4 KV、64K 和主机 KV。128K 目标仍达不到再评估 1Cat。Xolotl Buster 留作短上下文单用户回退，使用每路 6 核。 [上下文降档](z8-kit/inference/README.md#上下文降档与验收)
 3. **1Cat 只用于有明确需求的长上下文。** #1277 的 512K 成绩用 4×32 GiB，和本机 4×16 GiB 的预算不同。原版 Strata 的 1017 包未列 SM70，Xolotl 提供 Buster 构建路径。upstream vLLM 1017 公版配方需至少 8×80 GB。 [1Cat 上游实测](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Strata 1017 支持](https://github.com/Niko1221/Strata/blob/main/docs/DEEPSEEK41.md) · [vLLM 1017 配方](https://github.com/vllm-project/vllm/blob/main/recipes/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml)
 
-I6 放行看 20 次连续工具往返、SSE、项目标记和零 OOM/Xid。真实 harness 固定开销超过 4K 或 8K 槽先满时，改验单槽 16K。两路都能流式推进就保留并发。I7 跑一次正式配置的 8 小时混合负载并记录 p95 TTFT、decode 和构建完成时间。 [推理放行](z8-kit/inference/README.md#i6-推理放行)
+I6 放行看近满上下文时每卡至少余 2 GiB、20 次连续工具往返、完整 SSE 和零 OOM/Xid。记录首次填充时间和同前缀第二轮首字延迟。双槽是可选项，每槽默认 64K。I7 跑一次正式配置的 8 小时混合负载并记录 p95 TTFT、decode 和构建完成时间。 [推理放行](z8-kit/inference/README.md#i6-推理放行)
 
 ## 5. 多 CLI 工作环境
 
@@ -186,7 +186,7 @@ I6 放行看 20 次连续工具往返、SSE、项目标记和零 OOM/Xid。真�
 
 Buildbarn `readCaching` 将首次冷读回填 P4618，重复读直接走热层。上传由 Buildbarn 写冷 CS，D4800X 先吸收下层写入。冷块轮转由 Buildbarn 管，ZFS 回收由 `autotrim` 通知 mapper。 [Buildbarn readCaching 实现](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
-I5 默认启用 max 的 Linux worker，首装 72 并发、72 CPU 时间额度、512 GiB runner 上限，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
+I5 默认启用 max 的 Linux worker，首装 88 并发、88 CPU 时间额度、512 GiB runner 上限，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
 
 Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 状态独立。P4618 XFS 支持 reflink，本地已有的产物在同一文件系统内可以共享区段。需要共享区段时，对已物化的产物用 `cp --reflink=always` 显式导出，再用 `filefrag -sv` 确认。跨树复用构建结果走 Buildbarn，同一 blob 各次 RPC 下载分别写入各自工作树。 [Git 与 reflink 操作](z8-kit/buildbarn/README.md#git-worktree-与-xfs-reflink) · [Buck2 CAS 下载实现](https://github.com/facebook/buck2/blob/main/app/buck2_execute_impl/src/materializers/deferred/io_handler.rs#L199)
 
@@ -200,7 +200,7 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 
 | 入口 | 用途 | 初始设置 |
 |---|---|---|
-| SSH + tmux | CLI、文件管理、维护 | 首装用 AX210 Wi-Fi。客户端合并 SSH 样例后，`ssh jackywang-xubuntu-max` 以 `jackywang` 登录。公钥先双会话验证，按需用 SSH 隧道访问 RDP 与推理 |
+| SSH + tmux | CLI、文件管理、维护 | 首装优先用板载有线，缺网线时用 AX210。客户端合并 SSH 样例后，`ssh jackywang-xubuntu-max` 以 `jackywang` 登录。公钥先双会话验证，按需用 SSH 隧道访问 RDP 与推理 |
 | Sunshine + Moonlight | 控制 P620 上的本机 XFCE/X11 显示会话 | 接真实或兼容虚拟屏，固定 1080p60 H.264、P620 NVENC 和 X11 捕获。验证登录用户权限、音频、鼠标键盘、重启后可连接；只在私有网络开放所需端口 |
 | xrdp + xorgxrdp + XFCE | 独立图形登录 | 以 `jackywang` 登录 Xorg，`~/.xsession` 通过 `dbus-run-session` 启动 Xfce。分别在本机控制台已登录和未登录时验证。默认监听 loopback，通过 SSH tunnel 连接 |
 
@@ -218,6 +218,6 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 4. **I4–I5 正式存储和服务。** 建池后用同一 512 GiB 文件跑三遍顺序覆盖，在测试文件仍在池中时 scrub。做单 HC620、整卡 D4800X 缺席演练及恢复。挂载通过后上线 Z8 Buildbarn，再验 mini 与 Mac 的边缘读缓存和两平台远程执行。验证 SSH、Sunshine 与 xrdp。
 5. **I7 整机。** 8 小时内轮流发 Buck2 冷读、热读和新上传，同时运行指向本机 1017 的探针或 OMP 本地 profile，并使用 SSH 和 RDP。保存启动期和混合负载的 kernel、RAS、NVMe/SMART、ZFS、NUMA 与 TTFT 记录。 [逐条命令与结果判读](z8-kit/host/BURN-IN.md)
 
-在有 `systemctl` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖七盘齐全、缺一盘、缺两盘、p8 缺席、拒绝拆除已导入池的映射、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
+在有 `systemctl` 和 `apt-config` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖七盘齐全、缺一盘、缺两盘、p8 缺席、拒绝拆除已导入池的映射、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
 
 此前部署包已在 Ubuntu 26.04 用户空间用占位可执行文件检查 systemd 依赖，也核过官方 Live 包清单、Ubuntu 7.0.0-43 amd64 相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、整机安装、BIOS、PMem 上线时间、数据池和推理吞吐均需在目标 Z8 上确认。

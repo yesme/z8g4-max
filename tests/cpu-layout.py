@@ -1,6 +1,8 @@
 import contextlib
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from unittest.mock import patch
@@ -26,9 +28,11 @@ with tempfile.TemporaryDirectory() as temp:
 
     cores = layout.read_cores(cpus)
     assert [len(cores[socket]) for socket in (0, 1)] == [26, 26]
-    for count in (4, 6, 8):
+    for count in (2, 4, 6, 8):
         output = root / f"generated-{count}"
-        args = [str(script), str(output), "--infer-per-socket", str(count)]
+        args = [str(script), str(output)]
+        if count != 2:
+            args += ["--infer-per-socket", str(count)]
         with (
             patch.object(layout, "read_cores", return_value=cores),
             patch.object(sys, "argv", args),
@@ -45,13 +49,31 @@ with tempfile.TemporaryDirectory() as temp:
         siblings = {cpu + 52 for cpu in reserved}
         assert int(values["Z8_INFER_THREADS"]) == len(reserved)
         assert layout.parse_cpu_list(values["Z8_IRQ_BANNED_CPUS"]) == reserved | siblings
-        assert len(idle) == 104 - 2 * count and len(build) == 104 - 4 * count
+        assert idle == set(range(104)) and len(build) == 104 - 4 * count
         assert {0, 52}.issubset(build)
-        assert idle - build == reserved and set(range(104)) - idle == siblings
+        assert idle - build == reserved | siblings
         assert workers == reserved - {26 - count, 52 - count}
         assert f"AllowedCPUs={layout.cpu_list(reserved)}" in (output / "z8infer.slice").read_text(encoding="utf-8")
         assert "MemoryLow=160G\n" in (output / "z8infer.slice").read_text(encoding="utf-8")
         assert (output / "10-z8-cpu.conf").read_text(encoding="utf-8") == f"[Slice]\nAllowedCPUs={layout.cpu_list(idle)}\n"
+
+
+    # Exercise the same reserve/restore entry points used by the service.
+    defaults = root / "generated-2/z8-infer-cpu.env"
+    mode = root / "cpu-mode.sh"
+    source = Path("z8-kit/host/cpu-mode.sh").read_text(encoding="utf-8")
+    mode.write_text(source.replace("/etc/z8-infer-cpu.env", str(defaults)), encoding="utf-8")
+    mock = root / "systemctl"
+    mock.write_text('#!/bin/sh\nprintf "%s\\n" "$*"\n', encoding="utf-8")
+    mock.chmod(0o755)
+    with patch.dict("os.environ", PATH=f"{root}:{os.environ['PATH']}"):
+        running = subprocess.check_output(["bash", str(mode), "reserve"], text=True)
+        stopped = subprocess.check_output(["bash", str(mode), "restore"], text=True)
+    masks = dict(line.split("=", 1) for line in defaults.read_text().splitlines())
+    for state, key in ((running, "Z8_BUILD_CPUS"), (stopped, "Z8_IDLE_CPUS")):
+        assert [line.rsplit("=", 1)[-1] for line in state.splitlines()] == [masks[key]] * 4
+    assert len(layout.parse_cpu_list(masks["Z8_BUILD_CPUS"])) == 96
+    assert len(layout.parse_cpu_list(masks["Z8_IDLE_CPUS"])) == 104
 
     (cpus / "cpu52/topology/thread_siblings_list").write_text("1,52\n", encoding="utf-8")
     try:
@@ -61,4 +83,4 @@ with tempfile.TemporaryDirectory() as temp:
     else:
         raise AssertionError("accepted inconsistent siblings")
 
-print("CPU layout tests passed: dual-socket topology, CPU0 in housekeeping, and 4/6/8-core masks.")
+print("CPU layout tests passed: dual-socket topology, 2/4/6/8-core masks, and 96/104 lifecycle restoration.")

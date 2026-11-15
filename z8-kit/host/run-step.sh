@@ -5,7 +5,7 @@ usage() {
     cat <<'EOF'
 Usage: bash host/run-step.sh STEP [ARGS...]
 
-  t1-network                   Check AX210, network, DNS and APT
+  t1-network                   Check Ethernet or transitional Wi-Fi, DNS and APT
   t1-cpu-prepare               Install microcode and CPU diagnostics before reboot
   t1-cpu                       Run the 30-minute general CPU stress test
   t1-avx                       Run the VNNI preflight and 30-minute stress test
@@ -24,7 +24,7 @@ Usage: bash host/run-step.sh STEP [ARGS...]
   t5-pinned NODE0,NODE1 GPU-UUID,...   Run interleaved DDR4 H-to-D on four V100s
   i1-disks FIT_BY_ID NVME_BY_ID NVME_BY_ID [--imported]   Print the installer matching IDs
   i1-boot                      Collect FIT, md, XFS and Dracut boot evidence
-  i2-remote                    Check current Wi-Fi and local SSH/xrdp listeners
+  i2-remote                    Check active networking and local SSH/xrdp listeners
   i3-cuda GPU-UUID,...          Run P2P and all-reduce on the four V100s (also used at T5)
   i4-status                    Collect pool, mappers and boot journal, including failed units
   i5-worker tiered|xfs         Inspect the selected Buildbarn runner and CPU assignment
@@ -125,8 +125,7 @@ run_step() {
     local -a selected_nodes
     case "$step" in
         t1-network)
-            lspci -nnk | grep -A3 -Ei "Network controller|AX210"
-            rfkill list
+            bash host/inventory.sh --network
             nmcli device status
             ip -br address
             ip route show default
@@ -135,7 +134,7 @@ run_step() {
             ;;
         t1-cpu-prepare)
             sudo apt-get update
-            sudo apt-get install intel-microcode linux-firmware-intel-wireless stress-ng rasdaemon lm-sensors numactl
+            sudo apt-get install intel-microcode linux-firmware-intel-wireless ethtool stress-ng rasdaemon lm-sensors numactl
             ;;
         t1-cpu)
             lscpu

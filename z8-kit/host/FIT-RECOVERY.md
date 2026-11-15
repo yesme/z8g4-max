@@ -86,16 +86,24 @@ I1 完成并验过本机 GRUB 后，用 `sudoedit /etc/z8-storage/recovery-notes
     sudo install -m 0755 host/z8-recovery-backup.sh /usr/local/sbin/z8-recovery-backup
     sudo install -m 0755 host/inventory.sh /usr/local/sbin/z8-inventory
     sudo install -m 0644 host/systemd/z8-recovery-backup.{service,timer} /etc/systemd/system/
+    sudo install -m 0644 host/99z8-fit-boot.example /etc/apt/apt.conf.d/99z8-fit-boot
     sudo systemctl daemon-reload
     sudo z8-recovery-backup --refresh-boot
     sudo systemctl enable --now z8-recovery-backup.timer
     systemctl list-timers z8-recovery-backup.timer
+    apt-config dump | grep -F '/usr/local/sbin/z8-recovery-backup --apt-'
 )
 ```
 
-模型上线后把 GGUF 的 revision 和校验值放 `/etc/z8-storage/model-manifest.txt`。I4、I5、I7 和每次改存储配置后，运行 `sudo z8-recovery-backup`。内核、initramfs、GRUB 更新完成并验过后运行 `sudo z8-recovery-backup --refresh-boot`。
+模型上线后把 GGUF 的 revision 和校验值放 `/etc/z8-storage/model-manifest.txt`。I4、I5、I7 和每次改存储配置后，运行 `sudo z8-recovery-backup`。手工运行 `dracut`、`update-grub` 或修改引导文件后，验证可启动再用 `sudo z8-recovery-backup --refresh-boot` 认可新的基线。
 
-脚本按同盘和卷标核验 `Z8RECOVERY`，每次临时挂载。备份记录写入独立目录、读回验 SHA-256，再原子更新 `latest`，保留最新 12 份。周检对比 EFI 和 `/boot` 的普通文件清单。GRUB 自行改写的 `grubenv` 排除在基线之外。`systemctl --failed` 或 `journalctl -u z8-recovery-backup.service -b` 可查看失败原因。没有主动更新启动文件时出现校验差异，先核磁盘和文件再更新基线。
+脚本按同盘和卷标核验 `Z8RECOVERY`，每次临时挂载。备份记录写入独立目录、读回验 SHA-256，再原子更新 `latest`，保留最新 12 份。周检对比 EFI 和 `/boot` 的普通文件清单，排除 GRUB 自行改写的 `grubenv`。差异、缺基线或读取失败时，脚本仍保存元信息和 `boot-check.txt`，能取得原基线时也保存 `boot-baseline.sha256`。快照校验并卸载后才以非零退出，原基线仍可供排查。查看 `journalctl -u z8-recovery-backup.service -b` 和快照记录。
+
+### APT 改动启动文件时自动更新基线
+
+`99z8-fit-boot` 在 APT 调用 dpkg 前后分别计算两个挂载点内的文件散列。两份清单有变化、升级前通过原基线、APT history 有完整且无错误的包事务时，才更新 `Z8RECOVERY` 上的基线。核查 `journalctl -t z8-fit-apt`，包含 UTC 时间、事务包名与版本、旧新清单的 SHA-256。最近一笔自动更新也留在 `boot-baseline-apt.txt`，纳入后续快照。钩子保留 APT 本身的退出状态，FIT 检查失败会单独记录。直接运行 `dpkg` 以及手工改启动文件时，按上一节人工验证及更新基线。 [Ubuntu 26.04 APT 调用 dpkg 的钩子](https://manpages.ubuntu.com/manpages/resolute/man5/apt.conf.5.html)
+
+Ubuntu 26.04 的 Dracut 提供 `update-initramfs`，内核安装和移除会经 kernel hooks 生成或移除 initramfs 并更新 GRUB。即使内核、NVIDIA 和 ZFS 留给手动维护，自动升级 Dracut、mdadm、Intel 微码或 Plymouth 仍可通过 `update-initramfs` 或 dpkg 触发器重建 initramfs。更新已安装的 GRUB EFI 或 shim 在其维护脚本条件满足时可改写 ESP。Memtest86+ 会更新 `/boot` 下的测试程序，并在已配置 GRUB 时更新菜单。当前的 APT 钩子按内容变化决定是否刷新，涵盖 unattended-upgrades 的 APT 事务。 [Ubuntu 26.04 Dracut 变更](https://github.com/ubuntu/ubuntu-release-notes/blob/main/docs/26.04/summary-for-lts-users.md) · [Dracut Ubuntu 源包](https://launchpad.net/ubuntu/+source/dracut/110-11ubuntu0.1) · [unattended-upgrades 的 APT 提交路径](https://github.com/mvo5/unattended-upgrades/blob/master/unattended-upgrade)
 
 ### 每个阶段留一份到另一台机器
 
@@ -116,7 +124,13 @@ I1 还未启用 SSH 时，先在正式系统中生成归档，写到已挂载 Ve
 )
 ```
 
-从已允许无交互调用该精确命令的客户端，直接流式取走。在未设置无交互 sudo 的环境，从普通 SSH 会话在主机上运行 `sudo z8-recovery-backup --stdout` 并重定向到 `~/z8-recovery.tar`，再从另一台机器用 `scp z8:z8-recovery.tar .` 复制。备份文件和散列清单按机器外的备份规则保管。
+I2 配好 SSH 后，在 `jackywang-xubuntu-max` 上用 `sudo visudo -f /etc/sudoers.d/z8-recovery-export` 安装这一条。该规则只授予 `jackywang` 无密码执行带精确参数 `--stdout` 的命令。文件由 root 持有，权限为 `0440`。保存后执行 `sudo visudo -c` 校验规则。
+
+```sudoers
+jackywang ALL=(root) NOPASSWD: /usr/local/sbin/z8-recovery-backup --stdout
+```
+
+从配置了 `z8` SSH 别名的客户端流式取走。还没装 sudoers 规则时，用普通 SSH 会话在主机上运行 `sudo z8-recovery-backup --stdout` 并重定向到 `~/z8-recovery.tar`，再从另一台机器用 `scp z8:z8-recovery.tar .` 复制。备份文件和散列清单按机器外的备份规则保管。
 
 ```bash
 umask 077

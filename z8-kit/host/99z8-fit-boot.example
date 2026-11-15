@@ -1,0 +1,7 @@
+// Keep APT usable if the removable FIT or its recovery partition needs attention.
+DPkg::Pre-Invoke {
+    "/usr/local/sbin/z8-recovery-backup --apt-pre || logger -t z8-fit-apt 'Pre-APT boot comparison failed; automatic refresh disabled for this transaction' || true";
+};
+DPkg::Post-Invoke {
+    "/usr/local/sbin/z8-recovery-backup --apt-post || logger -t z8-fit-apt 'Post-APT boot comparison failed; check FIT and APT history' || true";
+};

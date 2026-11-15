@@ -8,6 +8,7 @@ case "${1:-}" in
         cpus=${Z8_BUILD_CPUS:?Set Z8_BUILD_CPUS with cpu-layout.py}
         ;;
     restore)
+        # The idle mask includes both threads of every inference core.
         cpus=${Z8_IDLE_CPUS:?Set Z8_IDLE_CPUS with cpu-layout.py}
         ;;
     *)

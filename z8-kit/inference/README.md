@@ -77,7 +77,7 @@ DS41_ENGRAM="$DS41_MODEL_DIR/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf"
 )
 ```
 
-**固定部署档。** 四卡 layer split、2×8K、每请求独立活跃 KV。热点专家用 8192 MiB 合计 GPU 缓存，只在 T5/I3 用正式内核默认参数确认六对都走 NVLink且通过数据校验后，才 `export Z8_NVLINK_P2P=1`。未通过时沿用启动器默认关闭。routed experts 留在 host，可按需从 PMem 的 `mmap` 读取，实际 pinned staging 由引擎分配。CPU miss share 固定 0，microbatch 固定 32，进入 v1.0.0 的缓存接纳范围。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [32-token 接纳上限](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L340)
+**首装目标为单槽 128K。** 四卡 layer split、f16 GPU KV（`SLOTS=1 SLOT_CTX=131072 KV_TYPE=f16 KV_OFFLOAD=1`）。启动器始终显式给 `--ctx-size`，总和计入每槽的 256-token 对齐并设上限 1,048,576。热点专家用 8192 MiB 合计 GPU 缓存，只在 T5/I3 用正式内核默认参数确认六对都走 NVLink且通过数据校验后，才 `export Z8_NVLINK_P2P=1`。未通过时沿用启动器默认关闭。routed experts 留在 host，可按需从 PMem 的 `mmap` 读取，实际 pinned staging 由引擎分配。CPU miss share 固定 0，microbatch 固定 32，进入 v1.0.0 的缓存接纳范围。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [32-token 接纳上限](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L340)
 
 ```bash
 export LLAMA_BUILD Z8_CUDA_RUNTIME DS41_GGUF
@@ -86,13 +86,30 @@ export Z8_DRAM_INTERLEAVE=0,1  # 改成 T3 记录的两个 DDR4 节点。
 bash "$kit/inference/serve-llama.sh"
 ```
 
-显存不足时先用 `MOE_CACHE_MIB=4096` 原样重启。若还因第二个槽的 KV 超预算，设 `SLOTS=1`，保留 8K 单槽。单槽仍无法启动或通过工具闭环时，转 [Xolotl Buster](#xolotl-buster-单用户回退) 并复用下载的权重；显存足够且单槽通过时，用同一个 llama-server 串行工作。
+### 上下文降档与验收
+
+从表中第一档开始。只在显存不足、每卡余量不足或该 KV 档不能正确运行时进入下一档。前五档保持 KV 在 GPU，需要更长且 64K 已能运行时，可试最后一档恢复 128K。
+
+| 顺序 | 每槽上下文 | KV 类型和位置 | 四卡合计 GPU 专家缓存 |
+|---|---:|---|---:|
+| 首装 | 128K | `KV_TYPE=f16 KV_OFFLOAD=1` | 8192 MiB |
+| 量化 KV | 128K | `KV_TYPE=q8_0 KV_OFFLOAD=1` | 8192 MiB |
+| 减专家缓存 | 128K | `KV_TYPE=q8_0 KV_OFFLOAD=1` | 4096 MiB |
+| 进一步量化 | 128K | `KV_TYPE=q4_0 KV_OFFLOAD=1` | 4096 MiB |
+| 缩上下文 | 64K | `KV_TYPE=q4_0 KV_OFFLOAD=1` | 4096 MiB |
+| 主机 KV | 128K | `KV_TYPE=f16 KV_OFFLOAD=0` | 4096 MiB |
+
+用 `SLOT_CTX=65536` 切到 64K，用 `MOE_CACHE_MIB=4096` 减缓存。量化档启动器为 K/V 传同一类型，并显式开启 Flash Attention。v1.0.0 的 DeepSeek 4.1 路径使用同一份 K 张量保存 MLA 数据，量化 V 参数仍受 Flash Attention 校验约束。量化 CUDA 内核和长文本正确性用本机 SM70 构建验收。主机档通过 `--no-kv-offload` 把活跃 KV 放到 CPU 内存并改变注意力调度，单独记录速度，只在可用时采用。 [v1.0.0 上下文与量化校验](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-context.cpp#L4109-L4177) · [DeepSeek 4.1 量化缓存路径](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/models/deepseek41.cpp#L472-L484) · [后端分配](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-kv-cache.cpp#L193-L216)
+
+按 1017 官方配置，长程 K 每行含 512 个 latent 和 128 个 index 值。f16 行大小为 1280 B。按 v1.0.0 的四卡等比分层，三个半速源加一个跨卡副本，以及一个全速源加两个跨卡副本，共约 `(4/2 + 3) × 1280 = 6400 B/token`，128K 单槽约 **800 MiB 长程 KV**。raw 滑窗、compressor state、对齐以及推理图临时缓冲另计，实际按启动日志逐缓冲区核对。1Cat 的 54 KB/token、128K 首次填充 110 秒、前缀命中 0.9–1.7 秒来自其四张 32 GiB V100 配方。 [1017 官方配置](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/main/config.json) · [llama.cpp 跨设备 KV 副本](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-kv-cache-dsv4.cpp#L1169-L1269) · [1Cat 上游记录](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md#results)
+
+每个实际尝试的档位都记录每卡峰值显存/余量、近满窗口的首次填充时间、解码速度、同前缀第二请求的首字延迟和 20 轮工具循环结果。先保留能稳定达到 128K 的最低代价档。64K 可用时记录实际限制，业务仍需要 128K 时按 [1Cat 专项](#1cat-长上下文专项)验证。双槽是可选项，使用 `SLOTS=2 SLOT_CTX=65536` 保持 128K 合计预算，并另做同时请求验收。
 
 **前缀复用只做一次正确性验收。** 直接用 I6 探针的标准请求重复 A，再插入 B 后续 A。核 `cached_tokens`、固定答案、两个项目标记与实际工具往返。同槽匹配才有复用机会，若发生缓存相关的输出错误，用 `CACHE_PROMPT=0` 暂停这个路径再复现。活跃 KV 留在引擎，额外的 RAM 缓存、空闲槽迁移和文件快照关闭。 [llama-server 前缀参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md) · [DeepSeek 4.1 前缀修复](https://github.com/ggml-org/llama.cpp/pull/31292)
 
 ## 1Cat 长上下文专项
 
-仅在实际项目需要超过 8K 且当前服务无法满足时部署。#1277 报告使用四张 **32 GiB** V100，稳态仍约 26.9 GiB/卡。本机四张各 16 GiB，不能照搬其 512K 结果。先核源码包含 SM70 实现，再用随附 phase2 profile 的 4K、0.75 offload、单活动序列、eager 和无 draft 设置。模型占用按此任务单独安排，首装只下载前面的一套。 [1Cat 完整手册](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md)
+llama.cpp 按上述阶梯仍达不到项目所需的 128K 时才验证。#1277 报告使用四张 **32 GiB** V100，稳态仍约 26.9 GiB/卡。本机四张各 16 GiB，不能照搬其 512K 结果。先核源码包含 SM70 实现，再用随附 phase2 profile 的 4K、0.75 offload、单活动序列、eager 和无 draft 设置。模型占用按此任务单独安排，首装只下载前面的一套。 [1Cat 完整手册](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md)
 
 1. 用 `git clone --branch v1.5.2 --depth 1 https://github.com/1CatAI/1Cat-vLLM.git`，固定到包含 #1277 phase2 配方的发布版。按该 tag 的源码安装流程，使用 CUDA 12.8、Python 3.12 和 SM70。 [v1.5.2 phase2 配方](https://github.com/1CatAI/1Cat-vLLM/blob/v1.5.2/benchmarks/deepseek_v41/serve-ds41-phase2.yaml)
 2. 在 checkout 创建 `.venv`，设置 `TORCH_CUDA_ARCH_LIST=7.0` 与 `CMAKE_CUDA_ARCHITECTURES=70`，按同版源构建文档执行可编辑 CUDA build。核验 `torch.version.cuda`、`torch.cuda.get_arch_list()` 与 SM70 扩展。运行 `.venv/bin/python benchmarks/deepseek_v41/v41k/build.py`。从同版本 docs 确认 `v41k.so` 默认位置或显式设置 `VLLM_V41K_LIB`。
@@ -139,7 +156,7 @@ Niko1221/Strata 的 1017 官方包未列 V100 的 SM70 运行支持。本机用 
 
 ## Xolotl Buster 单用户回退
 
-使用主服务已经下载的 GGUF 和 Engram。直接四卡切层 `10,20,30`，每 stage 24 GiB pinned arena 上限、8K 上下文和一个活动请求。按 [CPU 分核服务](../host/CPU-PLACEMENT.md#启停本地模型) 的回退说明保存启动器。
+使用主服务已经下载的 GGUF 和 Engram。直接四卡切层 `10,20,30`，每 stage 24 GiB pinned arena 上限、8K 上下文和一个活动请求。按 [CPU 分核服务](../host/CPU-PLACEMENT.md#启停本地模型) 将预留提高到每路 6 核后，再保存回退启动器。此档供短上下文任务使用。
 
 在 CUDA 12.9.1 / GCC 兼容用户空间执行。固定到下面的 commit。把 `--model` 指向主服务的第一个分片，把 `--engram` 显式指向真实的 IQ4_NL Engram GGUF。该版本的 dense loader 识别 upstream 命名，独立 Engram loader 识别相应张量，读取时走 `pread`。`$XOL_TOKENIZER_DIR` 指向 PMem 上 1017 对应的 tokenizer 文件目录，实测时核两个引擎的 token 与模板。使用配方默认 expert 排序。 [Xolotl upstream GGUF 支持](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/docs/xolotl/CHANGELOG.md#upstream-llamacpp-and-unsloth-deepseek-v41-ggufs-82-84-85) · [Engram loader](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/engine/ds41_engram.cpp#L263)
 
@@ -199,11 +216,18 @@ Buster 脚本使用 user systemd bus、`flock` 和 `MemoryMax=140G`，遇到内�
 
 ## I6 推理放行
 
-从 `z8-kit` 根运行以下探针。脚本打印请求时序、显存与内核错误并保存日志。再用真实 harness 连续完成 20 个工具回合。默认双槽各 8K，读取真实 harness 首请求的 `usage.prompt_tokens`。若提示词和工具定义已超过 4K，或 8K 槽在实际循环中先满，试 `SLOTS=1 SLOT_CTX=16384` 并将 OMP 的 `contextWindow` 改成 `16384`，核启动日志中的 `n_ctx_slot` 和显存。显存不足时按上述降档处理。llama.cpp 的 `--parallel-pairs` 用于验证两路同时流式、各返自己的项目标记。单槽回退删去该参数。Xolotl 回退用端口 8150，加 `--reasoning-effort none`，删去 `--usage`。
+从 `z8-kit` 根对 [上下文档位](#上下文降档与验收)执行下面的探针。默认单槽。先给 `long-prompt.txt` 放代表项目的长文本，把模板开销与输出空间也算进每槽预算。用服务器返回的 `usage.prompt_tokens` 确认请求确实接近该槽上限并留约 1K 给模板差异和输出，不能用文件字节数代替 token 数。从刚启动的服务执行一次，另一个终端同时采四卡显存。
+
+```bash
+nvidia-smi --query-gpu=uuid,memory.total,memory.used,memory.free --format=csv --loop-ms=200
+```
 
 ```bash
 bash host/run-step.sh i6-probe --base http://127.0.0.1:18000/v1 --usage \
-    --model deepseek-v4.1-flash-1017 --repeats 3 --tools --parallel-pairs
+    --model deepseek-v4.1-flash-1017 --prompt-file ./long-prompt.txt \
+    --repeats 1 --timeout 1800 --tools
 ```
 
-记录真实任务的首字延迟、生成速度与峰值显存，核 SSE、工具回传、项目标记和 OOM/Xid。两路任务需同时推进且输出正确。单槽通过但双槽无法稳定时保留单槽。若单用户生成中位数低于 10 tok/s，或代表性 8K 工单的 TTFT p95 超过 20 秒且影响使用，先查专家 miss 与显存。若大量 miss 且每卡仍有至少 3 GiB 峰值余量，将 GPU 专家缓存提高一次到 16384 MiB。仍无法满足实际工单时才验 Xolotl 回退。选定档位后，按[正式服务启停](../host/CPU-PLACEMENT.md#启停本地模型)写环境并启动 `z8-infer.service`，核 API 就绪后进入 [I7](../host/BURN-IN.md#i7-正式安装后的整机混合负载)。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)
+用 `A` 的 `prompt_ms` 和首字延迟记录首次填充，`A-repeat` 记录前缀命中 token 和第二轮首字延迟，再看 B 后续 A 的正确性和生成速度。首次填充可为分钟级，记录实测时间即可。近满窗口要求每张卡至少余 **2 GiB**，SSE 完整、无 OOM/Xid，且真实 harness 连续 **20 轮工具往返**通过。只在实际使用双槽时加 `--parallel-pairs` 验两路项目标记。Xolotl 8K 回退用短文本及 8150 端口，加 `--reasoning-effort none`，删去 `--usage`，按回退档记录。
+
+选定档位后把 OMP 的 `contextWindow` 与实际每槽一致，按[正式服务启停](../host/CPU-PLACEMENT.md#启停本地模型)保存参数。核启动日志的 `n_ctx_seq` / `n_ctx_slot` 和 API 就绪，再进入 [I7](../host/BURN-IN.md#i7-正式安装后的整机混合负载)。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)

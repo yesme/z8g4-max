@@ -47,7 +47,7 @@ def cpu_list(cpus):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="new directory for the preview files")
-    parser.add_argument("--infer-per-socket", type=int, default=6)
+    parser.add_argument("--infer-per-socket", type=int, default=2)
     args = parser.parse_args()
 
     try:
@@ -56,11 +56,14 @@ def main():
         infer_siblings = set()
         xolotl_pool = set()
         build = set()
+        idle = set()
         for socket, cores in sorted(by_socket.items()):
             count = args.infer_per_socket
             if not 1 < count < len(cores):
                 raise ValueError(f"socket {socket} has {len(cores)} cores, invalid inference count {count}")
             inference_cores = cores[-count:]
+            for pair in cores:
+                idle.update(pair)
             for primary, sibling in inference_cores:
                 infer.add(primary)
                 infer_siblings.add(sibling)
@@ -84,18 +87,18 @@ def main():
                 encoding="utf-8",
             )
         (args.output / "z8-infer-cpu.env").write_text(
-            f"Z8_BUILD_CPUS={cpu_list(build)}\nZ8_IDLE_CPUS={cpu_list(build | infer)}\n"
+            f"Z8_BUILD_CPUS={cpu_list(build)}\nZ8_IDLE_CPUS={cpu_list(idle)}\n"
             f"Z8_INFER_THREADS={len(infer)}\nZ8_IRQ_BANNED_CPUS={cpu_list(infer | infer_siblings)}\n"
             f"Z8_XOLOTL_POOL_CPUS={cpu_list(xolotl_pool)}\n",
             encoding="utf-8",
         )
         (args.output / "10-z8-cpu.conf").write_text(
-            f"[Slice]\nAllowedCPUs={cpu_list(build | infer)}\n", encoding="utf-8"
+            f"[Slice]\nAllowedCPUs={cpu_list(idle)}\n", encoding="utf-8"
         )
         print(f"Inference CPUs: {cpu_list(infer)}")
         print(f"Reserved inference siblings: {cpu_list(infer_siblings)}")
         print(f"Build and general CPUs with local inference running: {cpu_list(build)}")
-        print(f"Build and general CPUs with local inference stopped: {cpu_list(build | infer)}")
+        print(f"Build and general CPUs with local inference stopped: {cpu_list(idle)}")
         print(f"Xolotl CPU expert workers: {cpu_list(xolotl_pool)}")
     except (OSError, ValueError) as exc:
         parser.exit(1, f"{parser.prog}: {exc}\n")

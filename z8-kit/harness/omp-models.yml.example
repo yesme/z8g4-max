@@ -8,7 +8,7 @@ providers:
         name: DeepSeek V4.1 Flash 1017 on Z8
         reasoning: false
         input: [text]
-        contextWindow: 8192
+        contextWindow: 131072
         maxTokens: 1024
         cost:
           input: 0

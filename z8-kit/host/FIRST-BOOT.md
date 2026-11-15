@@ -1,6 +1,6 @@
 # Z8 G4 上机操作顺序
 
-适用 v2.20，主机 `jackywang-xubuntu-max`，登录 `jackywang`。按 **T1–T4 验主机 → T5 验算力坞 → I1–I7 安装与上线** 执行。每一步链接到实际操作命令。
+适用 v2.21，主机 `jackywang-xubuntu-max`，登录 `jackywang`。按 **T1–T4 验主机 → T5 验算力坞 → I1–I7 安装与上线** 执行。每一步链接到实际操作命令。
 
 ## 0. 上电前
 
@@ -8,7 +8,7 @@
 - **SanDisk Ultra Fit CZ430 128 GB，可清空**。T1 把原来的安装介质改为可启动的临时 Xubuntu 系统，T1–T5 从它启动并保留工具、驱动和日志。I1 前拔下，保留验机系统和记录。
 - **128 GB Samsung FIT**。T4 插入一次，抄 `ID_SERIAL`。I1 才分区。FIT 存 EFI、`/boot`、救援工具和元信息备份，根 `/` 在 P4618 RAID0。 [FIT 分区及救援](FIT-RECOVERY.md)
 - **BC711**。留作备用。
-- **现场准备**。键盘接主机，显示器接 P620，AX210 接两根天线，备好 Wi-Fi 凭据。给容量相同的两只 U 盘贴上「SanDisk 验机」和「Samsung 引导」，给 HC620 数据线标 SATA0–6，给四根算力坞链路标槽号和分支。换盘、DIMM 或 PCIe 线前，先结束当前测试并正常关机，再切断相关设备的交流电。
+- **现场准备**。键盘接主机，显示器接 P620，优先备好网线；用 AX210 过渡时接两根天线并备好 Wi-Fi 凭据。给容量相同的两只 U 盘贴上「SanDisk 验机」和「Samsung 引导」，给 HC620 数据线标 SATA0–6，给四根算力坞链路标槽号和分支。换盘、DIMM 或 PCIe 线前，先结束当前测试并正常关机，再切断相关设备的交流电。
 - **记录位置**。采集到 SanDisk 临时系统的 `~/z8-burnin`，包括 PMem UUID、两份 PMem env、磁盘序列号和测试日志。T5 结束后将 SanDisk 拔下留存。命令中的 `host/…`、`storage/…` 都相对于仓库的 `z8-kit`。记下每轮实际的启动介质、`uname -r` 和 BIOS 版本。
 
 ## 在终端运行与取日志
@@ -19,11 +19,11 @@
 
 ## 1. T1–T4 验主机
 
-### T1 · CPU、F10 和 Wi-Fi
+### T1 · CPU、F10 和联网
 
-1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P620、槽 7 装 AX210，接显示器和天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。
-2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均开启，沿用到正式系统。保存后重新确认 POST 和 DDR4 容量。 [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
-3. 按 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu**。先用 AX210 核 Wi-Fi、DHCP、DNS 和 APT，按[挂载步骤](INSTALL.md#挂载-ventoy-与保存-live-日志)试读同一块 Ventoy 数据分区，再把 **SanDisk CZ430** 选作整盘安装目标。此时 FIT 先不接。按安装器提示拔下 Ventoy，从 SanDisk 冷启临时 Xubuntu，再确认能联网。 [Live 联网与 SanDisk 安装](BURN-IN.md#首次-live-wi-fi-与临时验机系统)
+1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P620 并接显示器。板载网口优先接网线；需无线过渡时在槽 7 装 AX210 并接天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。
+2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均设为 `Disable`，沿用到正式系统。保存后重新确认 POST 和 DDR4 容量。 [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
+3. 按 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu**。用板载有线或 AX210 过渡联网，核 DHCP、DNS 和 APT，按[挂载步骤](INSTALL.md#挂载-ventoy-与保存-live-日志)试读同一块 Ventoy 数据分区，再把 **SanDisk CZ430** 选作整盘安装目标。此时 FIT 先不接。按安装器提示拔下 Ventoy，从 SanDisk 冷启临时 Xubuntu，再确认能联网。 [Live 联网与 SanDisk 安装](BURN-IN.md#首次-live-联网与临时验机系统)
 4. 在临时系统安装微码和诊断工具，重启后确认两颗 CPU、两个 DDR4 NUMA 节点。先跑 30 分钟通用 CPU 压测，再跑 30 分钟 AVX-512 VNNI，保存 RAS、温度和满载频率。 [CPU 拷机命令](BURN-IN.md#cpu-拷机)
 
 ### T2 · 只测 DDR4
@@ -49,20 +49,20 @@
 
 1. 保持坞断开，先在临时 Xubuntu 装 R580，重启确认 P620 枚举，并在 SanDisk 上[准备 CUDA 验机工具](INSTALL.md#算力坞验收)。按 [R580 包与安装模拟](INSTALL.md#安装并锁定-nvidia-显卡驱动) 操作。关机断电，按 [槽位表](BIOS.md#板上槽位) 接槽 2/3 的 x8/x8 直通板。按底板供电方式确认坞的端点、电源和冷却能在主机 POST 时就绪，核四套水路和泵。若坞为独立手动供电，第一轮上机前核供应商启停顺序并记录。
 2. 按 **单卡 → 每槽各验两卡 → 四卡** 冷启。每轮保存 GPU UUID、BDF、NUMA 归属和负载下 PCIe 速率/宽度。四卡再测六对 NVLink P2P、NCCL、四卡 1 小时 GPU Burn 和交错 DDR4 的 pinned H→D。检查新增 Xid、AER、ECC，并与 T4 比对存储枚举。 [T5 拷机](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机) · [CUDA/NCCL](INSTALL.md#算力坞验收) · [pinned DMA](PMEM.md#四卡-pinned-dma-验收)
-3. 可从 T5 开始安排约 **232 GiB** 的权重下载，直接写已核实挂载的 PMem 模型卷。四卡硬件过关后做 1017 冒烟。按 T5 手册的速度档判断是否进 I1，保存引擎、权重 revision、四卡 UUID、显存与工具来回结果。T5 的源码与编译产物在 SanDisk 上的临时系统。权重留在 PMem 给 I6 复用。 [T5 推理冒烟](BURN-IN.md#t5-末的-1017-推理冒烟)
+3. 可从 T5 开始安排约 **232 GiB** 的权重下载，直接写已核实挂载的 PMem 模型卷。四卡硬件过关后做 1017 冒烟。按 T5 手册的速度档判断是否进 I1，从单槽 128K 起步，记录实际使用档、引擎、权重 revision、四卡 UUID、显存与工具来回结果。T5 的源码与编译产物在 SanDisk 上的临时系统。权重留在 PMem 给 I6 复用。 [T5 推理冒烟](BURN-IN.md#t5-末的-1017-推理冒烟)
 4. 停模型和测试服务。把保存在其他目录的验机记录一起收进 SanDisk 的 `~/z8-burnin`，确认日志、磁盘清单及两份 PMem env 都可读。正常关机，拔下并留存 SanDisk，I1 安装期间用不到它。
 
 ## 3. I1–I7 正式安装与上线
 
 ### I1 · 正式系统
 
-1. T5 已关机并拔下 SanDisk，此时切断交流电。**断开四张 V100、七块 HC620 和 D4800X**。保留 P4618、P620、AX210、DDR4 与 PMem。USB 只接三星 T3（Ventoy）和三星 FIT。
-2. **F9 → Ventoy UEFI → Xubuntu Desktop → Try Xubuntu**。连 AX210 Wi-Fi，在 Live 安装 `mdadm`，打开桌面安装器并导入 `z8/autoinstall.yaml` 的本地副本。核本次识别到的三个 `ID_SERIAL`，放行等待点，再在 GUI 确认写盘。安装器在 FIT 上创建 EFI 和 `/boot`，并在 P4618 上建 RAID0/XFS 根。
+1. T5 已关机并拔下 SanDisk，此时切断交流电。**断开四张 V100、七块 HC620 和 D4800X**。保留 P4618、P620、DDR4 与 PMem；仅无线过渡时保留 AX210。USB 只接三星 T3（Ventoy）和三星 FIT。
+2. **F9 → Ventoy UEFI → Xubuntu Desktop → Try Xubuntu**。接板载有线，或用 AX210 过渡联网，在 Live 安装 `mdadm`，打开桌面安装器并导入 `z8/autoinstall.yaml` 的本地副本。核本次识别到的三个 `ID_SERIAL`，放行等待点，再在 GUI 确认写盘。安装器在 FIT 上创建 EFI 和 `/boot`，并在 P4618 上建 RAID0/XFS 根。
 3. 安装器完成并关机后拔掉 **Ventoy**，从 FIT 启动正式 Xubuntu Desktop。核 `/`、`/boot`、`/boot/efi` 的来源，定稿 fstab、Dracut 和 GRUB。再做 FIT 冷启和只读救援演练。准备 [FIT 救援入口](FIT-RECOVERY.md#i1-备好本机救援入口)并运行首份 `sudo z8-recovery-backup --refresh-boot`，然后[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I1 详细命令](INSTALL.md#i1-安装-xubuntu-26041)
 
 ### I2 · 远程登录
 
-先把 AX210 配成开机自动联网，在路由器上设 DHCP 保留，验 SSH 公钥与 tmux。重启停在本机登录画面，从另一台机器确认可以 SSH。再验通过 SSH 隧道访问 xrdp 的独立 Xfce 会话。完成后记录实际主机地址与客户端 Host 项。 [SSH 与 xrdp](../remote/README.md)
+优先设板载有线开机联网，用对应 MAC 做 DHCP 保留；没有网线时暂用 AX210，验 SSH 公钥与 tmux。重启停在本机登录画面，从另一台机器确认可以 SSH。再验通过 SSH 隧道访问 xrdp 的独立 Xfce 会话。完成后记录实际主机地址与客户端 Host 项。 [SSH 与 xrdp](../remote/README.md)
 
 ### I3 · 驱动、串流与复接 V100
 
@@ -76,11 +76,11 @@
 
 ### I5 · Buildbarn 与 Buck2
 
-先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装每路 6 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#6-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
+先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装默认每路 2 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#6-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
 
 ### I6 · 正式推理和 CLI
 
-先验证模型卷来源与 DAX，再以 `jackywang` 复用 T5 权重，核实际 UID/GID 权限。在正式系统工作目录准备 llama.cpp 与 CUDA 用户态库，手动起服务跑探针和真实 harness 的 20 回合工具闭环。双槽可用就保留，显存不足只按手册降档。通过后写正式服务环境，使用 `z8-infer.service`，检查 API 真正就绪。各 harness 分别开工作树和 tmux；OMP/Pi/DSH 的官网 API 配置可独立验证。 [推理放行](../inference/README.md#i6-推理放行) · [启动服务](CPU-PLACEMENT.md#启停本地模型) · [CLI 与 DeepSeek API](../harness/README.md)
+先验证模型卷来源与 DAX，再以 `jackywang` 复用 T5 权重，核实际 UID/GID 权限。在正式系统工作目录准备 llama.cpp 与 CUDA 用户态库，手动起服务跑探针和真实 harness 的 20 回合工具闭环。默认单槽 128K，显存不足按手册降档。只有明确需要并发才另验双槽。通过后写正式服务环境，使用 `z8-infer.service`，检查 API 真正就绪。各 harness 分别开工作树和 tmux；OMP/Pi/DSH 的官网 API 配置可独立验证。 [推理放行](../inference/README.md#i6-推理放行) · [启动服务](CPU-PLACEMENT.md#启停本地模型) · [CLI 与 DeepSeek API](../harness/README.md)
 
 ### I7 · 冷启、混合负载与交付
 

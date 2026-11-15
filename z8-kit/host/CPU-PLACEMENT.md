@@ -4,20 +4,22 @@ F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT�
 
 | 每路推理预留 | 双路可运行的推理线程 | 双路系统与编译可用线程 | Xolotl CPU expert worker 起点 |
 |---|---:|---:|---:|
-| **6 颗物理核（首装）** | **12** | **80** | **10** |
-| **推理服务已停止（仍预留 6 核/路的 HT 伙伴）** | — | **92** | — |
+| **每路 2 核（llama.cpp 首装）** | **4** | **96** | — |
+| 每路 4 核 | 8 | 88 | 6 |
+| 每路 6 核（Xolotl 回退起点） | 12 | 80 | 10 |
+| **推理服务已停止** | — | **104** | — |
 
-按双路各 26 核、每核两个 HT 线程计算。每路固定留 6 颗物理核给推理。 [8269CY 实机实验平台](https://www.vldb.org/pvldb/vol17/p4827-li.pdf)
+按双路各 26 核、每核两个 HT 线程计算。每路默认预留最后 2 颗物理核。 [8269CY 实机实验平台](https://www.vldb.org/pvldb/vol17/p4827-li.pdf)
 
-用每路内部的示意编号 `0↔26、1↔27、…、25↔51`，每路取最后六颗物理核时，推理用 20–25，对应 HT 伙伴 46–51 始终保留。普通任务在推理停机时用 0–45，推理启动后用 0–19 与 26–45。每路推理核中的第一颗留给主控，其余五颗进入 Xolotl 的 worker 列表。
+用每路内部的示意编号 `0↔26、1↔27、…、25↔51`，默认推理占 24–25 的主线程。运行时其 HT 伙伴 50–51 留空，普通任务用 0–23 和 26–49。停止后普通任务用 0–51。
 
 Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对取编号较小的 CPU 作“主线程”，每路按这个编号排序取最后 K 对。这样 CPU0 所在物理核留给普通任务和系统。cgroup 的 CPU 集合约束其中的进程。硬件 IRQ 与内核线程有自己的亲和性，用 `/proc/interrupts` 和 `ps -eLo pid,tid,psr,comm` 核正在跑的网卡、存储和推理负载。CPU 核的执行资源分开，socket 的 Turbo、功耗、末级缓存、DDR4、PMem 和 UPI 仍然共享。 [Linux CPU 拓扑](https://docs.kernel.org/admin-guide/cputopology.html) · [Linux cgroup v2 cpuset](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpuset) · [Linux IRQ 亲和性](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
-**固定每路 6 核。** llama.cpp 的工作线程设 12。Xolotl 回退时每路 5 个 CPU expert worker，另各留 1 核给引擎控制和 helper。只有真实工单出现 CPU 连续饱和且推理未达要求时，再增加用核。
+**llama.cpp 首装每路 2 核，共 4 个工作线程。** I6 用同一真实工单生成时执行 `pidstat -t -p PID 1`。只有已有推理工作线程持续接近满载，且按每路 2 → 4 → 6 核增加后同一工单的生成速度确实提高，才保留更高档。改核数前停服务，按本页重生成，保持同一推理档再验证。
 
-`z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，只交还推理的 12 个主线程；同核的 12 个 HT 伙伴一直排除。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。服务常驻时即使暂时没有 API 请求也保留核心。OMP/Pi/DSH 直连云端 API 不启动该服务。
+`z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，推理主线程和同核 HT 伙伴全部归还。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。服务常驻时即使暂时没有 API 请求也保留核心。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
-`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。推理运行时普通任务共享 80 个逻辑 CPU。runner 配 72 个活动 action 和 72 CPU 时间配额，给系统和协调进程留 8 个逻辑 CPU 的时间预算。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
+`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。默认推理运行时普通任务共享 96 个逻辑 CPU。runner 配 88 个活动 action 和 88 CPU 时间配额，给系统和协调进程留 8 个逻辑 CPU 的时间预算。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
 
 推理 slice 与 service 都设 `MemoryLow=160G`。两条是父子层级的同一尽力保护，按实际用量生效，降低它会改变回收次序。CUDA 长期 pin 的页本身不可回收。两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
 
@@ -36,7 +38,7 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 
 ## 生成并安装
 
-之前已生成 CPU masks 的机器，先停止 `z8-infer.service`，再重新生成。安装步骤会移除本仓库旧的四份 slice `80-z8-cpu.conf`。`10-z8-cpu.conf` 先于 `systemctl set-property --runtime` 生成的 `50-AllowedCPUs.conf` 读取。推理运行时重载 systemd 后，核普通任务的 `EffectiveCPUs` 仍为 80 个。 [systemd drop-in 合并顺序](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
+之前已生成 CPU masks 的机器，先停止 `z8-infer.service`，再重新生成。安装步骤会移除本仓库旧的四份 slice `80-z8-cpu.conf`。`10-z8-cpu.conf` 先于 `systemctl set-property --runtime` 生成的 `50-AllowedCPUs.conf` 读取。默认推理运行时重载 systemd 后，核普通任务的 `EffectiveCPUs` 仍为 96 个。 [systemd drop-in 合并顺序](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
 
 从解压后的 `z8-kit` 目录执行。预览每路核心数、保留的 HT sibling 和 Xolotl worker 列表。T1–T5 验机阶段沿用默认调度。
 
@@ -46,7 +48,7 @@ lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE
 numactl -H
 grep -w cpuset /sys/fs/cgroup/cgroup.controllers
 layout=$(mktemp -d)/cpu-layout
-python3 "$kit/host/cpu-layout.py" "$layout" --infer-per-socket 6
+python3 "$kit/host/cpu-layout.py" "$layout"
 cat "$layout"/{z8infer.slice,z8-infer-cpu.env,10-z8-cpu.conf}
 ```
 
@@ -70,7 +72,7 @@ cat "$layout"/{z8infer.slice,z8-infer-cpu.env,10-z8-cpu.conf}
 )
 ```
 
-安装到这一步，四个 slice 的 `AllowedCPUs` 应与 `Z8_IDLE_CPUS` 一致，默认共 92 个。四份 drop-in 让重启后也应用空闲集合；启动推理时再用运行时属性缩到 80 个。若已有其它 CPU 限制，先用 `systemctl cat` 和 `EffectiveCPUs` 核对合并结果。
+安装到这一步，四个 slice 的 `AllowedCPUs` 应与 `Z8_IDLE_CPUS` 一致，共 104 个。四份 drop-in 让重启后也应用空闲集合；启动默认推理时再用运行时属性缩到 96 个。若已有其它 CPU 限制，先用 `systemctl cat` 和 `EffectiveCPUs` 核对合并结果。
 
 I5 先完成 [Buildbarn 的软件、目录与单元准备](../storage/README.md#i51-软件目录与单元准备)，再完成上面的 CPU slice 安装。使用 tiered Buildbarn 时，启用 worker 前继续给 runner 加下面的分核配置。走全 XFS 回退时，这里只安装 CPU slice，按回退 Compose 命令应用 runner 分核。Docker 应报告 `systemd 2`，对应 systemd cgroup 驱动和 cgroup v2。runner 启动真正的编译动作。scheduler、worker 协调进程和 CAS 继续由普通服务 CPU 集合管理。
 
@@ -90,7 +92,7 @@ I5 先完成 [Buildbarn 的软件、目录与单元准备](../storage/README.md#
 
 ## 启停本地模型
 
-以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。只有六对 NVLink 与 NCCL 已在正式默认内核参数下验过才保存 `export Z8_NVLINK_P2P=1`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
+以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。只有六对 NVLink 与 NCCL 已在正式默认内核参数下验过才保存 `export Z8_NVLINK_P2P=1`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`KV_TYPE`、`KV_OFFLOAD`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
 
 **llama.cpp 的 `launch.sh`**
 
@@ -102,6 +104,8 @@ exec /usr/bin/bash /path/to/z8-kit/inference/serve-llama.sh
 ```
 
 **I6 触发 Xolotl 回退时的 `launch.sh`**
+
+暂停推理服务，将生成命令加 `--infer-per-socket 6` 后重新安装。先给每路 5 个 CPU expert worker，另留 1 核给控制线程。若同时跑构建，把 [runner 配额](../buildbarn/compose.worker.yaml) 和 [worker 并发](../buildbarn/shared-worker.jsonnet) 都设成 72，再重启 worker 服务，给系统留 8 个逻辑 CPU 的预算。llama.cpp 若调至每路 4 核，按同样方式使用 80；回到每路 2 核时恢复 88。
 
 Buster 上游启动器会另用 `systemd-run --user` 创建 scope，使实际引擎回到 `user.slice`。在固定 SHA 的 checkout 中先运行 `git apply --check /path/to/z8-kit/inference/buster-inherit-scope.patch`，再执行同路径的 `git apply`。配套补丁保留锁和默认路径，下面的环境变量让引擎继承外层 cgroup。`STRATA_POOL_CORES` 使用生成的 worker 清单，生成的 Xolotl profile 保持 `--threads` 未设，让引擎按列表决定 worker 数。`STRATA_ENGINE_NICE=0` 关闭 launcher 对子进程额外增加 nice 的逻辑，让它继承 service 的 `Nice=-5`。 [Xolotl Buster launcher](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/buster/buster-engine.sh) · [DS4.1 worker 参数](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_generate.cpp) · [Xolotl 的 engine nice 逻辑](https://github.com/Indras-Mirror/Xolotl/blob/main/serve/server.py#L4053)
 
@@ -153,7 +157,7 @@ buck2 --isolation-dir z8-build build --local-only -j 8 //path:target
 
 用户态 slice 的 CPU 集合与 IRQ／内核线程亲和性独立。只有推理尾延迟异常且 `mpstat -P ALL 1` 或 `/proc/interrupts` 显示存储／网卡 IRQ 持续落在推理核时，才按实际向量检查 `/proc/irq/<IRQ>/effective_affinity_list`。需迁移时用 irqbalance 的 `IRQBALANCE_BANNED_CPULIST` 排开推理 CPU 和 HT 伙伴，屏蔽值取生成的 `/etc/z8-infer-cpu.env` 中 `Z8_IRQ_BANNED_CPUS`。全局 workqueue、CAT/MBA 保持默认。 [Ubuntu irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
-启动前、运行中、停止后分别检查。对实际 `llama-server` 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到空闲 CPU 集合，其中仍排除推理核的 HT 伙伴。`-j` 与容器的 CPU 时间配额仍分别限制构建并发和 CPU 时间。
+启动前、运行中、停止后分别检查。对实际 `llama-server` 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到包含推理核及其 HT 伙伴的 104 个逻辑 CPU。`-j` 与容器的 CPU 时间配额仍分别限制构建并发和 CPU 时间。
 
 ```bash
 systemctl show z8infer.slice z8build.slice z8build-local.slice user.slice \
@@ -176,6 +180,6 @@ cat /proc/pressure/memory
 bash host/run-step.sh i5-worker tiered
 ```
 
-I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。运行中执行一次 `sudo systemctl daemon-reload`，核普通任务仍为 80 个逻辑 CPU。停止推理后应还到 92 个。
+I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 96 个逻辑 CPU。停止推理后应还到 104 个。
 
-平时停 `z8-infer.service` 即归还推理主线程。若日志报告恢复失败，停服务后手动执行 `sudo /usr/local/libexec/z8-cpu-mode restore` 再核 CPU mask。完全撤销时，先停推理以及已启用的 worker，删除本节安装的 slice、服务与专用 drop-in，执行 `sudo systemctl daemon-reload` 后重启主机。普通任务恢复使用 104 个逻辑 CPU，已启用的 Buildbarn worker 按原 I5 配置启动。
+平时停 `z8-infer.service` 即归还推理主线程和 HT 伙伴。若日志报告恢复失败，停服务后手动执行 `sudo /usr/local/libexec/z8-cpu-mode restore` 再核 CPU mask。完全撤销时，先停推理以及已启用的 worker，删除本节安装的 slice、服务与专用 drop-in，执行 `sudo systemctl daemon-reload` 后重启主机。普通任务恢复使用 104 个逻辑 CPU，已启用的 Buildbarn worker 按原 I5 配置启动。

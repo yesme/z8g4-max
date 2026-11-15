@@ -64,7 +64,7 @@ DDR4-only 测试通过后断电，把 12 条 PMem 插进空槽。第一次混插
 
 ### 2. 在 Xubuntu 26.04.1 记录现状并提交 goal
 
-从 F9 启动 SanDisk 上的临时 Xubuntu 26.04.1，打开终端。工具还没装时，先在该系统连 AX210 Wi-Fi 并执行 [T3 准备工具](#t3-准备工具)。运行下面的只读盘点，输出同时显示在终端并保存到 `~/z8-burnin/pmem-before.log`。
+从 F9 启动 SanDisk 上的临时 Xubuntu 26.04.1，打开终端。工具还没装时，先确认有线或 AX210 过渡联网并执行 [T3 准备工具](#t3-准备工具)。运行下面的只读盘点，输出同时显示在终端并保存到 `~/z8-burnin/pmem-before.log`。
 
 ```bash
 mkdir -p "$HOME/z8-burnin"

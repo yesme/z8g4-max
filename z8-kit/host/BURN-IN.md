@@ -6,13 +6,15 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 ## T1. CPU、BIOS 与联网
 
-装两颗 8269CY、散热器、内存风道、12 条 DDR4、槽 4 的 P620 和槽 7 的 AX210。断电时接好 AX210 两根天线与蓝牙内部 USB 线，T1 联网只需要 PCIe Wi-Fi 路径。P4618、D4800X、HC620 和算力坞留到对应阶段。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
+装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P620。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
 
-### 首次 Live Wi-Fi 与临时验机系统
+### 首次 Live 联网与临时验机系统
 
-用 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu** 进入 Live。已核 Live 的 `linux-modules-7.0.0-30-generic` 含 `iwlwifi`、`iwlmvm`、`btusb` 和 `btintel`，镜像也带 `linux-firmware-intel-wireless` 与 NetworkManager。AX210 插好后即可尝试联网。用 Xfce 面板的网络图标连接实际 LAN 的 Wi-Fi，或用终端 `nmcli --ask` 提示输入密码。先确认 AX210、`iwlwifi`、接口、地址与路由，再验证 APT。普通 Live 的网络配置和临时安装的软件随重启清空。 [官方 Live 包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Linux AX210 驱动](https://wireless.docs.kernel.org/en/latest/en/users/drivers/iwlwifi.html) · [nmcli 手册](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli.html)
+用 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu** 进入 Live。有线默认由 NetworkManager 通过 DHCP 联网，先用 `nmcli device status` 确认插线的接口。HP 规格列板载 I219-LM 与 X722 1GbE，Linux 分别识别为 `e1000e` 和 `i40e`。若配置了选配网络模块，按实际型号和协商速率记录。 [HP 板载网络规格](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=77)
 
-`nmcli device wifi list` 可查看附近网络。连好 Wi-Fi 后，从 `z8-kit` 根运行。脚本打印 AX210 驱动、Wi-Fi 状态、地址、默认路由和 DNS，最后更新 APT 索引。Live 退出前保存 `Log:` 路径显示的文件。
+没有网线时用 AX210。已核 Live 的 `linux-modules-7.0.0-30-generic` 含 `iwlwifi`、`iwlmvm`、`btusb` 和 `btintel`，镜像也带 `linux-firmware-intel-wireless` 与 NetworkManager。AX210 插好后即可尝试联网。用 Xfce 面板的网络图标连接实际 LAN 的 Wi-Fi，或用终端 `nmcli --ask` 提示输入密码。无线过渡时确认 AX210、`iwlwifi`、接口、地址与路由，再验证 APT。普通 Live 的网络配置和临时安装的软件随重启清空。 [官方 Live 包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Linux AX210 驱动](https://wireless.docs.kernel.org/en/latest/en/users/drivers/iwlwifi.html) · [nmcli 手册](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli.html)
+
+`nmcli device wifi list` 可查看附近网络。连上有线或过渡 Wi-Fi 后，从 `z8-kit` 根运行。脚本打印实际网卡、驱动、已协商的有线速率、地址、默认路由和 DNS，最后更新 APT 索引。Live 退出前保存 `Log:` 路径显示的文件。
 
 ```bash
 bash host/run-step.sh t1-network
@@ -23,7 +25,7 @@ bash host/run-step.sh t1-network
 Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra Fit CZ430 128 GB**。此时 P4618 等存储还未安装，FIT 也先不接。先只插三星 Portable SSD T3 250 GB，从其 Ventoy 菜单启动，等进入 Live 再插 SanDisk。CZ430 的标称容量约为 119 GiB，供临时桌面系统、CUDA 构建工具和日志使用。 [SanDisk 型号规格](https://www.sandisk.com/products/usb-flash-drives/sandisk-ultra-fit-usb-3-1?sku=SDCZ430-128G-G46) · [Xubuntu 容量要求](https://xubuntu.org/download/#system-requirements)
 
 1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。此时 Samsung FIT 留在机外，T4 才接入读序列号。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
-2. 安装后按提示拔 Ventoy，SanDisk 留在原 USB 口。从 F9 启动指向 SanDisk 的 UEFI 引导项。运行 `findmnt /`、`findmnt /boot/efi`，用 `lsblk` 验证两者都在 SanDisk。用 AX210 重连 Wi-Fi 并执行 `sudo apt update`。
+2. 安装后按提示拔 Ventoy，SanDisk 留在原 USB 口。从 F9 启动指向 SanDisk 的 UEFI 引导项。运行 `findmnt /`、`findmnt /boot/efi`，用 `lsblk` 验证两者都在 SanDisk。保持网线连接，或在无线过渡时用 AX210 重连。再执行 `sudo apt update`。
 3. 用 `mkdir -p "$HOME/z8-burnin"` 建日志目录。后续保存验机输出的命令从这个目录运行，或显式给出目录路径。T2/T3 内存测试时才从 Ventoy 选 Memtest86+，其余各轮从 SanDisk 上的临时 Xubuntu 启动。
 
 ### CPU 拷机
@@ -78,7 +80,7 @@ bash host/run-step.sh t1-avx
 
 ## T2. 只测 DDR4
 
-1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 和 AX210 分别留在槽 4 和槽 7。
+1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 留在槽 4，无线过渡时 AX210 留在槽 7。
 2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。I1 装好正式 FIT 后，日后复测可从 [FIT 的 GRUB 菜单](FIT-RECOVERY.md#i1-备好本机救援入口)选 Memtest86+。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
 3. 回 SanDisk 上的临时 Xubuntu，按下面顺序核容量、开温度采样、跑 Linux 压测。日志都留在 `~/z8-burnin`。
 
@@ -241,7 +243,7 @@ bash host/run-step.sh t4-hdd-start "${hdds[@]}"
 
 ### 主机基线
 
-AX210 自 T1 一直留在槽 7。七盘运行时复查 Wi-Fi 连接和蓝牙控制器，确认重启能重新连网，并记录 `iwlwifi` 日志。板载网口只记录枚举。主机保持独立，保存硬件、内核、RAS、SMART 与 SATA 对应表。P620 为唯一显卡。
+七盘运行时复查当前网络。走有线时记录板载网口驱动和协商速率；仍用 AX210 过渡时复查 Wi-Fi，使用蓝牙时也查蓝牙控制器，并保存 `iwlwifi` 日志。确认重启可联网。主机保持独立，保存硬件、内核、RAS、SMART 与 SATA 对应表。P620 为唯一显卡。
 
 ```bash
 bash host/run-step.sh t4-inventory
@@ -256,7 +258,7 @@ bash host/run-step.sh t4-inventory
 
 ### T5 末的 1017 推理冒烟
 
-在 T5 开始时即可准备权重，约 232 GiB，Wi-Fi 下载时间单独安排。用临时 Xubuntu 的用户运行。编译和日志放 SanDisk 上的临时 Xubuntu，先用 `df -h / /var/lib` 核对剩余空间，再装 Docker 和下载 CUDA 构建镜像。模型权重直接写 T3 的正式模型卷。以下从 `z8-kit` 根目录执行；T3 已启用模型单元时用 `findmnt` 核验。若临时系统还未挂好模型卷，先执行 `sudo systemctl start z8-pmem-model.service`。
+在 T5 开始时即可准备权重，约 232 GiB，下载时间单独安排。用临时 Xubuntu 的用户运行。编译和日志放 SanDisk 上的临时 Xubuntu，先用 `df -h / /var/lib` 核对剩余空间，再装 Docker 和下载 CUDA 构建镜像。模型权重直接写 T3 的正式模型卷。以下从 `z8-kit` 根目录执行；T3 已启用模型单元时用 `findmnt` 核验。若临时系统还未挂好模型卷，先执行 `sudo systemctl start z8-pmem-model.service`。
 
 ```bash
 kit=$(realpath .)
@@ -277,11 +279,11 @@ fi
 bash host/run-step.sh i6-probe --usage --repeats 1 --tools
 ```
 
-记录各卡显存、DDR4 页位置、是否能出字、工具往返和生成速度。显存不足时按推理手册依次降到 4 GiB 专家缓存、单槽，再试 Xolotl。工具往返成功且生成达到 5 tok/s 就进入 I1。2–5 tok/s 仍可进 I1，I6 给一天处理该差距。两种引擎均无法加载或降档后仍低于 2 tok/s 时，在验机窗口内决定算力坞的去留。完成后停推理和压测，保留机器空闲一晚（关闭系统自动睡眠）。翌日重新执行 `bash host/run-step.sh t4-inventory` 并启动一次四卡传输，核 AER、Xid、掉卡、SATA link reset、NVMe reset/timeout 与设备数，再关机断开 V100。
+先用 128K 单槽、f16 GPU KV 和 8 GiB GPU 专家缓存起服务。显存不足时按[上下文降档](../inference/README.md#上下文降档与验收)操作并记录生效档。记录各卡显存、DDR4 页位置、首次填充、生成速度和工具往返；20 轮真实工具闭环在 I6 完成。工具往返成功且生成达到 5 tok/s 时通过推理冒烟。2–5 tok/s 可继续，I6 给一天处理该差距。两种引擎均无法加载或降档后仍低于 2 tok/s 时，在验机窗口内决定算力坞的去留。
 
 ## I7. 正式安装后的整机混合负载
 
-按 [CPU 分核手册](CPU-PLACEMENT.md) 配置每路 6 核，核启停时普通任务 CPU 集合的变化。随后以这套正式配置跑一次 8 小时混合负载，涵盖 Buck2 上传与回读、1017 的实际工具请求、SSH/RDP。主方案覆盖冷读和热读，全 XFS 回退覆盖其本地 CAS 写入与回读。I6 通过双槽时使用两个并发 harness，单槽方案用串行请求。全程要求无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。出现错误回到相关硬件阶段复现。
+按 [CPU 分核手册](CPU-PLACEMENT.md) 从每路 2 核起步，核启停时普通任务 CPU 集合的变化。随后以这套正式配置跑一次 8 小时混合负载，涵盖 Buck2 上传与回读、1017 的实际工具请求、SSH/RDP。主方案覆盖冷读和热读，全 XFS 回退覆盖其本地 CAS 写入与回读。默认单槽串行使用 harness。明确选用双槽且已通过 I6 时，才用两个并发 harness。全程要求无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。出现错误回到相关硬件阶段复现。
 
 ```bash
 # 分开终端运行，日志落 P4618。先确认 log 与测试进程都能在当前用户运行。
@@ -292,4 +294,4 @@ sudo zpool iostat -v z8data 5 > zpool-iostat.log
 sudo journalctl -kf -o short-monotonic > kernel-follow.log
 ```
 
-用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。在开始与结束各执行一次 `bash host/run-step.sh i7-snapshot PID`，用实际推理 PID 替换 `PID`。脚本收集 slice、两路内存、PMem 页迁移和内核错误。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。混合负载结束后保留一次空闲过夜，翌日先跑 `bash host/run-step.sh i7-snapshot` 保存开机错误，再短跑构建和推理复查链路、NVMe/SMART 与池状态。
+用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。在开始与结束各执行一次 `bash host/run-step.sh i7-snapshot PID`，用实际推理 PID 替换 `PID`。脚本收集 slice、两路内存、PMem 页迁移和内核错误。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。

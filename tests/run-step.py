@@ -69,6 +69,24 @@ esac
     result = run("t4-nvme-read", str(disks[0]), str(disks[0]), str(disks[2]), target=fixture)
     assert result.returncode == 2 and "Duplicate disk" in result.stdout
 
+    net = root / "net"
+    nic = net / "enp1s0"
+    (nic / "device").mkdir(parents=True)
+    (nic / "device/driver").symlink_to("/driver/e1000e")
+    (nic / "address").write_text("00:11:22:33:44:55\n")
+    (nic / "speed").write_text("1000\n")
+    (nic / "duplex").write_text("full\n")
+    inv = script.with_name("inventory.sh").read_text()
+    (fixture_host / "inventory.sh").write_text(inv.replace("/sys/class/net/", f"{net}/"))
+    stub(fake_bin / "lspci", "echo 'Ethernet controller: Intel I219-LM'")
+    stub(fake_bin / "nmcli", "echo enp1s0")
+    stub(fake_bin / "ip", "echo default via 192.0.2.1")
+    stub(fake_bin / "getent", "echo archive.ubuntu.com")
+    stub(fake_bin / "apt-get", '[[ "$*" == "-o APT::Update::Error-Mode=any update" ]]')
+    result = run("t1-network", target=fixture)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "driver=e1000e" in result.stdout and "negotiated speed=1000 Mb/s" in result.stdout
+
     # Ctrl+C from a terminal signals every process in the foreground group.
     workload = fake_bin / "stress-ng"
     workload.write_text("""#!/usr/bin/env python3
@@ -106,4 +124,4 @@ sleep(30)
         assert "RAS --error-count" in transcript.split("\n[RAS after stress]\n")[1], transcript
         assert "Finished t1-cpu: exit 130, logger exit 0" in transcript, transcript
 
-print("Step runner tests passed: GPU arguments, three NVMe scans after SMART errors, and Ctrl+C with post-stress RAS.")
+print("Step runner tests passed: GPU arguments, SMART errors, Ethernet-only setup and Ctrl+C with post-stress RAS.")
