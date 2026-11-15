@@ -26,7 +26,8 @@ Usage: bash host/run-step.sh STEP [ARGS...]
   i1-boot                      Collect FIT, md, XFS and Dracut boot evidence
   i2-remote                    Check active networking and local SSH/xrdp listeners
   i3-cuda GPU-UUID,...          Run P2P and all-reduce on the four V100s (also used at T5)
-  i4-status                    Collect pool, mappers and boot journal, including failed units
+  i4-status                    Collect pool, cold slices and boot journal, including failed units
+  i4-cold-aging LOG_DIRECTORY  Test four empty cold disks with 128 GiB each and three overwrites
   i5-worker tiered|xfs         Inspect the selected Buildbarn runner and CPU assignment
   i6-probe [PROBE_ARGS...]      Run the inference probe and print GPU/error evidence
   i7-snapshot [PID]            Capture NUMA, memory, CPU and hardware counter evidence
@@ -305,13 +306,19 @@ run_step() {
             ;;
         i4-status)
             sudo journalctl -b -o short-monotonic --no-pager -u z8-dmzoned -u z8-zpool \
-                -u data-buildbarn.mount -u data-other.mount -u srv-bbindex.mount
+                -u z8-cold -u data-other.mount -u z8-buildbarn
             sudo dmsetup status --target zoned || missing=1
+            sudo dmsetup table --target linear
+            sudo jq '.active | length' /run/z8-cold/cold-layout.json || missing=1
             sudo zpool status -P z8data || missing=1
-            for disk in /data/buildbarn /data/other /srv/bbindex /srv/pmem-model; do
+            for disk in /data/other /srv/pmem-model; do
                 findmnt -M "$disk" -o SOURCE,TARGET,FSTYPE,OPTIONS || missing=1
             done
             return "$missing"
+            ;;
+        i4-cold-aging)
+            [[ $# == 1 ]] || fail 'Supply an existing log directory.'
+            sudo bash storage/cas-aging.sh sequential "$1"
             ;;
         i5-worker)
             cd /opt/z8-kit/buildbarn

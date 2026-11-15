@@ -2,87 +2,27 @@
 set -euo pipefail
 export LC_ALL=C
 
-target=/data/buildbarn
-index_dir=/srv/bbindex
-index_device=/dev/disk/by-partlabel/z8-cold-index
-dataset=z8data/buildbarn
-layout=$index_dir/cold-layout.json
-index=$index_dir/key_location_map
-tib_bytes=$((1024**4))
-gib_bytes=$((1024**3))
-
-if [[ $(findmnt -n -o SOURCE,FSTYPE -M "$target") != "$dataset zfs" || ! -w "$target" ]]; then
-    echo "Expected writable $dataset mounted at $target" >&2
-    exit 1
-fi
-if [[ $(findmnt -n -o FSTYPE -M "$index_dir") != xfs ]] ||
-    ! index_source=$(findmnt -n -o SOURCE -M "$index_dir") ||
-    ! expected_device=$(readlink -e -- "$index_device") ||
-    [[ $(readlink -e -- "$index_source") != "$expected_device" ]]; then
-    echo "Expected $index_device mounted as XFS at $index_dir" >&2
-    exit 1
-fi
 export BB_DATA_DIR=${BB_DATA_DIR:-/srv/buildbarn/tiered}
-if [[ $(findmnt -n -o FSTYPE -T "$BB_DATA_DIR") != xfs ]]; then
-    echo "Create the Buildbarn directories on the P4618 XFS before starting." >&2
+if [[ $(findmnt -rn -o TARGET,FSTYPE -T "$BB_DATA_DIR") != '/ xfs' ]]; then
+    echo 'Create the Buildbarn directories on the P4618 XFS before starting.' >&2
     exit 1
 fi
-for store in "$index_dir" "$BB_DATA_DIR"/{cs-hot,cms,ac}; do
+/usr/local/sbin/z8-cold check
+mapfile -t shards < <(jq -r '.active[]' /run/z8-cold/cold-layout.json)
+(( ${#shards[@]} > 0 ))
+stores=("$BB_DATA_DIR"/{cs-hot,cms,ac})
+for shard in "${shards[@]}"; do stores+=("$BB_DATA_DIR/cold/$shard"); done
+for store in "${stores[@]}"; do
     [[ -d "$store/persistent_state" && -w "$store/persistent_state" && -w "$store" ]] || {
         echo "Missing or unwritable directory $store/persistent_state" >&2
         exit 1
     }
 done
-
-if [[ -e "$target/i4-cas-aging.bin" ]]; then
-    echo "Finish I4 and remove $target/i4-cas-aging.bin before starting Buildbarn." >&2
-    exit 1
-fi
-reserved=$(zfs get -Hp -o value refreservation "$dataset")
-if [[ ! "$reserved" =~ ^[1-9][0-9]{0,15}$ ]] || (( reserved % tib_bytes != 0 )); then
-    echo "Expected a positive whole TiB refreservation for $dataset, got $reserved" >&2
-    exit 1
-fi
-tib=$((reserved / tib_bytes))
-blocks=$target/blocks
-state=$(find "$index_dir/persistent_state" -mindepth 1 -maxdepth 1 -print -quit)
-if [[ ( -e "$blocks" || -e "$index" || -n "$state" ) &&
-    ( ! -f "$blocks" || ! -f "$index" ) ]]; then
-    echo 'Cold CAS files are incomplete. Restore the matching files and state, or rebuild the cold CAS using the storage recovery procedure.' >&2
-    exit 1
-fi
-if [[ ! -e "$layout" ]]; then
-    if [[ -e "$blocks" || -e "$index" ]]; then
-        echo "Restore $layout if both cold files and their state are intact. If p9 data was lost, rebuild the cold CAS using the storage recovery procedure." >&2
+# Existing cache files must be retired as a unit before changing their geometry.
+for entry in 'blocks:1758789107712' 'key_location_map:27917287424'; do
+    path="$BB_DATA_DIR/cs-hot/${entry%:*}"
+    if [[ -e "$path" && $(stat -c %s -- "$path") != "${entry#*:}" ]]; then
+        echo "Unexpected hot CS geometry in $path; retire the old hot CS as documented." >&2
         exit 1
     fi
-    # Preserve 8 GiB for persistent state and filesystem overhead.
-    free=$(df -B1 --output=avail -- "$index_dir" | awk 'NR == 2 {print $1}')
-    if [[ ! "$free" =~ ^[1-9][0-9]{0,15}$ ]] || (( free / gib_bytes <= 8 )); then
-        echo "Insufficient space for the cold index at $index_dir" >&2
-        exit 1
-    fi
-    temporary=$(mktemp "$layout.XXXXXX")
-    trap 'rm -f -- "$temporary"' EXIT
-    printf '{"tib":%s,"indexGib":%s}\n' "$tib" "$((free / gib_bytes - 8))" > "$temporary"
-    chmod 0644 -- "$temporary"
-    ln -- "$temporary" "$layout"
-    sync -- "$layout" "$index_dir"
-fi
-
-if [[ $(jq -er '.tib | select(type == "number")' "$layout") != "$tib" ]]; then
-    echo "Cold CAS geometry in $layout differs from $dataset refreservation; restore the original value." >&2
-    exit 1
-fi
-index_gib=$(jq -er '.indexGib | select(type == "number" and . == floor and . > 0 and . < 1024)' "$layout") || {
-    echo "Invalid cold CAS index size in $layout; recover its recorded GiB capacity." >&2
-    exit 1
-}
-if [[ -e "$blocks" ]] && [[ $(stat -c %s -- "$blocks") != "$reserved" ]]; then
-    echo "Cold block file size differs from $layout; restore the original geometry." >&2
-    exit 1
-fi
-if [[ -e "$index" ]] && [[ $(stat -c %s -- "$index") != "$((index_gib * gib_bytes))" ]]; then
-    echo "Cold index size differs from $layout; restore the original geometry." >&2
-    exit 1
-fi
+done

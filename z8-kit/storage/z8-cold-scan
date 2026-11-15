@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Scan only the verified cold CAS slices and overwrite persistent logical EIOs."""
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import errno
+import mmap
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+SECTOR = 4096
+READ_SIZE = 4 * 1024**2
+DEVICE_SIZE = 6519 * 256 * 1024**2
+
+
+def read_exact(fd, buffer, length, offset):
+    with buffer[:length] as aligned:
+        size = os.preadv(fd, [aligned], offset)
+    if size != length:
+        raise OSError(f"Short read at byte {offset}: {size}/{length}")
+
+
+def scan(fd, size, emit=print):
+    repaired = 0
+    with mmap.mmap(-1, READ_SIZE) as read_buffer, mmap.mmap(-1, SECTOR) as zeros:
+        with memoryview(read_buffer) as buf:
+            for offset in range(0, size, READ_SIZE):
+                length = min(READ_SIZE, size - offset)
+                try:
+                    read_exact(fd, buf, length, offset)
+                    continue
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                for sector in range(offset, offset + length, SECTOR):
+                    try:
+                        read_exact(fd, buf, SECTOR, sector)
+                        continue
+                    except OSError as exc:
+                        if exc.errno != errno.EIO:
+                            raise
+                    try:
+                        read_exact(fd, buf, SECTOR, sector)
+                        continue
+                    except OSError as exc:
+                        if exc.errno != errno.EIO:
+                            raise
+                    if os.pwrite(fd, zeros, sector) != SECTOR:
+                        raise OSError(f"Short zero write at byte {sector}")
+                    os.fsync(fd)
+                    read_exact(fd, buf, SECTOR, sector)
+                    if buf[:SECTOR] != zeros[:]:
+                        raise OSError(f"Nonzero data after repair at byte {sector}")
+                    repaired += 1
+                    emit(f"logical_offset={sector} bytes_zeroed={SECTOR}")
+    return repaired
+
+
+def scan_disk(shards):
+    result = 0
+    for shard in shards:
+        path = Path(f"/dev/mapper/z8-cold-{shard}")
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_DIRECT)
+            try:
+                if os.lseek(fd, 0, os.SEEK_END) != DEVICE_SIZE:
+                    raise ValueError(f"Wrong size for {path}")
+                count = scan(fd, DEVICE_SIZE, lambda msg: print(f"{path}: {msg}", flush=True))
+            finally:
+                os.close(fd)
+            print(f"{path}: bytes_scanned={DEVICE_SIZE} blocks_zeroed={count}", flush=True)
+            result = max(result, int(count > 0))
+        except (OSError, ValueError) as exc:
+            print(f"{path}: scan stopped: {exc}", file=sys.stderr, flush=True)
+            return 2
+    return result
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    disks = tuple(f"sata{i}" for i in range(4))
+    parser.add_argument("disk", choices=disks, nargs="?")
+    args = parser.parse_args()
+    try:
+        # z8-cold list verifies the complete tables, backing devices and sizes.
+        shards = subprocess.check_output(["/usr/local/sbin/z8-cold", "list"], text=True).splitlines()
+        groups = [[s for i in range(8) if (s := f"{disk}-{i}") in shards]
+                  for disk in ((args.disk,) if args.disk else disks)]
+        expected = 1 if args.disk else len(disks)
+        complete = [group for group in groups if len(group) == 8]
+        if len(complete) != expected:
+            print(f"Scanning {len(complete)}/{expected} ready cold disks.", file=sys.stderr, flush=True)
+        with ThreadPoolExecutor(max_workers=expected) as pool:
+            outcomes = list(pool.map(scan_disk, complete))
+        sys.exit(max([0 if len(complete) == expected else 2, *outcomes]))
+    except (OSError, subprocess.CalledProcessError) as error:
+        sys.exit(f"z8-cold-scan: {error}")

@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Manage fixed-size dm-linear slices and the active Buildbarn shard set."""
+
+import argparse
+from contextlib import ExitStack
+import fcntl
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+
+CONFIG = Path(os.environ.get("Z8_STORAGE_CONFIG", "/etc/z8-storage"))
+RUNTIME = Path("/run/z8-cold")
+STORE = Path(os.environ.get("BB_DATA_DIR", "/srv/buildbarn/tiered"))
+INDEX = Path("/dev/disk/by-partlabel/z8-cold-index")
+DISKS = tuple(f"sata{i}" for i in range(4))
+SHARDS_PER_DISK = 8
+SHARDS = tuple(f"{disk}-{i}" for disk in DISKS for i in range(SHARDS_PER_DISK))
+DATA_BYTES = 6519 * 256 * 1024**2
+INDEX_BYTES = 53 * 1024**3 // 2
+GEOMETRY = {"shardCount": len(SHARDS), "dataBytes": DATA_BYTES, "indexBytes": INDEX_BYTES}
+
+
+def run(*args):
+    return subprocess.check_output(args, text=True).strip()
+
+
+def write_json(path, contents):
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+        json.dump(contents, stream, indent=2)
+        stream.write("\n")
+    try:
+        temporary.chmod(0o644)
+        temporary.replace(path)
+        if path.parent == CONFIG:
+            subprocess.run(["sync", "--", path, path.parent], check=True)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def load(path):
+    result = json.loads(path.read_text())
+    if any(result.get(key) != value for key, value in GEOMETRY.items()):
+        raise ValueError(f"Invalid fixed shard geometry in {path}")
+    active = result["active"]
+    if not isinstance(active, list) or active != [shard for shard in SHARDS if shard in active]:
+        raise ValueError(f"Invalid active shard list in {path}")
+    return result
+
+
+def backing_name(device):
+    dev = device.stat()
+    if not stat.S_ISBLK(dev.st_mode):
+        raise ValueError(f"{device} is not a block device")
+    return f"{os.major(dev.st_rdev)}:{os.minor(dev.st_rdev)}"
+
+
+def slice_specs(available):
+    for slot, disk in enumerate(DISKS):
+        if disk not in available:
+            continue
+        parent = Path(f"/dev/mapper/hc620-{slot}")
+        for i in range(SHARDS_PER_DISK):
+            shard = f"{disk}-{i}"
+            yield f"z8-cold-{shard}", parent, i * DATA_BYTES, DATA_BYTES
+            yield f"z8-index-{shard}", INDEX, (slot * SHARDS_PER_DISK + i) * INDEX_BYTES, INDEX_BYTES
+
+
+def dm_uuid(name):
+    result = subprocess.run(
+        ["dmsetup", "info", "-c", "--noheadings", "-o", "uuid", name],
+        capture_output=True, text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def check_devices(available, create=False):
+    for name, backing, offset, length in slice_specs(available):
+        table = f"0 {length // 512} linear {backing_name(backing)} {offset // 512}"
+        identity = dm_uuid(name)
+        if identity is None and create:
+            print(f"Creating {name}: {table}", flush=True)
+            run("dmsetup", "create", name, "--uuid", name, "--table", table)
+            identity = dm_uuid(name)
+        path = f"/dev/mapper/{name}"
+        if identity != name or run("dmsetup", "table", name) != table or int(run("blockdev", "--getsize64", path)) != length:
+            raise ValueError(f"Unexpected device identity, table or size: {path}")
+        if create and backing == INDEX:
+            run("blockdev", "--setra", "0", path)
+
+
+def compose_devices(layout):
+    return {"services": {"cache": {"devices": [
+        f"/dev/mapper/z8-{kind}-{shard}:/dev/z8-{kind}-{shard}:rw"
+        for shard in layout["active"] for kind in ("cold", "index")
+    ]}}}
+
+
+def require_cache_stopped():
+    state = run("systemctl", "show", "-p", "ActiveState", "--value", "z8-buildbarn.service")
+    if state not in {"inactive", "failed"}:
+        raise ValueError(f"Stop z8-buildbarn.service first (state is {state})")
+    # Also catch a cache someone started directly through Docker Compose.
+    users = run("dmsetup", "info", "-c", "--noheadings", "-o", "name,open", "--separator", " ")
+    for line in users.splitlines():
+        if line == "No devices found":
+            continue
+        name, opens = line.split()
+        if name.startswith(("z8-cold-sata", "z8-index-sata")) and opens != "0":
+            raise ValueError(f"{name} is open; stop the cache and other I/O before resetting it")
+
+
+def selected_shards(selection):
+    return [shard for shard in SHARDS if selection in {"all", shard, shard.rsplit("-", 1)[0]}]
+
+
+def set_active(layout, selected, enable):
+    active = set(layout["active"])
+    active = active | set(selected) if enable else active - set(selected)
+    layout["active"] = [shard for shard in SHARDS if shard in active]
+
+
+def available_disks():
+    result = run("/usr/local/sbin/z8-storage", "cold-ready").splitlines()
+    if result != [disk for disk in DISKS if disk in result]:
+        raise ValueError("Unexpected dm-zoned device list")
+    return result
+
+
+def main(args):
+    config_path = CONFIG / "cold-layout.json"
+    if args.action == "init":
+        if not config_path.exists():
+            write_json(config_path, {**GEOMETRY, "active": []})
+        load(config_path)
+        return
+
+    if args.action == "unmap":
+        errors = []
+        for kind in ("cold", "index"):
+            for shard in reversed(SHARDS):
+                name = f"z8-{kind}-{shard}"
+                if (identity := dm_uuid(name)) is None:
+                    continue
+                try:
+                    table = run("dmsetup", "table", name).split()
+                    if identity != name or len(table) != 5 or table[2] != "linear":
+                        raise ValueError(f"Refusing to remove unexpected mapper {name}")
+                    run("dmsetup", "remove", name)
+                except (ValueError, subprocess.CalledProcessError) as exc:
+                    errors.append(str(exc))
+        if errors:
+            raise ValueError("; ".join(errors))
+        return
+
+    layout = load(config_path)
+    if args.action == "disable":
+        require_cache_stopped()
+        set_active(layout, selected_shards(args.disk), False)
+        write_json(config_path, layout)
+        print(f"Disabled {args.disk}. Restart z8-cold.service before starting Buildbarn.")
+        return
+
+    available = available_disks()
+    if args.action == "reset":
+        require_cache_stopped()
+        selected = selected_shards(args.disk)
+        required = {shard.rsplit("-", 1)[0] for shard in selected}
+        if not required <= set(available):
+            raise ValueError("The selected HDD/Optane pairs are not all present")
+        check_devices(required)
+        if run("findmnt", "-rn", "-o", "TARGET,FSTYPE", "-T", STORE) != "/ xfs":
+            raise ValueError(f"{STORE} must be on P4618 XFS")
+        # Persist the exclusion first so a partial reset/power loss stays disabled.
+        set_active(layout, selected, False)
+        write_json(config_path, layout)
+        for shard in selected:
+            path = STORE / "cold" / shard / "persistent_state"
+            path.mkdir(parents=True, exist_ok=True)
+            print(f"Zeroing index and clearing checkpoint for {shard}", flush=True)
+            subprocess.run(["blkdiscard", "--zeroout", f"/dev/mapper/z8-index-{shard}"], check=True)
+            path.chmod(0o755)
+            subprocess.run(["find", path, "-mindepth", "1", "-delete"], check=True)
+        subprocess.run(["sync", "-f", STORE], check=True)
+        set_active(layout, selected, True)
+        write_json(config_path, layout)
+        print("Restart z8-cold.service before starting Buildbarn.")
+        return
+
+    check_devices(available, create=args.action == "map")
+    active = [s for s in layout["active"] if s.rsplit("-", 1)[0] in available]
+    effective = {**GEOMETRY, "active": active}
+    if args.action == "map":
+        write_json(RUNTIME / "cold-layout.json", effective)
+        write_json(RUNTIME / "compose.json", compose_devices(effective))
+    elif effective != load(RUNTIME / "cold-layout.json") or compose_devices(effective) != json.loads((RUNTIME / "compose.json").read_text()):
+        raise ValueError("Cold device inventory changed; stop Buildbarn and restart z8-cold.service")
+
+    if args.action == "list":
+        for disk in available:
+            for i in range(SHARDS_PER_DISK):
+                print(f"{disk}-{i}")
+    else:
+        print(f"Cold CAS: {len(available) * SHARDS_PER_DISK}/32 slices mapped, {len(active)} active")
+        if args.action == "check" and not active:
+            raise ValueError("No initialized, available cold shards. Complete I4 or use the documented XFS fallback.")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=["init", "map", "unmap", "list", "check", "disable", "reset"])
+    parser.add_argument("disk", choices=[*DISKS, *SHARDS, "all"], nargs="?")
+    options = parser.parse_args()
+    if (options.action in {"disable", "reset"}) != (options.disk is not None):
+        parser.error("Pass a disk or shard to disable/reset, or all for a complete reset/disable")
+    try:
+        with ExitStack() as locks:
+            if options.action in {"disable", "reset"}:
+                scan_lock = locks.enter_context(open("/run/lock/z8-cold-scan.lock", "a"))
+                fcntl.flock(scan_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock = locks.enter_context(open("/run/lock/z8-cold.lock", "a"))
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            main(options)
+    except (OSError, KeyError, ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(f"z8-cold: {error}")

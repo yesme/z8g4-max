@@ -20,11 +20,21 @@ base + {
   contentAddressableStorageServer+: {
     contentAddressableStorage+: {
       chunkStorage: {
-        local cold = import '../cold-index/cold-layout.json',
+        local cold = import '../cold-layout.json',
         readCaching: {
-          // Authoritative CS: D4800X p9 index and state, RAIDZ1 block file.
-          slow: disk('/cold-index', '/cold/blocks', cold.tib * 1024 * GiB, cold.indexGib * GiB, 3, chunking, 22, 66),
-          fast: disk('/store/cs-hot', '/store/cs-hot/blocks', 512 * GiB, 8 * GiB, 3, chunking),
+          slow: {
+            sharding: {
+              shards: {
+                [name]: {
+                  weight: 1,
+                  backend: disk('/store/cold/' + name, '/dev/z8-cold-' + name, 0, 0,
+                                3, chunking, 22, 66, '/dev/z8-index-' + name),
+                }
+                for name in cold.active
+              },
+            },
+          },
+          fast: disk('/store/cs-hot', '/store/cs-hot/blocks', 1638 * GiB, 26 * GiB, 3, chunking),
           replicator: { 'local': {} },
         },
       },

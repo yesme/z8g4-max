@@ -6,39 +6,56 @@ pool=z8data
 config=${Z8_STORAGE_CONFIG:-/etc/z8-storage}
 action=${1:-}
 case "$action" in
-    map|unmap|import|export) ;;
-    *) echo 'Usage: z8-storage map|unmap|import|export' >&2; exit 2 ;;
-esac
+    map|unmap|import|export|cold-ready) [[ $# == 1 ]] ;;
+    format) [[ $# == 3 && "$2" =~ ^[0-6]$ && ( "$3" == --create || "$3" == --replace ) ]] ;;
+    *) echo 'Usage: z8-storage map|unmap|import|export|cold-ready or format SLOT --create|--replace' >&2; exit 2 ;;
+esac || exit 2
+
 # shellcheck source=/dev/null
 source "$config/storage.env"
-: "${Z8_SPECIAL:?Set the D4800X special partition by-id}"
+: "${Z8_OPTANE:?Set the D4800X whole-disk by-id}"
 : "${Z8_DEVICE_WAIT:=90}"
-[[ "$Z8_SPECIAL" =~ ^/dev/disk/by-id/nvme-[^/[:space:]]+-part8$ ]] || exit 2
+[[ "$Z8_OPTANE" =~ ^/dev/disk/by-id/nvme-[^/[:space:]]+$ && ! "$Z8_OPTANE" =~ -part[0-9]+$ ]] || exit 2
 [[ "$Z8_DEVICE_WAIT" =~ ^[1-9][0-9]{0,2}$ ]] || exit 2
 if [[ $action == import || $action == export ]]; then
     [[ "${Z8_POOL_GUID:-}" =~ ^[0-9]+$ ]] || { echo 'Set the numeric ZFS pool GUID' >&2; exit 2; }
 fi
 
+special=/dev/disk/by-partlabel/z8-special
+index=/dev/disk/by-partlabel/z8-cold-index
+mapper_bytes=13999445901312
 names=() disks=() caches=()
-while IFS=$'\t' read -r name disk cache extra || [[ -n ${name:-} ]]; do
+while IFS=$'\t' read -r name disk label extra || [[ -n ${name:-} ]]; do
     [[ -z "$name" || "$name" == \#* ]] && continue
     i=${#names[@]}
-    [[ $i -lt 7 && "$name" == "hc620-$i" && -z "$extra" ]] || exit 2
+    [[ $i -lt 7 && "$name" == "hc620-$i" && "$label" == "dmz-sata$i" && -z "$extra" ]] || exit 2
     [[ "$disk" =~ ^/dev/disk/by-id/ata-[^/[:space:]]+$ && ! "$disk" =~ -part[0-9]+$ ]] || exit 2
-    [[ "$cache" == "${Z8_SPECIAL%-part8}-part$((i + 1))" ]] || exit 2
     names+=("$name")
     disks+=("$disk")
-    caches+=("$cache")
+    caches+=("/dev/disk/by-partlabel/$label")
 done < "$config/hybrid.tsv"
 (( ${#names[@]} == 7 )) || { echo 'Expected seven ordered rows in hybrid.tsv' >&2; exit 2; }
 [[ $(printf '%s\n' "${disks[@]}" | sort -u | wc -l) -eq 7 ]] || exit 2
 
-physical_layout_ready() {
-    [[ -b "$Z8_SPECIAL" ]] || return 1
-    local cache
-    for cache in "${caches[@]}"; do
-        [[ -b "$cache" ]] || return 1
-    done
+optane_geometry() {
+    [[ -b "$Z8_OPTANE" && $(blockdev --getsize64 "$Z8_OPTANE") == 1500301910016 ]] || return 1
+    optane_name=$(lsblk -dnro KNAME -- "$Z8_OPTANE") || return 1
+    local lba
+    lba=$(blockdev --getss "$Z8_OPTANE") || return 1
+    [[ "$lba" == 512 || "$lba" == 4096 ]] || return 1
+    special_bytes=$((1500301910016 - 1184 * 1024**3 - 1048576 - 16384 - lba))
+}
+
+check_partition() {
+    local path=$1 bytes=$2
+    [[ -b "$path" && $(lsblk -dnro PKNAME -- "$path") == "$optane_name" &&
+        $(blockdev --getsize64 "$path") == "$bytes" ]]
+}
+
+cache_geometry() {
+    if (( $1 < 4 )); then cache_bytes=25769803776; seq=96
+    else cache_bytes=85899345920; seq=320
+    fi
 }
 
 check_distinct_disks() {
@@ -57,9 +74,12 @@ check_distinct_disks() {
 
 is_expected_mapping() {
     local i=$1 name=${names[$1]} backing expected table mapper
-    [[ -b "/dev/mapper/$name" && -b "${disks[i]}" && -b "${caches[i]}" ]] || return 1
-    table=$(dmsetup table --target zoned "$name") || return 1
-    [[ -n "$table" ]] || return 1
+    [[ -b "/dev/mapper/$name" && -b "${disks[i]}" ]] || return 1
+    cache_geometry "$i"
+    check_partition "${caches[i]}" "$cache_bytes" || return 1
+    [[ $(blockdev --getsize64 "/dev/mapper/$name") == "$mapper_bytes" ]] || return 1
+    table=$(dmsetup table "$name") || return 1
+    [[ "$table" != *$'\n'* && "$table" =~ ^0[[:blank:]]+27342667776[[:blank:]]+zoned([[:blank:]]|$) ]] || return 1
     mapper=$(basename "$(readlink -f "/dev/mapper/$name")")
     backing=$(find "/sys/class/block/$mapper/slaves" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) || return 1
     expected=$(for device in "${disks[i]}" "${caches[i]}"; do
@@ -78,93 +98,116 @@ remove_known_zoned() {
     dmsetup remove "$name"
 }
 
-ready_mappings() {
-    available=()
-    for i in "${!names[@]}"; do
-        if is_expected_mapping "$i"; then
-            available+=("/dev/mapper/${names[i]}")
-        fi
-    done
+require_optane() {
+    optane_geometry || { echo "Missing or invalid 1.5 TB D4800X: $Z8_OPTANE" >&2; exit 1; }
+    check_distinct_disks
 }
 
 case "$action" in
     map)
         modprobe dm-zoned
-        modprobe zfs
         deadline=$((SECONDS + Z8_DEVICE_WAIT))
         while (( SECONDS < deadline )); do
             detected=0
-            for disk in "${disks[@]}"; do
-                if [[ -b "$disk" ]]; then
+            for i in "${!disks[@]}"; do
+                if [[ -b "${disks[i]}" && -b "${caches[i]}" ]]; then
                     detected=$((detected + 1))
                 fi
             done
-            if physical_layout_ready && (( detected == 7 )); then
+            if [[ -b "$Z8_OPTANE" && -b "$special" && -b "$index" ]] && (( detected == 7 )); then
                 break
             fi
             sleep 1
         done
-        physical_layout_ready || { echo 'Missing D4800X write cache partition (p1-p7) or special vdev (p8)' >&2; exit 1; }
-        check_distinct_disks
+        require_optane
         for i in "${!names[@]}"; do
             if dmsetup info "${names[i]}" >/dev/null 2>&1; then
-                if [[ ! -b "${disks[i]}" ]]; then
-                    echo "Removing stale ${names[i]} before degraded import" >&2
-                    if zpool list -H -o name "$pool" >/dev/null 2>&1; then
-                        echo "Export $pool before removing dm-zoned mappings" >&2
-                        exit 1
-                    fi
-                    remove_known_zoned "${names[i]}"
-                    continue
-                fi
-                is_expected_mapping "$i" || { echo "Unexpected backing for ${names[i]}" >&2; exit 1; }
+                is_expected_mapping "$i" || echo "Skipping stale or unexpected backing for ${names[i]}" >&2
                 continue
             fi
-            if [[ -b "${disks[i]}" && $(lsblk -dnro ZONED -- "${disks[i]}") == host-managed ]]; then
-                cache_device=$(readlink -f "${caches[i]}")
-                hdd_device=$(readlink -f "${disks[i]}")
-                dmzadm --start "$cache_device" "$hdd_device" || echo "Failed: ${names[i]}" >&2
+            cache_geometry "$i"
+            if [[ -b "${disks[i]}" && $(lsblk -dnro ZONED -- "${disks[i]}") == host-managed ]] &&
+                check_partition "${caches[i]}" "$cache_bytes"; then
+                dmzadm --start "$(readlink -f "${caches[i]}")" "$(readlink -f "${disks[i]}")" ||
+                    echo "Failed: ${names[i]}" >&2
             else
-                echo "Missing or non-zoned: ${disks[i]}" >&2
+                echo "Missing or invalid HDD/cache pair: ${names[i]} (${disks[i]}, ${caches[i]})" >&2
             fi
         done
         udevadm settle --timeout=10 || true
-        ready_mappings
-        echo "${#available[@]}/7 expected dm-zoned mappings are ready"
-        (( ${#available[@]} >= 6 ))
+        for i in "${!names[@]}"; do
+            if is_expected_mapping "$i"; then
+                echo "Ready: ${names[i]}"
+            else
+                echo "Unavailable: ${names[i]}" >&2
+            fi
+        done
         ;;
     unmap)
-        if zpool list -H -o name "$pool" >/dev/null 2>&1; then
+        if [[ -d /sys/module/zfs ]] && zpool list -H -o name "$pool" >/dev/null 2>&1; then
             echo "Export $pool before removing dm-zoned mappings" >&2
             exit 1
         fi
         failed=0
-        for i in "${!names[@]}"; do
-            if dmsetup info "${names[i]}" >/dev/null 2>&1; then
-                remove_known_zoned "${names[i]}" || failed=1
+        for name in "${names[@]}"; do
+            if dmsetup info "$name" >/dev/null 2>&1; then
+                remove_known_zoned "$name" || failed=1
             fi
         done
         exit "$failed"
         ;;
+    cold-ready)
+        require_optane
+        check_partition "$index" 910533066752 || { echo 'Missing or invalid z8-cold-index on D4800X' >&2; exit 1; }
+        for i in {0..3}; do
+            if is_expected_mapping "$i"; then
+                printf 'sata%s\n' "$i"
+            fi
+        done
+        ;;
+    format)
+        require_optane
+        i=$2
+        cache_geometry "$i"
+        disk=${disks[i]}
+        cache=${caches[i]}
+        if [[ ! -b "$disk" || $(lsblk -dnro ZONED -- "$disk") != host-managed ||
+            $(blockdev --getss "$disk") != 4096 ]] || ! check_partition "$cache" "$cache_bytes"; then
+            echo "Invalid HDD/cache pair: $disk $cache" >&2
+            exit 1
+        fi
+        ! dmsetup info "${names[i]}" >/dev/null 2>&1 || { echo "Remove ${names[i]} before formatting." >&2; exit 1; }
+        args=(--format "--label=${names[i]}" "--seq=$seq")
+        if [[ $3 == --replace ]]; then args+=(--force); fi
+        lsblk -b -o NAME,MODEL,SERIAL,SIZE,ZONED,PARTLABEL "$disk" "$cache"
+        read -r -p "To erase this pair, enter ${names[i]}: " confirmation
+        [[ "$confirmation" == "${names[i]}" ]] || exit 1
+        dmzadm "${args[@]}" "$(readlink -f "$cache")" "$(readlink -f "$disk")"
+        dmzadm --check "$(readlink -f "$cache")" "$(readlink -f "$disk")"
+        ;;
     import)
-        [[ -b "$Z8_SPECIAL" ]] || { echo 'Missing ZFS special vdev' >&2; exit 1; }
-        ready_mappings
-        (( ${#available[@]} >= 6 )) || { echo 'RAIDZ1 requires at least six data members' >&2; exit 1; }
+        require_optane
+        check_partition "$special" "$special_bytes" || { echo 'Missing or invalid z8-special on D4800X' >&2; exit 1; }
         existing=$(zpool list -H -o guid "$pool" 2>/dev/null || true)
         if [[ -n "$existing" ]]; then
             [[ "$existing" == "$Z8_POOL_GUID" ]] || { echo "Wrong GUID for $pool" >&2; exit 1; }
             exit 0
         fi
-        search=(-d "$Z8_SPECIAL")
-        for member in "${available[@]}"; do
-            search+=(-d "$member")
+        search=(-d "$special")
+        count=0
+        for i in {4..6}; do
+            if is_expected_mapping "$i"; then
+                search+=(-d "/dev/mapper/${names[i]}")
+                count=$((count + 1))
+            fi
         done
+        (( count >= 2 )) || { echo 'RAIDZ1 requires at least two of hc620-4/5/6' >&2; exit 1; }
         exec zpool import -N -o cachefile=none "${search[@]}" "$Z8_POOL_GUID"
         ;;
     export)
         existing=$(zpool list -H -o guid "$pool" 2>/dev/null || true)
         if [[ -n "$existing" ]]; then
-            [[ "$existing" == "${Z8_POOL_GUID:-}" ]] || { echo "Wrong GUID for $pool" >&2; exit 1; }
+            [[ "$existing" == "$Z8_POOL_GUID" ]] || { echo "Wrong GUID for $pool" >&2; exit 1; }
             exec zpool export "$pool"
         fi
         ;;

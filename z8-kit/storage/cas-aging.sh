@@ -1,117 +1,92 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
 
-if [[ $# != 3 || $1 != sequential || $EUID != 0 ]]; then
-    echo "Usage: sudo bash $0 sequential EXISTING_LOG_DIRECTORY OPTANE_WHOLE_DISK_BY_ID" >&2
+if [[ $# != 2 || $1 != sequential || $EUID != 0 ]]; then
+    echo "Usage: sudo bash $0 sequential EXISTING_LOG_DIRECTORY" >&2
     exit 2
 fi
-target=/data/buildbarn
-pool=z8data
-optane=$3
-[[ "$optane" == /dev/disk/by-id/nvme-* && -b "$optane" &&
-    $(lsblk -dnro TYPE -- "$optane") == disk ]]
-[[ $(findmnt -n -M "$target" -o SOURCE,FSTYPE) == 'z8data/buildbarn zfs' ]]
-[[ $(zpool list -H -o health "$pool") == ONLINE ]]
-[[ $(zpool get -H -o value autotrim "$pool") == on ]]
+config=${Z8_STORAGE_CONFIG:-/etc/z8-storage}
+# shellcheck source=/dev/null
+source "$config/storage.env"
+devices=()
+stats=()
+mapfile -t shards < <(/usr/local/sbin/z8-cold list)
+[[ ${#shards[@]} -eq 32 && $(jq -er '.active | length' "$config/cold-layout.json") == 0 ]]
+[[ $(systemctl show -p ActiveState --value z8-buildbarn.service) =~ ^(inactive|failed)$ ]]
+exec 9>/run/lock/z8-cold-scan.lock
+flock -n 9
 log_dir=$(realpath -e -- "$2")
-[[ -d "$log_dir" && $(findmnt -n -o FSTYPE -T "$log_dir") != zfs ]]
-file="$target/i4-cas-aging.bin"
-if [[ -e "$file" || -L "$file" ]] || ! (set -o noclobber; : > "$file"); then
-    echo "Cannot create $file. If it is a previous test file, verify it and remove it before retrying." >&2
-    exit 1
-fi
-truncate -s 512G -- "$file"
+[[ -d "$log_dir" ]]
+for slot in {0..3}; do
+    device="/dev/mapper/z8-cold-sata$slot-0"
+    [[ -b "$device" && $(dmsetup info -c --noheadings -o open "$device") -eq 0 ]]
+    devices+=("$device")
+    stats+=("/sys/class/block/$(basename "$(readlink -f "$device")")/stat")
+done
+read -r -p 'This overwrites the first 128 GiB of each sataN-0. Type EMPTY-COLD to proceed: ' confirmation
+[[ "$confirmation" == EMPTY-COLD ]] || exit 1
 log_dir=$(mktemp -d -- "$log_dir/cas-sequential.XXXXXXXX")
 echo "Logs: $log_dir"
 
-history=/sys/module/zfs/parameters/zfs_txg_history
-txgs=/proc/spl/kstat/zfs/$pool/txgs
-old_history=$(<"$history")
-monitor_pid=
-iostat_pid=
+snapshot() {
+    local slot status counters
+    local -a fields
+    for slot in {0..3}; do
+        status=$(dmsetup status "hc620-$slot")
+        counters=$(awk '{print $7}' "${stats[slot]}")
+        read -ra fields <<< "$status"
+        [[ ${fields[5]} =~ ^([0-9]+)/([1-9][0-9]*)$ && ${fields[6]} == cache ]]
+        free=${BASH_REMATCH[1]}
+        total=${BASH_REMATCH[2]}
+        printf '%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "$slot" "$free" "$total" "$((counters * 512))"
+    done
+}
+
+printf 'time\tsata\tfree_cache_zones\ttotal_cache_zones\tbytes_written_since_mapper_start\n' > "$log_dir/watermark.tsv"
+snapshot >> "$log_dir/watermark.tsv"
+nvme smart-log "$Z8_OPTANE" > "$log_dir/optane-start.log"
+monitor=
 cleanup() {
-    if [[ -n "$monitor_pid" ]]; then
-        kill "$monitor_pid" 2>/dev/null || true
-        wait "$monitor_pid" 2>/dev/null || true
+    if [[ -n "$monitor" ]]; then
+        kill "$monitor" 2>/dev/null || true
+        wait "$monitor" 2>/dev/null || true
     fi
-    if [[ -n "$iostat_pid" ]]; then
-        kill "$iostat_pid" 2>/dev/null || true
-        wait "$iostat_pid" 2>/dev/null || true
-    fi
-    printf '%s\n' "$old_history" > "$history"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-printf '%s\n' "$((old_history < 4096 ? 4096 : old_history))" > "$history"
-
-snapshot() {
-    local tag=$1
-    {
-        printf '%s %s\n' "$(date -Is)" "$tag"
-        dmsetup status --target zoned
-    } >> "$log_dir/dmz.log"
-    cat "$txgs" >> "$log_dir/txgs-$tag.log"
-    {
-        printf '%s %s\n' "$(date -Is)" "$tag"
-        nvme smart-log "$optane"
-    } >> "$log_dir/optane-smart.log"
-}
-snapshot start
-: > "$log_dir/txgs-periodic.log"
 (
-    sleeper=
-    trap 'if [[ -n "$sleeper" ]]; then kill "$sleeper" 2>/dev/null || true; wait "$sleeper" 2>/dev/null || true; fi; exit 0' TERM
-    while true; do
-        sleep 60 & sleeper=$!
-        wait "$sleeper"
-        sleeper=
-        snapshot periodic
-    done </dev/null >>"$log_dir/monitor.log" 2>&1
-) & monitor_pid=$!
-zpool iostat -vpy -T u "$pool" 60 > "$log_dir/zpool-iostat.log" & iostat_pid=$!
+    while sleep 5; do snapshot; done
+) >> "$log_dir/watermark.tsv" 2>"$log_dir/monitor.err" & monitor=$!
 
-run_fio() {
-    local name=$1 started=$SECONDS
-    fio --name="$name" --filename="$file" --allow_file_create=0 \
-        --size=512G --rw=write --bs=1M --ioengine=psync \
-        --direct=0 --overwrite=1 --fallocate=none --refill_buffers=1 \
-        --buffer_compress_percentage=0 --end_fsync=1 \
-        --write_bw_log="$log_dir/$name" --log_avg_msec=60000 \
-        --percentile_list=50:95:99:99.9 --output-format=json --output="$log_dir/$name.json"
-    zpool sync "$pool"
-    elapsed=$((SECONDS - started))
-    printf '%s %s seconds (including zpool sync)\n' "$name" "$elapsed" | tee -a "$log_dir/timing.log"
-    snapshot "$name"
-}
-
-run_fio seed
-last_seed_txg=$(awk '$1 ~ /^[0-9]+$/ && $12 > 0 { id=$1 } END { if (id == "") exit 1; print id }' "$log_dir/txgs-seed.log")
 passed=1
-for pass in 1 2 3; do
-    run_fio "overwrite-$pass"
-    if (( pass >= 2 && elapsed > 3665 )); then
+for phase in seed overwrite-1 overwrite-2 overwrite-3; do
+    started=$SECONDS
+    args=(--ioengine=psync --size=128G --rw=write --direct=1 --bs=1M
+          --allow_file_create=0 --overwrite=1 --end_fsync=1 --refill_buffers=1
+          --buffer_compress_percentage=0 --write_bw_log="$log_dir/$phase"
+          --log_avg_msec=60000 --output-format=json --output="$log_dir/$phase.json")
+    for slot in {0..3}; do args+=(--name="sata$slot" --filename="${devices[slot]}"); done
+    fio "${args[@]}"
+    elapsed=$((SECONDS - started))
+    # 512 GiB per pass; time includes all four devices' final flush.
+    printf '%s %s s\n' "$phase" "$elapsed" | tee -a "$log_dir/timing.log"
+    if [[ "$phase" == overwrite-[23] ]] && (( elapsed * 150000000 > 512 * 1024**3 )); then
         passed=0
     fi
 done
-if ! kill -0 "$monitor_pid" "$iostat_pid" 2>/dev/null ||
-    [[ ! -s "$log_dir/zpool-iostat.log" || ! -s "$log_dir/txgs-periodic.log" ]]; then
-    echo 'Missing periodic monitoring. Check monitor.log and zpool-iostat.log.' | tee -a "$log_dir/timing.log"
-    passed=0
-fi
-if ! awk -v start="$last_seed_txg" '
-    $1 ~ /^[0-9]+$/ && $1 > start && $12 > max { max=$12; id=$1 }
-    END {
-        if (id == "") { print "No completed overwrite TXG recorded"; exit 1 }
-        printf "Max completed overwrite TXG %s sync time: %.3f seconds\n", id, max / 1e9
-        if (max > 60000000000) exit 1
+snapshot >> "$log_dir/watermark.tsv"
+nvme smart-log "$Z8_OPTANE" > "$log_dir/optane-end.log"
+kill -0 "$monitor" || passed=0
+awk -F '\t' '
+    NR == 1 {next}
+    !($2 in start) {start[$2] = $5}
+    $3*100 <= $4*30 && !($2 in seen) {
+        seen[$2] = 1
+        printf "sata%s first sampled >=70%% used after %.2f GiB wrote\n", $2, ($5-start[$2])/1073741824
     }
-' "$log_dir"/txgs-{periodic,overwrite-*}.log | tee -a "$log_dir/timing.log"; then
-    passed=0
-fi
-if (( passed )); then
-    echo 'PASS: throughput and TXG duration' | tee -a "$log_dir/timing.log"
-else
-    echo 'FAIL: minimum 150 MB/s, maximum 60 s completed TXG duration, and live monitoring required' | tee -a "$log_dir/timing.log"
-    exit 1
-fi
+    END {for (i=0; i<4; i++) if (!seen[i]) printf "sata%d never sampled >=70%% cache\n", i}
+' "$log_dir/watermark.tsv" | tee "$log_dir/watermark-summary.log"
+(( passed )) || { echo 'FAIL: last two passes require 150 MB/s aggregate and live monitoring'; exit 1; }
+echo 'PASS: aggregate steady overwrite >= 150 MB/s'

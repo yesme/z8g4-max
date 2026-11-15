@@ -1,0 +1,17 @@
+[Unit]
+Description=Assemble Z8 cold CAS data and index slices
+BindsTo=z8-dmzoned.service
+After=z8-dmzoned.service
+RequiresMountsFor=/etc/z8-storage /usr/local/sbin
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+RuntimeDirectory=z8-cold
+ExecStart=/usr/local/sbin/z8-cold map
+ExecStopPost=/usr/local/sbin/z8-cold unmap
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

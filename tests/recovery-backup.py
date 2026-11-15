@@ -35,6 +35,10 @@ with TemporaryDirectory() as directory:
     (boot / "grub/grubenv").write_text("next_entry=1")
     for name in ("recovery", "nvme0", "nvme1"):
         (devices / name).touch()
+    storage = root / "etc/z8-storage"
+    storage.mkdir(parents=True)
+    (storage / "storage.env").write_text("Z8_OPTANE=/dev/disk/by-id/nvme-fixture\n")
+    (storage / "cold-layout.json").write_text('{"active":["sata0-0"]}\n')
     infer = root / "home/jackywang/.config/z8-infer"
     infer.mkdir(parents=True)
     (infer / "env.sh").write_text("export SLOTS=2\nexport KV_TYPE=q8_0\nexport KV_OFFLOAD=0\nexport DEEPSEEK_API_KEY=fixture-secret\n")
@@ -120,6 +124,8 @@ echo unmounted >> "$Z8_FIXTURE/mount.log"
     missing = volume / (volume / "latest").readlink()
     assert b"status=missing-baseline" in (missing / "boot-check.txt").read_bytes()
     assert (missing / "storage/mdadm-scan.txt").is_file()
+    assert (missing / "storage/optane-unavailable.txt").is_file()
+    assert (missing / ("config" + str(storage / "cold-layout.json"))).read_bytes() == (storage / "cold-layout.json").read_bytes()
 
     initialized = run("--refresh-boot")
     assert initialized.returncode == 0, initialized.stderr.decode()

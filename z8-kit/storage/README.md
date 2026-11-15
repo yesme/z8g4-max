@@ -1,462 +1,239 @@
-# HC620 SATA 与 D4800X RAIDZ1 部署
+# HC620、D4800X 冷库与 RAIDZ1
 
-SATA0–6 的七块 HC620 各配一个 D4800X **96 GiB** 分区，组成七个 dm-zoned target，再做 RAIDZ1。p8 固定 **192 GiB**，作为唯一 special vdev，承载元数据、小块和 ZIL。p9 用余下约 **533 GiB** 做 XFS，放 Buildbarn 冷索引和持久状态。池 `z8data` 的根下平铺 `buildbarn`、`other`、`reserve`。七块 HC620 中掉一块可降级，D4800X 是冷库和全池的共同依赖。 [dm-zoned 布局](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html) · [OpenZFS 2.4 特殊分配类](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zpoolconcepts.7.html#special-allocation-class)
+| 设备 | 物理位置 | 用途 |
+|---|---|---|
+| SATA0–3 | 机箱原生 3.5 英寸位 | 四个 dm-zoned mapper，分成 32 个裸冷 CAS 分片，约 50.93 TiB |
+| SATA4–6 | 双光驱位的三盘笼 | 三个 dm-zoned mapper 组成 `z8data` RAIDZ1，约 25 TiB，挂载 `/data/other` |
+| SATA7 | 薄光驱位 | 原光驱 |
+| 槽 5 D4800X | PCIe | 两组写缓存、冷库裸索引和 ZFS special。整卡故障会同时影响两组 |
+| 槽 1 P4618 | PCIe | 系统 XFS、活跃工作树、`buck-out`、Buildbarn 热层及冷分片 checkpoint |
+| 两路 PMem100 | DIMM | `/srv/pmem-model` 和 kmem，按 [PMem 手册](../host/PMEM.md#i4-在正式系统复用-pmem)上线 |
+
+冷 CAS 可重建。RAIDZ1 用于归档工作树、会话日志、数据集和源码快照。D4800X 的单 special vdev 包含池元数据，独立备份 `/data/other`。虚拟机镜像、数据库与容器层留 P4618。
 
 ## 1. 列出实体设备
 
-从正式系统 I4 开始。关机断电接回 SATA0–6 与 D4800X，启动后用 T4 保存的 SMART、型号、序列号和 by-id 逐项对照。P4618 已在 I1 用作 XFS 根。以下建分区、dmzadm format 与建池会清除目标内容。重装系统或接回已有池时，先安装[第 1 节的工具](#1-列出实体设备)，再到第 4 节的[安装启动单元](#安装启动单元)复用原 GPT、文件系统、映射表和 GUID。
+T4 慢扫完成、I3 通过后，关机断电接回 SATA0–6 和 D4800X。以 T4 的端口、型号、序列号与 by-id 清单识别设备。以下建 GPT、dm-zoned format、写零与建池是首装步骤。接回现有同版布局时沿用原 GPT、配对、GUID 和 `cold-layout.json`，直接装服务。
 
 ```bash
 uname -r
 sudo apt update
 sudo install -m 0644 host/zfs-arc.conf.example /etc/modprobe.d/z8-zfs-arc.conf
-sudo apt install dm-zoned-tools zfsutils-linux gdisk parted nvme-cli smartmontools fio sysstat xfsprogs
+sudo apt install dm-zoned-tools zfsutils-linux gdisk parted nvme-cli smartmontools fio sysstat jq python3
 grep -E '^CONFIG_(BLK_DEV_ZONED|DM_ZONED)=' "/boot/config-$(uname -r)"
 sudo modprobe dm-zoned
 sudo dmsetup targets | grep '^zoned'
-lsblk -e 7 -o NAME,PATH,SIZE,MODEL,SERIAL,TRAN,ZONED,LOG-SEC,PHY-SEC
+lsblk -e 7 -o NAME,PATH,SIZE,MODEL,SERIAL,TRAN,ZONED,LOG-SEC,PHY-SEC,PARTLABEL
 sudo nvme list
 sudo dmzadm --version
 ls -l /dev/disk/by-id/ata-* /dev/disk/by-id/nvme-*
 ```
 
-**Xubuntu 26.04.1 的调度器设定是保留默认。** 官方 Desktop amd64 ISO 内核是 `7.0.0-30-generic`，本次核对的更新源提供 `7.0.0-43-generic`、`dm-zoned-tools 2.2.2-1build1` 和 `zfsutils-linux 2.4.1-1ubuntu5.1`。已核 `7.0.0-43-generic` 的 Ubuntu amd64 构建配置为 `CONFIG_BLK_DEV_ZONED=y`、`CONFIG_DM_ZONED=m`。实机用 `uname -r` 记实际 ABI，`modprobe` 后 `dmsetup targets` 应列出 `zoned`。Linux 7.0 块层用 zone write plugging 串行提交同一顺序区的写请求。HC620 保留系统选中的调度器，省掉强制 `mq-deadline` 的 udev 规则。以 SATA0 整盘为例，先跑下面命令，其他六盘同样核对。第一条区报告应见 `CONVENTIONAL`，第二条应见 `SEQ_WRITE_REQUIRED`。两条 `blkzone` 都只读。 [官方镜像清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Ubuntu 26.04 GA 内核](https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/) · [Ubuntu dm-zoned-tools](https://packages.ubuntu.com/resolute/dm-zoned-tools) · [Zoned Storage 写顺序](https://zonedstorage.io/docs/linux/sched)
+Xubuntu 26.04.1 使用 Linux 7.0 GA。保留内核选定的磁盘调度器，zone write plugging 在块层负责顺序区写入顺序。Ubuntu 的 `dm-zoned-tools` 是 2.2.2 系列，OpenZFS 是 2.4.1 系列。记录当前 ABI。七块 HC620 应为 SATA 4Kn、`host-managed`，一个区 256 MiB。用 SATA0 的整盘 by-id 替换样例，其余盘照做。前一条区报告是 conventional，后一条是 sequential write required。 [官方镜像清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Linux 顺序区写入](https://zonedstorage.io/docs/linux/sched)
 
 ```bash
 disk=/dev/disk/by-id/ata-REPLACE_SATA0
-lsblk -dn -o NAME,MODEL,SERIAL,ZONED,LOG-SEC,PHY-SEC "$disk"
 cat "/sys/class/block/$(basename "$(readlink -e "$disk")")/queue/scheduler"
 sudo blkzone report -c 1 "$disk"
 sudo blkzone report -o 274726912 -c 1 "$disk"
 ```
 
-预期七盘的 `ZONED` 都是 `host-managed`，逻辑和物理扇区都是 4,096 B，盘区都是 256 MiB。配置中的 ATA ID 对应实际 SATA0–6，NVMe ID 全使用同一个 D4800X 根 ID 的 p1–p8。若某块盘没呈现上述区型，先按 [BIOS 与 ZAC 认盘](../host/BIOS.md) 复查实机料号、AHCI 枚举和盘区。
+ARC 下限 2 GiB、上限 8 GiB，留约 184 GiB 标称 DDR4 给其他服务。内核使用默认 dirty data 上限、5 秒 TXG 和 `zfs_arc_shrinker_limit=0`。I7 记录每路 DDR4 Normal 水位、ARC 和 I/O。 [OpenZFS 2.4 参数](https://openzfs.github.io/openzfs-docs/man/v2.4/4/zfs.4.html)
 
-在解压后的 `z8-kit` 根目录执行 `cp storage/hybrid.tsv.example hybrid.tsv` 和 `cp storage/storage.env.example storage.env`。使用保留制表符的编辑器。以 SATA3 为例，在 `ls -l /dev/disk/by-id/ata-*` 中找已记录序列号的整盘 ID，填进 `hc620-3` 行第二列，第三列固定为同一个 D4800X 的 `-part4`。如系统同时给这张 NVMe 卡多个别名，全表选同一种。先用 `lsblk -S` 和 `udevadm info -q path -n /dev/sdX` 对照物理 SATA 口；`/dev/sdX` 只用于本次确认。准备阶段先填好 `Z8_SPECIAL`，建池导出前再填 `Z8_POOL_GUID`。
+## 2. 建 GPT 与初始化 dm-zoned
 
-### 核对 ARC 上下限
-
-首装在安装 `zfsutils-linux` 前就放入配置。ARC 下限 2 GiB、上限 8 GiB。按 8 GiB ARC 上限预算，约 184 GiB 标称 DDR4 由推理、编译、系统和其他服务共享。llama.cpp 的实际驻留和锁页量从 T5 开始记录，正式模型以 I6 数据为准。runner 的 512 GiB 上限跨 DDR4 和 kmem 计费，实际混合负载以两层内存和 PSI 观测为准。kmem 以 movable 慢层上线，预算中仍按 DDR4 给 ARC 留空间。OpenZFS 2.4.1 的 `zfs_arc_shrinker_limit=0` 保持默认，这会取消 shrinker 的单次页数限制，实际回收仍受可驱逐内容、当前压力与目标限制。dirty data 上限保持自动，`zfs_txg_timeout` 保持 5 秒。I7 验固定配置，发生持续内存压力或冷读延迟明显异常时再按 ARC 和 I/O 统计定位。 [OpenZFS 2.4.1 ARC shrinker](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/os/linux/zfs/arc_os.c#L58) · [OpenZFS 2.4 模块参数](https://openzfs.github.io/openzfs-docs/man/v2.4/4/zfs.4.html)
-
-```bash
-sudo modprobe zfs
-cat /sys/module/zfs/parameters/zfs_arc_{min,max}  # 2147483648, 8589934592
-```
-
-若 ZFS 之前已加载且显示旧值，先用 `lsinitrd "/boot/initrd.img-$(uname -r)"` 查启动镜像是否含 `zfs.ko`。镜像含该模块时按 I1.4 用 Dracut 重建，再重启一次。重启后复核两个参数再建池。
-
-## 2. 建九分区与 mapper
-
-### D4800X 的 LBA 与 I/O 队列
-
-从头部署直接新建 GPT。D4800X 的 LBA 格式只决定一个逻辑扇区是 512 B 还是 4096 B，下面的分区命令读取该值来计算 **1 MiB** 对齐。对于转接且硬改过的 D4800X，以 T4 的 `blockdev --getsize64` 和 `nvme id-ns -H` 确认整盘字节数及 LBAF。1,500,301,910,016 B 和 4Kn 支持尚待这块盘实读确认。首装保留现有 LBA，无需执行 `nvme format`。dm-zoned 仍向上层报告 **4 KiB** 块大小，按 HC620 的几何将缓存分区划成 **256 MiB** 的软件区。ZFS 建池用 `ashift=12`。 [Ubuntu 26.04 sgdisk](https://manpages.ubuntu.com/manpages/resolute/man8/sgdisk.8.html) · [Ubuntu 26.04 nvme format](https://manpages.ubuntu.com/manpages/resolute/man1/nvme-format.1.html) · [Linux 7.0 mapper 队列参数](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L928)
-
-```bash
-D4800X=/dev/disk/by-id/nvme-REPLACE_D4800X
-ns=$(basename "$(readlink -e "$D4800X")")
-sudo nvme id-ns -H "$D4800X"
-sudo nvme id-ctrl -H "$D4800X"
-lsblk -dn -o NAME,MODEL,SERIAL,LOG-SEC,PHY-SEC "$D4800X"
-sudo blockdev --getss "$D4800X"
-cat "/sys/class/block/$ns/queue/scheduler"
-```
-
-方括号标出实际使用的调度器。D4800X、P4618 和七块 HC620 沿用 Linux 7.0 默认队列配置，记录值供出错时定位。 [Linux 7.0 NVMe PCI 驱动](https://github.com/torvalds/linux/blob/v7.0/drivers/nvme/host/pci.c)
+| D4800X | GPT 标签 | 字节数 | 用途 |
+|---|---|---:|---|
+| p1–p4 | `dmz-sata0`–`dmz-sata3` | 每个 25,769,803,776（24 GiB） | SATA0–3 缓存，`--seq=96` |
+| p5 | `z8-cold-index` | 910,533,066,752（848 GiB） | 32 个裸索引 |
+| p6–p8 | `dmz-sata4`–`dmz-sata6` | 每个 85,899,345,920（80 GiB） | SATA4–6 缓存，`--seq=320` |
+| p9 | `z8-special` | 228,990,524,928（512 B LBA）或 228,990,521,344（4Kn），约 213.26 GiB | RAIDZ1 的 special 和内嵌 ZIL |
 
 ### 新建 GPT 九分区
 
-仅用于已确认可清空的 D4800X 首装。先用整盘 by-id 核对型号、序列号和容量，确认所有分区均未挂载，且未被 md、device-mapper 或已导入的 ZFS 池占用。P4618 的两个系统盘端点按 I1 留下的序列号区分。
+从 `z8-kit` 根目录执行。替换 D4800X 整盘 by-id、T4 记录的完整型号和序列号。脚本核对身份和 1,500,301,910,016 B 容量，拒绝已挂载、带 holder 或属于已导入池的设备。它沿用实测 512 B 或 4 KiB LBA，按 1 MiB 对齐，p9 取 GPT 尾部前的全部可用空间，核对实际字节数。
 
 ```bash
-D4800X=/dev/disk/by-id/nvme-REPLACE_D4800X
-lsblk -o NAME,MODEL,SERIAL,SIZE,TYPE,FSTYPE,MOUNTPOINTS "$D4800X"
-sudo sgdisk -p "$D4800X"
+bash storage/partition-optane.sh /dev/disk/by-id/nvme-REPLACE_D4800X 'T4 完整型号' 'T4 序列号' --create
 ```
-
-核对完再从 `z8-kit` 根执行。型号和序列号照抄 T4 的同一行 `lsblk -dno MODEL,SERIAL` 记录。脚本拒绝容量不符、有挂载或有 holder 的设备，并检查已导入的 ZFS 池；最后要求手输序列号，才会清表并重建。p1–p7 各 96 GiB，p8 192 GiB，p9 用 GPT 剩余空间。
-
-```bash
-bash storage/partition-optane.sh "$D4800X" "REPLACE_T4_MODEL" REPLACE_T4_SERIAL --create
-```
-检查 p1–p7 各为 103,079,215,104 B、p8 为 206,158,430,208 B、p9 约 533 GiB。旧分区表清除后，盘面上的旧文件系统或池签名仍可能被识别。如果新分区显示旧 `FSTYPE`，先用 `sudo wipefs /dev/disk/by-id/实际名称-partN` 确认，在该分区确实可清空时用 `sudo wipefs --all /dev/disk/by-id/实际名称-partN` 清理签名，再做 dm-zoned 初始化和建池。 [Ubuntu 26.04 wipefs](https://manpages.ubuntu.com/manpages/resolute/man8/wipefs.8.html)
-
-### HC620 盘头随机写区在混合方案里的用途
-
-HC620 14 TB 的 HM-SMR 盘面有两种区。WD SATA 规范给出每区 256 MiB，盘头连续 **524 个 `CONVENTIONAL` 区，共 131 GiB**，可随机读写。其后是 **51,632 个 `SEQ_WRITE_REQUIRED` 区**，每次写入必须从**各区自己的写指针**开始。区内已写位置仍可随机读取。 [WD HC620 SATA 规范，第 23–24 页及 §10.20.5](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf#page=23)
-
-**加 D4800X 后，HC620 盘头的随机写能力退出前台缓冲。** 新 chunk 首次写入、以及顺序区需要缓冲的覆写，都从 D4800X 的 `cache` 空闲链表分配。Optane 无空闲区时，前台等后台回收。每个 96 GiB 分区名义有 **384 个 256 MiB 区**。按厂家区数，两份元数据各跨两个区，预计 **380 个 cache 区**，以 `dmsetup status` 核对。预留顺序区在 HDD 上，首装用 `--seq=384`。 [dmzadm 2.2.2 映射和位图计算](https://github.com/westerndigitalcorporation/dm-zoned-tools/blob/v2.2.2/src/dmz_lib.c#L282-L340) · [Linux 7.0 cache 区数](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L2880-L2920)如果用 HC620 单盘运行 dm-zoned，前台随机写与元数据才会直接使用盘头普通区。 [Linux 7.0 首次写入分配](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L1918) · [覆写缓冲分配](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L2028)
-
-**盘头区仍在 mapper 内。** 第 0 区保存 HC620 的成员超级块，剩余健康普通区计入 mapper 的数据容量。回收 D4800X 上有有效数据的区时，内核优先找顺序目的区。顺序目的区完全分配不到时，才尝试用盘头普通区承载数据，之后已映射到这些区的数据可直接在 HDD 上读写。只要顺序区长期有空位，盘头普通区可以长期基本闲着。实机用 `sudo dmsetup status hc620-0` 看 `random` 的空闲数/总数，全健康时预期初建后接近 `523/523 random`。七块 HDD 都交给各自 mapper 管理。 [Linux 7.0 盘头区分类](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L1296) · [回收目标选择](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L262) · [状态输出](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L1008)
-
-### 预留顺序写区何时使用
-
-**首装定 `--seq=384`。** 对 52,156 个健康 HDD 区和 384 个 cache 区，工具把两者都计入可用区，再扣掉两套各两个元数据区与 `--seq`。HC620 需留一个成员超级块，因此物理数据区最多 52,155 个。Linux 7.0 直接按超级块的 `nr_chunks × 256 MiB` 给 mapper 定长度。
-
-| `--seq` 输入 | 盘上预留 | 导出 chunk 数 | 每组 mapper 字节数 |
-|---:|---:|---:|---:|
-| 16（工具默认） | 16 | 52,520 | 14,098,230,149,120 |
-| 381 | 381 | 52,155 | 14,000,251,207,680 |
-| 397 | 383（工具截回） | 52,153 | 13,999,714,336,768 |
-| **384（本站）** | **384** | **52,152** | **13,999,445,901,312** |
-
-这四档的元数据均为 2+2 区。默认值允许逻辑 chunk 超过物理 HDD 数据区，全部映射时可能有 365 个 chunk 无法移离 Optane。384 把导出数压到物理 HDD 数据区以内，较默认少 92 GiB/组，按六份数据折算约 0.54 TiB。冷库仍用实测空池 `available` 的 55% 向下取整，预计仍为 41 TiB。 [dmzadm 计数与上限](https://github.com/westerndigitalcorporation/dm-zoned-tools/blob/v2.2.2/src/dmz_lib.c#L215-L340) · [Linux 7.0 读取超级块](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L1064-L1082) · [mapper 长度](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L890)
-
-Linux 7.0 的源码路径如下。
-
-1. **启动时建空闲链表。** `dmzadm --format` 将 `--seq` 写入 mapper 的元数据。启动时内核从当前未映射的顺序写区取区，标记 `DMZ_RESERVED` 并放入 `reserved_seq_zones_list`，其余空闲顺序区进入 `unmap_seq_list`。384 是建表目标，也是初始化时从导出容量扣掉的逻辑 chunk 数。物理区号由启动时的映射状态决定。 [Ubuntu 26.04 dmzadm](https://manpages.ubuntu.com/manpages/resolute/man8/dmzadm.8.html) · [Linux 7.0 链表初始化](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L1674)
-2. **前台按 chunk 映射写。** 此双设备布局下，写一个尚未映射的 chunk 时先领 D4800X 的 cache zone，即使应用发出顺序写也走这条初始分配路径。已映射到 HC620 的 chunk，写入位置恰好等于当前写指针时直接写 HDD，位置不同则写到配对的 Optane buffer。前台申请 cache zone 时未带 `DMZ_ALLOC_RECLAIM`。 [Linux 7.0 首次映射](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L1918) · [Linux 7.0 前台写分流](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L298)
-3. **回收从预留链表领区并真正发写。** 回收线程处理含有效数据的 cache/random 数据区时，`dmz_reclaim_rnd_data()` 用 `DMZ_ALLOC_SEQ | DMZ_ALLOC_RECLAIM` 申请搬迁目的地。普通空闲顺序区找不到时，`dmz_alloc_zone()` 摘下预留链表第一个区并减计数。随后 `dmz_reclaim_copy()` 将目的地址设为 HC620，调用 `dm_kcopyd_copy()`，按顺序写入有效数据，必要时补零推进写指针。复制成功后，`dmz_map_zone()` 把该物理区映射为 chunk 的数据区，释放原随机区。它随后能承担读取和符合写指针的前台写入。 [Linux 7.0 预留区回退](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L2224-L2248) · [Linux 7.0 搬迁和重映射](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L262) · [Linux 7.0 提交顺序写](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L128)
-4. **回收已有 HDD 数据区时还要看写指针。** buffer 中的有效块全在原 HDD 区当前写指针处或之后时，可以续写原区并释放 buffer。若有有效块在写指针之前，先把原 HDD 区仍有效的旧块合进随机写 buffer，再解除原 HDD 区的映射。合并后的 buffer 可由后续回收移回 HDD。预留列表为空时，回收的候选选择会优先找带 buffer 的顺序区来处理。标有 `DMZ_RESERVED` 的 HDD 区正常释放后，经 reset 回预留链表。搬迁成功会让该区承载活数据，直到其映射被释放才补回空闲区。运行中预留列表里的空闲区可以少于 384。 [Linux 7.0 回收候选选择](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L1892) · [Linux 7.0 回收分支](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L341) · [Linux 7.0 释放归队](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L2273-L2305)
-
-**触发回收和领到预留区是两个条件。** 此布局下后台回收在 target 空闲约 10 秒，或忙时 cache 空闲比例降到 30% 及以下时可运行。普通顺序区耗尽是步骤 3 的分配回退条件。普通顺序区始终有空位，或者回收能直接续写原区时，预留区可以一直空着。增大 `--seq` 会缩短普通空闲顺序链表，使盘接近写满时更早走预留分配路径。空闲时机和 30% cache 触发水位仍沿用内核。ZFS 可用百分比无法推出整区空闲量。如果顺序区和普通区的空闲数均到 0、cache 空闲数在空闲期间也不回升，先降写入量并查回收和 discard。 [Linux 7.0 回收触发](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L418)
-
-**96 GiB 缓存供同时缓冲的 chunk。** 按约 380 个可用区、cache 从空开始、每区接近写满，忙时触达 30% 空闲对应每盘占约 66.5 GiB。七盘均匀写入且按六份数据折算时约 399 GiB，尚未扣 RAIDZ padding。零散写触及不同 chunk 时，同一个水位可在写入远少于 399 GiB 时触发。持续速度由 HDD、归并和 discard 决定，以 I4 的持续覆盖验收。 [Linux 7.0 回收与水位](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L467-L496)
 
 ### 首次初始化每组 dm-zoned
 
-`dmzadm --format` 在 **I4 首次建池前，每组只做一次**。这是给「一个 D4800X 分区 + 一整块 HC620」建立 dm-zoned 自己的盘上布局。工具重置 HDD 顺序区的写指针，在 D4800X 分区里写两套映射表、有效块位图和超级块，并在 HC620 上写成员超级块。原顺序区的数据会失去有效状态，旧映射也会被覆盖。这是一项破坏性初始化，写入范围限于命令传入的那一整块 HDD 和那一个 SSD 分区。它使用 zone reset 和元数据写入，无需全盘覆零，D4800X 的 GPT、其他分区和 LBA 格式都在其目标之外。 [Ubuntu 26.04 dmzadm 手册](https://manpages.ubuntu.com/manpages/resolute/man8/dmzadm.8.html) · [WD 工具源码](https://github.com/westerndigitalcorporation/dm-zoned-tools/blob/master/src/dmz_format.c#L277)
-
-`hybrid.tsv` 是七行设备配对表，用持久的 by-id 记录每块 SATA 盘对应哪个 D4800X 分区。启动脚本也读这张表。填好 `hybrid.tsv.example`，另存为 `hybrid.tsv`。以下先展示 `hc620-0` 的单组命令。在 T4 已核盘型、zone 布局和 SMART 的基础上，再核 `lsblk` 中的真实设备、分区号、序列号和挂载状态。两者都确认可清空才运行初始化。若同一对设备已有正确的 dm-zoned 元数据，直接用 `--start`。只有工具报告旧签名，且已重新确认这两个设备可清空时，才给格式化命令加 `--force`。
+复制模板后编辑。`hybrid.tsv` 的第二列填每个 SATA 口对应的 ATA 整盘 by-id，保留制表符和第三列 GPT 标签。`storage.env` 只填 `Z8_OPTANE` 整盘 by-id，池 GUID 在下一节回填。每个标签都必须解析到这张卡上的正确大小分区。`dmzadm --format` 重置顺序区并写映射元数据，两块后端设备的旧数据都应视为清除。
 
 ```bash
-name=hc620-0
-# 将两个路径换成 hybrid.tsv 对应行的实际值。第一项必须是 D4800X 的分区。
-cache=/dev/disk/by-id/nvme-REPLACE-D4800X-part1
-hdd=/dev/disk/by-id/ata-REPLACE-SATA0
-cache_device=$(readlink -e -- "$cache")
-hdd_device=$(readlink -e -- "$hdd")
-lsblk -b -o NAME,PATH,MODEL,SERIAL,TYPE,SIZE,ZONED,MOUNTPOINTS "$cache_device" "$hdd_device"
+cp storage/hybrid.tsv.example hybrid.tsv
+cp storage/storage.env.example storage.env
 ```
 
-核完身份后在同一终端执行。命令前先核第一项确为 96 GiB 分区，第二项确为 host-managed 整盘。`--label` 给每组固定名称，避免同一张 D4800X 的分区用相同序列号生成重名 mapper。使用上面的 `--seq=384`，保留内核默认回收水位。
+编辑完执行：
 
 ```bash
-if [[ $(lsblk -bdnro TYPE,SIZE -- "$cache_device") == 'part 103079215104' &&
-      $(lsblk -dnro TYPE,ZONED -- "$hdd_device") == 'disk host-managed' ]]; then
-    sudo dmzadm --format "$cache_device" "$hdd_device" --label="$name" --seq=384
-else
-    printf 'Device type or size did not match. Check both paths.\n' >&2
-fi
+sudo install -d -m 0755 /etc/z8-storage
+sudo install -m 0644 hybrid.tsv storage.env /etc/z8-storage/
+sudo install -m 0755 storage/{z8-storage,z8-cold,z8-cold-scan} /usr/local/sbin/
+for sata in {0..6}; do
+    sudo z8-storage format "$sata" --create || break
+done
 ```
 
-上一步成功后可选做 `sudo dmzadm --check "$cache_device" "$hdd_device"`，它检查未启动设备的元数据。然后启动并检查 mapper。
+每组回显型号、分区后，输入 `hc620-N`。失败时先保存终端日志并处理该组。重新执行时单独指定失败的端口，已有签名且确认可擦才使用 `--replace`。
 
-```bash
-sudo dmzadm --start "$cache_device" "$hdd_device"
-sudo udevadm settle
-sudo dmsetup table "$name"
-sudo dmsetup status "$name"
-sudo blockdev --getsize64 "/dev/mapper/$name"
-lsblk -d -o NAME,LOG-SEC,PHY-SEC,ZONED "/dev/mapper/$name"
-lsblk -D "/dev/mapper/$name"
-```
+两组都以缓存区数作为 `--seq`。HC620 报 52,156 个可用区时，两份元数据各 2 区，导出 52,152 个 256 MiB chunk，13,999,445,901,312 B。预留顺序区供后台搬迁，HC620 盘头 conventional 区属于普通随机区。D4800X 承接前台写缓冲，逻辑 chunk 与物理区的映射随回收改变。 [dmzadm 2.2.2 元数据算法](https://github.com/westerndigitalcorporation/dm-zoned-tools/blob/v2.2.2/src/dmz_lib.c#L215-L340) · [Linux 回收路径](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L159-L307)
 
-首组通过后按 `hybrid.tsv` 核对其余六组，每组执行一次初始化。下次开机，`z8-storage map` 只会对原配对调用 `dmzadm --start`。暂时掉盘后回插也是同一路径。若 `--start` 失败，先检查盘是否齐全、配对、日志及现有元数据，保留原盘状态。 [内核 dm-zoned 使用说明](https://docs.kernel.org/admin-guide/device-mapper/dm-zoned.html)
+冷库每盘 92 个可用缓存区，三盘 ZFS 组每盘 316 个。忙时约 70% 占用启动回收，空闲约 10 秒也可启动。冷库四盘在空缓存起点约 64 GiB 的区容量会到该阈值，扣除按 24 写头/盘计算的 24 GiB 后，新增窗口量级约 40 GiB。I4、I5 记实测初次达到阈值的字节量，与交接的约 52 GiB 估算校对。ZFS 组每盘约 55 GiB 区容量到阈值，理想顺序大块约对应 110 GiB 用户数据。ZFS 默认四个分配器，主 vdev 预计每 metaslab 16 GiB；`4×16/3≈21 GiB` 只给每盘的量级，CoW 碎片和并行队列会改变区占用。 [回收水位](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L418-L454) · [OpenZFS 分配器](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/spa_misc.c#L396-L404)
 
-检查时用 `sudo dmsetup status hc620-0`。`cache`、`random`、`sequential` 分别报告 D4800X 缓冲区、HC620 盘头普通数据区和 HC620 普通顺序区的空闲数/总数。顺序预留计数没有单独输出。I4 的持续写和覆盖测试可结合 HDD 写入量与 `cache` 空闲区回升观察后台搬迁。`blkzone report` 只报告 HDD 的区类型和写指针，盘头 `CONVENTIONAL` 的映射占用看 `dmsetup status` 的 `random`。 [Linux 7.0 status 字段](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L1008)
+### HC620 盘头随机写区在混合方案里的用途
+
+HC620 的前 524 个 conventional 区共 131 GiB，支持随机写。第 0 区存该成员的超级块。D4800X 接管前台随机写，健康的盘头区仍由 dm-zoned 管理；回收找不到顺序目的区时可以尝试用普通区。这里和 `--seq` 预留给回收的顺序区是两类区。 [Linux 7.0 回收目的区选择](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L262-L279)
 
 ## 3. 建 ZFS 池与 legacy mount 数据集
 
-### D4800X 的 ZIL 空间
-
-ZIL 是 ZFS 用来持久化和恢复同步事务的意图日志。SLOG 是通过 `log` 添加的独立日志 vdev。Xubuntu 26.04.1 使用的 OpenZFS 2.4.1 在有 SLOG 时优先用它，随后依次尝试 special 内嵌日志区、special 普通空间、RAIDZ1 内嵌日志区、RAIDZ1 普通空间。这台机器让 p8 同时承担 special 和低延迟日志。另从同一张 D4800X 切一块做 SLOG 仍共用同一设备队列和控制器。 [OpenZFS 2.4.1 分配顺序](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/zio.c#L4249)
-
-采用 OpenZFS 的自动预留。192 GiB 的 p8 扣除 vdev 标签和保留空间后，按默认目标 200 个 metaslab 计算，预计 `metaslab_shift=30`，约 191 个 1 GiB metaslab。区数超过默认阈值 64，预计其中一个 **1 GiB** metaslab 用作内嵌 ZIL 空间。同步日志也可以使用 special 普通空间。special 在 RAIDZ 池中不能缩小或移除，且 p9 紧随 p8。 [OpenZFS 2.4.1 metaslab 算法](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2951-L3018) · [内嵌日志区选择](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L1686-L1718) · [移除 vdev 的限制](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zpool-remove.8.html)
-
-### 建池命令
+先安装单元并启动 mapper。首次建池前保持 `data-other.mount` 未启用，填完 GUID 后再启用。
 
 ```bash
-maps=(/dev/mapper/hc620-{0..6})
-special="${D4800X}-part8"
-# 预览须显示七个 mapper 与 p8 special。-f 接受单盘 special 与
-# RAIDZ1 数据 vdev 的冗余差异。请先核对所有 by-id 和容量。
-(
-    set -euo pipefail
-    pool_opts=(-f -o ashift=12 -o cachefile=none -o autotrim=on -m none
-        -O canmount=off -O compression=zstd-3 -O atime=off
-        -O checksum=on -O dedup=off -O copies=1 -O redundant_metadata=all
-        -O xattr=sa -O dnodesize=auto -O primarycache=all
-        -O sync=standard -O logbias=latency)
-    sudo zpool create -n "${pool_opts[@]}" z8data raidz1 "${maps[@]}" special "$special"
-    read -r -p '核对预览并确认首次建池，输入 z8data：' confirmation
-    [[ "$confirmation" == z8data ]]
-    sudo zpool create "${pool_opts[@]}" z8data raidz1 "${maps[@]}" special "$special"
-
-    available=$(sudo zfs list -Hp -o available z8data)
-    [[ "$available" =~ ^[1-9][0-9]{0,15}$ ]]
-    tib_bytes=$((1024**4))
-    cold_tib=$((available * 55 / 100 / tib_bytes))
-    (( cold_tib > 0 ))
-    sudo zfs create -o mountpoint=legacy -o recordsize=1M -o compression=zle \
-        -o special_small_blocks=0 -o refreservation="$((cold_tib * tib_bytes))" z8data/buildbarn
-    sudo zfs create -o mountpoint=none -o canmount=off -o readonly=on \
-        -o refreservation="$((available / 10))" z8data/reserve
-    sudo zfs create -o mountpoint=legacy -o recordsize=1M -o special_small_blocks=24K z8data/other
-    sudo zpool list -H -o guid z8data
-    sudo zpool status -P z8data
-    sudo zpool get autotrim z8data
-    sudo zfs get -r compression,recordsize,special_small_blocks,mountpoint,canmount,refreservation,sync,logbias z8data
-    sudo zfs get -r checksum,dedup,copies,redundant_metadata,xattr,dnodesize,primarycache,atime z8data
-    sudo zdb -l "$special" | grep -E 'metaslab_shift:|asize:'
-    sudo zpool export z8data
-)
+sudo systemctl mask zfs-import-cache.service zfs-import-scan.service
+sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,z8-cold.service,data-other.mount,z8-cold-scan.service,z8-cold-scan.timer} /etc/systemd/system/
+sudo install -d -m 0755 /data/other /srv/buildbarn/tiered
+sudo systemctl daemon-reload
+sudo systemctl start z8-dmzoned.service
+sudo dmsetup status --target zoned
+sudo bash storage/create-pool.sh --create
 ```
 
-把 GUID 记入 `storage.env`，记录当前 `hostid` 和 `/etc/hostid`。p8 用 `zdb -l` 核对 `metaslab_shift=30`，用标签中的 `asize >> metaslab_shift` 估算区数。普通同步写可先由 p8 上的 ZIL 确认，CAS 数据块随后写 RAIDZ1。 [OpenZFS 2.4 数据集属性](https://openzfs.github.io/openzfs-docs/man/v2.4/7/zfsprops.7.html) · [zdb 标签检查](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zdb.8.html)
+检查预览只有 `hc620-4/5/6` 与 `z8-special`。建池脚本校验几何和现有签名。它取刚建好的 `available` 的 10% 设为 `z8data/reserve` 的 `refreservation`，输出 `Z8_POOL_GUID=…` 后导出。把该值写进 `/etc/z8-storage/storage.env`。检查 `zdb -l` 打印的 metaslab 参数。special 约 213 GiB，按 2.4.1 默认算法预计 `metaslab_shift=31`、106 个 2 GiB metaslab，其中一个 2 GiB 内嵌日志区。注入同步写的实测见下节。 [metaslab sizing](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2950-L3018) · [内嵌日志](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L1686-L1718)
 
-### 容量分配与余量
-
-空池创建后只读取一次 `available`。冷库 `refreservation` 取 55% 并向下取整到 TiB，预计 41 TiB。空的 `z8data/reserve` 在同一级扣住 10%，预计 7.5 TiB，通过 `refreservation` 调整。两项预留都按数据集记账。RAIDZ 的可用量按 128 KiB 记录换算；实际写入使用对应记录大小的校验与 padding，另有元数据和压缩影响。稀疏块文件开始只占已写入的空间，冷库的未使用份额仍受预留保护。冷库用量可超过预留，`other` 从共享剩余空间分配，约 35% 是规划值。空数据集的预留减少可分配预算，空闲区仍由 ZFS 管理，物理地址可以分散。 [OpenZFS 空间换算](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2078) · [OpenZFS 2.4.1 预留记账](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/dsl_dataset.c#L4598-L4623)
-
-10% 是容量取舍。Buildbarn 淘汰逻辑块时只回收文件内偏移，下一次覆盖才可能释放旧 ZFS 物理块。ZFS 按 TXG 分配，三个逻辑写入前沿无法界定磁盘上的碎片带宽度。分配器也会取用能容纳当前写入的空洞。dm-zoned 的预留顺序区用于回收搬迁，持续可回收量还取决于有效位、写指针和 discard。首次实际占用达到 80% 时，用 `zpool list -Hp -o capacity z8data`（按池物理用量）、`zpool iostat -vlyP z8data 1`、七组 `dmsetup status` 和 `/proc/spl/kstat/zfs/z8data/txgs` 看冷库写入和回收。持续回收恶化时优先增大余量预留，若容量已无法重新分配，再规划缩小并重建冷库。 [Buildbarn 逻辑块释放](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_block_allocator.go#L176-L187) · [OpenZFS 2.4.1 分配器](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/metaslab.c#L1874-L1956) · [Linux 7.0 搬迁目标选择](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L262-L316)
-
-### 数据集用途与小块
-
-| 数据集 | 挂载 | 本地覆盖与用途 |
-|---|---|---|
-| `z8data` | 无 | 公共属性与继承，`canmount=off` |
-| `z8data/buildbarn` | `/data/buildbarn` | `recordsize=1M,compression=zle,special_small_blocks=0`。只存冷块文件，排除在快照计划之外 |
-| `z8data/other` | `/data/other` | `recordsize=1M,special_small_blocks=24K`，继承 `zstd-3`。放能重建的归档、数据集、文档和源码快照 |
-| `z8data/reserve` | 无 | `mountpoint=none,canmount=off,readonly=on`，只做空间预留 |
-
-`recordsize=1M` 是新建文件的目标记录大小上限，小文件可用小块。修改 `recordsize` 只影响之后新建的文件。对七盘 RAIDZ1、4 KiB 扇区，未压缩的 4、8、16、24、32、128、256、512、1024 KiB 块分别占 8、16、24、32、40、152、304、600、1200 KiB。24 KiB 及以下的数据能放在六个数据扇区内，同时是 RAIDZ padding 和校验开销相对较高的范围。阈值看压缩及加密后的块大小，压得很小的大文件记录也可能去 special。默认达到 special 分配类的 75% 后，新小数据块转普通 vdev，已写数据保持原位置。元数据也要规划增长，用 `zpool list -v z8data` 看占用。 [OpenZFS 2.4.1 recordsize](https://github.com/openzfs/zfs/blob/zfs-2.4.1/man/man7/zfsprops.7#L1560-L1596) · [OpenZFS 2.4.1 RAIDZ 空间计算](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev_raidz.c#L2305-L2316) · [24 KiB 属性校验](https://github.com/openzfs/zfs/blob/zfs-2.4.1/lib/libzfs/libzfs_dataset.c#L1263-L1277) · [special 分配规则](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/spa_misc.c#L2146-L2182)
-
-整个池和冷索引都依赖单块 D4800X；可重建的资料和缓存放这个池，唯一副本的备份保存在独立设备。持续随机改写的 VM 镜像、数据库和容器层用 P4618，活跃模型用 PMem。
-
-`autotrim=on` 由后台线程汇集近期释放的范围。七个 mapper 收到 discard 后将相应块标为无效，p8 走 NVMe discard。保持 2.4.1 的默认 32 TXG 批次、32 KiB 最小范围和 128 MiB 最大范围。mapper 的设备粒度和上限另为 4 KiB、256 MiB。对实体 HC620、D4800X 分区与池成员均不要手动运行 `blkdiscard`。 [OpenZFS 2.4.1 TRIM](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev_trim.c#L65) · [Linux 7.0 dm-zoned discard](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L355)
-
-### 冷 CAS 压缩
-
-Buildbarn 固定镜像 `ca3d8b4` 写盘前已经对每个 CAS chunk 做 Zstd 编码。冷库在 ZFS 层用 `compression=zle`，处理 ZFS 记录内部的连续零字节；全零记录由 ZFS 提前识别。压缩只影响盘上分配，Buildbarn 看到的文件偏移和长度保持不变。冷库继承 `primarycache=all`，同一个 1 MiB 记录内的多页读取可复用 ARC，重复 blob 读取由 P4618 的 512 GiB 热层承担。 [Buildbarn 磁盘编码](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/coder/chunk_coder.go#L13) · [OpenZFS 全零检查](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/zio.c#L1973-L1980) · [ZLE 编码](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/zle.c#L28)
+`z8data/other` 用 `recordsize=1M`、`special_small_blocks=16K`，继承 `compression=zstd-3,atime=off,sync=standard,logbias=latency`。三盘 RAIDZ1 在 `ashift=12` 时，4/8/12/16/32/128/1024 KiB 依次分配 8/16/24/24/48/192/1536 KiB。默认 special 达到约 75% 后新小块回普通 vdev。`autotrim=on` 异步汇集 ZFS 释放范围，让三个 mapper 的底层映射失效；每月继续 scrub。大文件的原始两份数据列约 25.46 TiB，建池的实际可用量以 `zfs list` 为准。 [RAIDZ 空间公式](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev_raidz.c#L2186-L2206) · [special 分配](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/spa_misc.c#L2146-L2182) · [TRIM](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev_trim.c#L65)
 
 ## 4. I4 安装存储依赖链
 
-从 `z8-kit` 根执行。将 `hybrid.tsv` 与 `storage.env` 放在当前目录，填入 p8 by-id 和建池取得的 GUID。**仅首装**且确认 p9 可清空后运行这一段。按 p8 by-id 推出同卡 p9，再核对分区标签。
-
-```bash
-(
-    set -euo pipefail
-    source ./storage.env
-    [[ "$Z8_SPECIAL" == /dev/disk/by-id/nvme-*-part8 ]]
-    index_device="${Z8_SPECIAL%-part8}-part9"
-    [[ -b "$index_device" && "$index_device" -ef /dev/disk/by-partlabel/z8-cold-index ]]
-    lsblk -b -o NAME,SIZE,PARTLABEL,FSTYPE,MOUNTPOINTS "$index_device"
-    sudo mkfs.xfs -m reflink=0 "$index_device"
-)
-```
-
 ### 安装启动单元
 
-**安装和重装都从这里继续。** 重装保留已有 p9 文件系统和池，使用原来的 `hybrid.tsv` 与 `storage.env`。本机只管理这一个 ZFS 池，下方在首次启动专用导入链前屏蔽已安装的系统默认导入服务。
+两条链共享 `z8-dmzoned.service`。ZFS 链用 `z8-zpool → data-other.mount`，至少要 SATA4–6 中两个健康 mapper 和 p9。冷库链用 `z8-cold → z8-buildbarn`，仅需 p5 和已经初始化且可用的冷盘。开机各自启动，停机逆序。将单元装好、填过 GUID 后执行：
 
 ```bash
-(
-    set -e
-    sudo install -d -m 0755 /etc/z8-storage /data /srv/bbindex
-    sudo install -m 0600 hybrid.tsv storage.env /etc/z8-storage/
-    sudo install -m 0755 storage/z8-storage /usr/local/sbin/
-    sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,data-buildbarn.mount,data-other.mount,srv-bbindex.mount} \
-        /etc/systemd/system/
-    for unit in zfs-import-cache.service zfs-import-scan.service; do
-        if systemctl cat "$unit" >/dev/null 2>&1; then
-            sudo systemctl mask "$unit"
-        fi
-    done
-    sudo systemctl daemon-reload
-    sudo systemd-analyze verify /etc/systemd/system/{z8-dmzoned.service,z8-zpool.service,data-buildbarn.mount,data-other.mount,srv-bbindex.mount}
-    sudo systemctl enable --now data-buildbarn.mount data-other.mount srv-bbindex.mount
-)
-for point in /data/buildbarn /data/other /srv/bbindex; do
-    findmnt -M "$point" -o SOURCE,TARGET,FSTYPE
-done
-sudo zpool status -P z8data
-sudo journalctl -b -o short-monotonic -u z8-dmzoned -u z8-zpool \
-    -u data-buildbarn.mount -u data-other.mount -u srv-bbindex.mount --no-pager
+sudo z8-cold init
+sudo systemctl enable --now data-other.mount z8-cold.service
+bash host/run-step.sh i4-status
 ```
 
-三个挂载单元由 `multi-user.target` 弱依赖拉起。两个 ZFS 挂载通过 `BindsTo=` 和 `After=` 等导入完成；手动启动池时也会尝试挂这两个数据集。三个挂载均设 `DefaultDependencies=no`，`multi-user.target` 不会为这些挂载自动添加等待关系。I5 的 tiered Buildbarn 服务另有显式依赖，会等冷数据集和 p9。
+`z8-cold init` 首次写 `/etc/z8-storage/cold-layout.json`，启用清单为空。`z8-cold.service` 建出最多 32 个 `/dev/mapper/z8-cold-sataN-S` 及 32 个 `z8-index-sataN-S`。数据每分片 6,519 区、1,749,930,737,664 B，索引每段 28,454,158,336 B。`dm-linear` 以 512 B 扇区计数，边界按 256 MiB 对齐，索引设预读为 0。`/run/z8-cold/cold-layout.json` 记录本次有效分片，`/run/z8-cold/compose.json` 只授权相应裸设备。`/etc` 那份是持久清单，`/run` 每次启动重建。
 
-要给 `jackywang` 建普通数据目录，先核实挂载源，再在数据集内建目录。
+已有 v2.20 池的迁移须先备份 `/data/other`、验证外部恢复源、停止 Buildbarn，禁用并卸载旧冷库的两个挂载单元，再导出旧池、停 mapper。此版本重建 D4800X 分区与三盘池，从外部恢复普通数据。旧冷 CAS 和所有 CMS 是可丢缓存。保留 AC。热 CS 的容量和索引同时更改，旧热 CS 块、索引、checkpoint 应整套退役后再启动。全新安装跳过迁移。
+
+### 冷库连续覆写
+
+首次初始化索引前做，要求四块冷盘齐备、缓存服务停止且持久启用清单为空。命令会提示输入 `EMPTY-COLD`，四路各写 `sataN-0` 开头 128 GiB，再覆盖三遍。每 5 秒记录写入量和 cache 区水位，最后两遍各至少 150 MB/s（合计、含 flush）。额外检查 NVMe 温度/节流、I/O 错误，记录首次采到 70% 水位的每盘写入量。使用 P4618 上现有日志目录。
 
 ```bash
-if [[ $(findmnt -n -M /data/other -o SOURCE,FSTYPE) == 'z8data/other zfs' ]]; then
-    sudo install -d -o jackywang -g "$(id -gn jackywang)" -m 0750 /data/other/jackywang
-fi
+mkdir -p ~/z8-burnin
+bash host/run-step.sh i4-cold-aging "$HOME/z8-burnin"
 ```
 
-如需把 **D4800X 的设备消失**也直接连到 systemd，在完成上面试启后为 p8 加设备依赖。只绑定这张共享卡，七块 HDD 继续由映射脚本按 RAIDZ1 容错处理。
+通过后清零索引、建立空 checkpoint、启用已初始化分片。`reset all` 只用于首次或全量重建，整张索引分区约 848 GiB 会被清零，终端逐个报告。未达到门槛时先按盘看 `watermark.tsv` 与 NVMe 温控，必要时走[全 XFS 回退](../buildbarn/README.md#全-xfs-回退)。该回退和 `/data/other` 可以同时运行。
 
 ```bash
-(
-    set -euo pipefail
-    source ./storage.env
-    [[ "$Z8_SPECIAL" == /dev/disk/by-id/nvme-*-part8 ]]
-    device_unit=$(systemd-escape --path --suffix=device "$Z8_SPECIAL")
-    systemctl is-active "$device_unit"
-    sudo install -d "/etc/systemd/system/$device_unit.d" \
-        /etc/systemd/system/z8-dmzoned.service.d
-    printf '[Unit]\nJobTimeoutSec=90s\n' \
-        | sudo tee "/etc/systemd/system/$device_unit.d/90-z8-timeout.conf"
-    printf '[Unit]\nBindsTo=%s\nAfter=%s\n' "$device_unit" "$device_unit" \
-        | sudo tee /etc/systemd/system/z8-dmzoned.service.d/20-optane-device.conf
-    sudo systemctl daemon-reload
-)
+sudo z8-cold reset all
+sudo systemctl restart z8-cold.service
+sudo z8-cold check
 ```
 
-`is-active` 应显示 `active`。否则先核 by-id 是否在 udev 的设备属性及 systemd 单元列表，再装 drop-in。整卡突发离线时，这条绑定会发起停服务和卸载。底层 ZFS 已因 I/O 故障挂起时，按故障恢复流程处理。
+### ZFS 同步写与 scrub
 
-本池用 `cachefile=none` 和 `zpool import -N`，两个 ZFS 数据集用 `mountpoint=legacy`。第一次冷启用 `systemctl is-enabled zfs-import-cache.service zfs-import-scan.service` 确认系统已安装的默认导入服务均为 `masked`，用 `sudo zpool get cachefile z8data` 核对 `none`。这三个挂载点都由 systemd 单元管理。由 systemd 持有 Compose 服务。 [缓存导入单元](https://github.com/openzfs/zfs/blob/zfs-2.4.1/etc/systemd/system/zfs-import-cache.service.in) · [扫描导入单元](https://github.com/openzfs/zfs/blob/zfs-2.4.1/etc/systemd/system/zfs-import-scan.service.in) · [systemd 依赖语义](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html)
-
-## 5. I4 验证实际写入、scrub 与缺盘
-
-先在空的冷 CAS 数据集跑顺序覆盖，Buildbarn、scrub 和手工 TRIM 暂停。脚本先写满一个 512 GiB 高熵文件，再连续覆写同一文件三遍。测试保持 `autotrim=on`，每分钟记录七组 cache 区数、ZFS 叶设备吞吐和 TXG 历史。每遍包含 fio 的最终 fsync 和池 `zpool sync`。 [fio I/O 范围和写入量](https://fio.readthedocs.io/en/latest/fio_doc.html#i-o-size) · [OpenZFS TXG 统计字段](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/spa_stats.c#L193)
+先确认 `/data/other` 的源，再写一份 8 GiB 临时文件；另开终端观察 `zpool iostat -vlyP z8data 1`、`/proc/spl/kstat/zfs/zil` 的 commit 计数、p9 写 I/O 和 fio 的同步 p95/p99。同步写先看日志，最终数据仍由 RAIDZ1 落盘。scrub 验毕后移除文件。
 
 ```bash
-sudo apt install fio sysstat
-sudo systemctl start data-buildbarn.mount
-logs="$HOME/z8-burnin/i4-cas-aging"
-mkdir -p "$logs"
-D4800X=/dev/disk/by-id/nvme-REPLACE_WITH_T4_OPTANE
-sudo bash storage/cas-aging.sh sequential "$logs" "$D4800X"
-sudo zpool scrub -w z8data
-sudo zpool status -vP z8data
+test "$(findmnt -n -M /data/other -o SOURCE)" = z8data/other &&
+    sudo fio --name=zil-burnin --filename=/data/other/zil-burnin.bin --size=8G \
+        --rw=write --bs=128k --ioengine=psync --direct=0 --fdatasync=1 --end_fsync=1 &&
+    sudo zpool scrub -w z8data &&
+    sudo zpool status -v z8data &&
+    sudo rm -- /data/other/zil-burnin.bin
 ```
 
-脚本用 **150 MB/s（十进制）和已完成 TXG 的 `stime` ≤60 秒**判定，最后两遍各自最多 3665 秒。周期监控进程或记录缺失也会报 `FAIL`。`optane-smart.log` 每分钟保存 D4800X 的温度和温控限速计数，首轮查是否新增温控事件。用分钟级 fio 带宽和 `cache` 水位确认确实进入回收期，并记录长停顿和 p99。若三遍结束仍未观察到忙时回收，延长同一文件的覆盖并保留采样，或用 I5 的真实轮转补测。TXG 的 `stime` 只统计实际同步完成的时长，卡住不完成的 TXG 还需看分钟日志和 `zpool sync` 是否返回。150/60 是本站起始门槛，I5 再用实测上传量、尾延迟和并发冷读验证。512 GiB 四遍在 150 MB/s 约 4.1 小时。scrub 无新增错误后删除本轮唯一的 `/data/buildbarn/i4-cas-aging.bin`，再做缺盘演练。
-
-### 低峰 TRIM 与回退
-
-保持 `autotrim=on`。只有冷库使用一段时间后空闲 cache 水位长期无法恢复、且日志支持旧块失效传播不足时，才在池健康、无 scrub/resilver、构建空闲时手动执行 `zpool trim -w -r 32M z8data /dev/mapper/hc620-{0..6}`。设备路径以 `zpool status -P` 为准，执行中看 `zpool status -t z8data`。按叶设备限速 32 MiB/s，全盘操作可能持续数日。下文禁用本站的每月全量 TRIM，保留 autotrim。 [OpenZFS 手工 TRIM](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zpool-trim.8.html)
-
-本节的回退命令在完成 I5 的软件和分核准备后使用。顺序覆盖未过线时，先用分钟日志区分 CPU 压缩、忙时回收和队列等待。若 HDD 路径仍达不到要求，CAS 回退到 P4618 的独立 XFS 目录，保留 ZFS 池供后续恢复。停用 `z8-buildbarn-worker.service` 和 `z8-buildbarn.service`，按 [Buildbarn 全 XFS 回退](../buildbarn/README.md#全-xfs-回退) 用新状态恢复同一农场入口。七个 mapper 已被 RAIDZ1 占用，故障回退直接用独立的 XFS 目录。
-
-### 每月 scrub
-
-保留 Ubuntu `zfsutils-linux` 的每月 scrub。`/etc/cron.d/zfsutils-linux` 在本地时间第二个周日 00:24 检查 ONLINE 池。I4 初次 scrub 单独执行，I7 混合负载避开定期任务，平时用 `sudo zpool status z8data` 看 `scan` 行。首装导入池后执行：
+安装每月 ZFS scrub，保持池的自动 TRIM：
 
 ```bash
-sudo apt install cron
-sudo systemctl enable --now cron
-sudo zfs set org.debian:periodic-scrub=enable org.debian:periodic-trim=disable z8data
-sudo zfs get org.debian:periodic-scrub,org.debian:periodic-trim z8data
+sudo systemctl enable --now zfs-scrub-monthly@z8data.timer
+sudo zpool get autotrim z8data
 ```
 
-### 同步写与 ZIL 验证
+### 缺盘停机恢复
 
-等 scrub 完成、池空闲后单独测。先在另一个终端执行 `sudo zpool iostat -vlyP z8data 1`，按路径查看 p8 的写 IOPS、带宽和延迟。以下 fio 每写 128 KiB 就发一次 `fdatasync`，用来观察客户端实际等待的同步延迟。保持 `direct=0`，以覆盖 OpenZFS 2.4.1 的缓冲同步写路径。
+停机换设备前从服务链停到 mapper，关机后动线：
 
 ```bash
-test "$(findmnt -n -M /data/buildbarn -o SOURCE)" = z8data/buildbarn &&
-sudo fio --name=cas-sync --filename=/data/buildbarn/zil-burnin.bin \
-    --rw=write --bs=128k --ioengine=psync --direct=0 --fdatasync=1 \
-    --size=4G --time_based=1 --runtime=60 --fallocate=none --refill_buffers=1 \
-    --percentile_list=50:95:99:99.9 --group_reporting
+sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service z8-cold-scan.service z8-cold.service
+sudo systemctl stop data-other.mount z8-zpool.service z8-dmzoned.service
 ```
 
-前后分别用 `sudo awk '/^zil_commit_count[[:space:]]/ || /^zil_itx_(copied|needcopy)_bytes[[:space:]]/' /proc/spl/kstat/zfs/zil` 保存计数。该文件为系统级计数，应在其他池安静时采样。预期提交计数增加、p8 在同步写时有活动，RAIDZ1 仍会写入最终数据块。记录 fio 的同步延迟 p95/p99 和 p8 的 I/O。这两项是运行信号，p8 的 I/O 还包含元数据。测试完成后删除 `zil-burnin.bin`。 [OpenZFS 2.4.1 同步写路径](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/zil.c#L2066) · [zpool iostat](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zpool-iostat.8.html)
+I4 分开做三种冷启演练，每轮检查 `bash host/run-step.sh i4-status`。SATA0–3 的一盘缺席应见 24 个可用分片，ZFS 保持 ONLINE；I5 的 cache 上线后复验启动、未命中和剩余分片读写。SATA4–6 的一盘缺席时池应 DEGRADED、32 个冷分片仍可用。整张 D4800X 拔除后二者都应由设备守卫拦下，系统仍可 SSH。接回原盘按原序列号与端口配对，ZFS 等 resilver 完成后再做下一轮。短时缺席的原冷盘带着原索引和 checkpoint 直接回归，启动时按 `/etc` 清单恢复原哈希键。
 
-Buildbarn 的冷 CAS 使用 `disk.libsonnet` 的 `minimumEpochInterval: '300s'`。这是持久化检查点对块文件调用 `fsync` 的最短间隔，活跃上传时可能观察到周期性同步。I5 用实际 Buck2 上传另测吞吐和尾延迟，测试窗口跨过至少一个活跃的持久化周期。 [Buildbarn 的持久化配置定义](https://github.com/buildbarn/bb-storage/blob/main/pkg/proto/configuration/blobstore/blobstore.proto)
-
-### 缺盘、停机、恢复
-
-- 单个 HC620 缺席时等待结束，尝试启动剩余六个 mapper，只有 p8 在且 RAIDZ1 可读时才会导入。`zpool status -P` 检查 DEGRADED 并按故障盘处理。D4800X 整卡、p1–p7 或 p8 缺席时，池和 Buildbarn 均不启动，根盘和 SSH 可用。单独缺 p9 时仍可导入池，Buildbarn 停在 p9 挂载关口。该链约束启动顺序；设备运行中 I/O 报错时，查 ZFS 状态并停服务，文件系统仍挂着时 systemd 不会仅凭 I/O 错误推断卸载。
-- 正常停机或换盘前，从一条命令发起反向事务，先停应用再卸载、导出和拆 mapper。`umount` 或 `zpool export` 被占用时先查使用者，存储脚本会在池仍导入时拒绝拆映射。
+冷库永久换盘示例为 SATA0。先停 cache 和 worker，显式禁用槽位。冗余不足的其他存储检查完再停公共 mapper。修改 `hybrid.tsv` 中该槽位的 ATA by-id，接上新盘并核身份。`reset sata0` 只清八片索引和对应 checkpoint。仅需重建一个逻辑分片时，可传完整分片名，例如 `sudo z8-cold reset sata0-5`。若换盘当天不能重建，保持槽位禁用，直接按 24 分片启动。修改有效分片必须重建 cache 容器，服务启动参数会处理。降级期写入替代分片的对象在加回时可能再度 miss。
 
 ```bash
-sudo systemctl stop srv-bbindex.mount data-buildbarn.mount data-other.mount z8-zpool.service z8-dmzoned.service
-sudo journalctl -b -u z8-dmzoned -u z8-zpool -u data-other.mount -u srv-bbindex.mount \
-    -u data-buildbarn.mount -u z8-buildbarn --no-pager
+sudo z8-cold disable sata0
+# 已停止两条存储链、关机换盘、更新 ATA by-id 后，保持依赖服务停用再格式化。
+sudo z8-storage format 0 --replace
+sudo systemctl start data-other.mount z8-cold.service
+sudo z8-cold reset sata0
+sudo systemctl restart z8-cold.service
+sudo z8-cold check
 ```
 
-- 冷启验证依次做全设备、一盘断电缺席、全恢复、D4800X 断电缺席、再全恢复。每次先关机再动线。单盘演练完成后先等恢复盘完成 resilver，再演练 D4800X。每轮从 `z8-kit` 根执行 `bash host/run-step.sh i4-status`，记录本次开机的 dm-zoned、池导入与挂载日志、mapper、ZFS 状态和四个挂载点。缺盘演练允许返回非零，以本轮预期和日志为准。D4800X 缺席时，日志必须显示链路尝试启动并在设备关口失败。只看目录未挂载或 SSH 可用无法判定守卫通过。设备后来才出现，先停止本链、复核设备，再运行 `sudo systemctl start data-buildbarn.mount data-other.mount srv-bbindex.mount`。I5 已上线后可用 `sudo systemctl start z8-buildbarn.service` 同时恢复应用。如果前次只建成少数 mapper，脚本会核对并复用已正确创建的映射。D4800X 丢失后的常规恢复路线是从原数据/构建重建 CAS。保留项目、构建配置、GUID、分区表和映射表的独立副本。
+若 ZFS 成员永久损坏，用 `zpool status -gP z8data` 记失效 vdev GUID。依上面流程停两条链，更新对应 SATA4–6 的 ATA by-id，按 `z8-storage format N --replace` 只处理这一组。启动两条链并用 `sudo zpool replace z8data OLD_GUID /dev/mapper/hc620-N` 替换，等 resilver 完成。临时掉线的原盘保持原配对，按需用 `zpool online` 恢复。
 
-临时缺盘回来时，原盘与原 D4800X 分区保持原配对。启动后用 `sudo zpool status -gP z8data` 观察旧成员、mapper、resilver 和校验计数。如果映射已恢复但 ZFS 仍标记 OFFLINE，先确认旧 vdev 标识，再对对应成员用 `sudo zpool online z8data <旧成员标识>`。仍是 UNAVAIL 时保留日志，检查 `dmsetup table` 与 `zdb -l /dev/mapper/hc620-N`，先核已有标签与池 GUID，避免重新格式化返回盘。
+只丢 p5 内容时，保留 `/data/other` 与 `z8data`，停冷库/worker，先用 `z8-cold disable all` 禁用旧映射，随后 `z8-cold reset all` 重新初始化索引和状态。此时冷盘不齐可对已接盘逐一运行 `reset sataN`，其余盘继续禁用。从备份恢复几何只能恢复清单。P4618 丢失、checkpoint 无法恢复时同样重建冷索引。D4800X 整卡丢失按 I4 重建原几何和两条链，`/data/other` 从独立备份恢复。重建任意分片前后处理 CMS，保留热 CS、AC，详见 [Buildbarn 恢复](../buildbarn/README.md#冷分片恢复与-cms)。重建后留一份 [FIT 与机器外记录](../host/FIT-RECOVERY.md#每个阶段留一份到另一台机器)。
 
-永久换盘先用 `zpool status -gP` 抄下失效数据 vdev 的 GUID。只对新的 HC620 与原编号的 cache 分区重建同名 mapper，再用 `zpool replace z8data <旧vdev-GUID> /dev/mapper/hc620-N` 并等待 resilver。执行前须确认另外六个成员和 p8 健康，更新 `/etc/z8-storage/hybrid.tsv` 中该 HDD 的 by-id。v2.20 首装池的新配对沿用 `--seq=384`。已有旧布局的池换盘时采用原来的几何，先核 mapper 长度。旧 cache 有签名时先核这组的两份设备身份，确认可清空后才给 `dmzadm --format` 加 `--force`。若 D4800X 整卡不可恢复，停 tiered 服务，按 I4 新建池和 p9，再执行下方的冷库重建步骤。若原来装了可选设备绑定，先移除引用旧 by-id 的 `20-optane-device.conf` 和旧 `.device` 的 `90-z8-timeout.conf`，按新 by-id 重装后再启动。源数据和构建配置从独立设备恢复。
+### 冷库介质扫描
 
-#### 只有 p9 的冷索引丢失
-
-如果仅丢了 `cold-layout.json`，且冷块文件、索引及持久状态均完好，从独立备份恢复同一套冷库的原记录，然后启动 tiered 服务。**索引或持久状态丢失时，重建整套冷 CS。** 停 tiered worker 和 cache。先确认池仍可读写、`/data/buildbarn` 的挂载源正确。若 p9 的 XFS 已损坏且决定清空，单独卸载 `srv-bbindex.mount`，按 I4 第 4 节用 p8 by-id 核对 p9。旧签名需要覆盖时，仅对校验通过且已卸载的 p9 使用 `mkfs.xfs -f -m reflink=0`。
-
-若正用全 XFS 回退，先按[回退手册](../buildbarn/README.md#全-xfs-回退)停止该 Compose 项目。确认本机使用 I5 的默认状态目录后执行。以下清除冷 CS 与 CMS 缓存，保留其它数据集、热 CS 和 AC。
+I5 初次上线通过后开启每月扫描。脚本四盘并行，每盘串行八片，以 4 MiB 直接读；EIO 才下探到 4 KiB，两次 EIO 才写零，flush 后直接读回。每片会打印字节数和逻辑偏移，退出 1 表示修过，2 表示缺盘或未完成。已分配冷库接近满载时需要按四盘线速预留一昼夜以上，仍会同构建读流量竞争，按日志看进度。出现 SATA 介质错误先用 `lsblk -S`、`journalctl -k -b` 对照实际 ATA by-id，扫描该盘的八个逻辑分片。物理 LBA 经过 dm-zoned 映射，不能直接当逻辑偏移。修复后的 4 KiB 逻辑读取成功也不能证明固件重映射了原 LBA。持续报介质错误时按坏盘处理。
 
 ```bash
-(
-    set -euo pipefail
-    sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service
-    sudo systemctl start data-buildbarn.mount srv-bbindex.mount
-    [[ $(findmnt -n -M /data/buildbarn -o SOURCE,FSTYPE) == 'z8data/buildbarn zfs' ]]
-    [[ $(findmnt -n -M /srv/bbindex -o FSTYPE) == xfs ]]
-    index_source=$(findmnt -n -M /srv/bbindex -o SOURCE)
-    [[ "$index_source" -ef /dev/disk/by-partlabel/z8-cold-index ]]
-    [[ $(findmnt -n -T /srv/buildbarn/tiered -o FSTYPE) == xfs ]]
-    sudo rm -f -- /data/buildbarn/blocks \
-        /srv/bbindex/{key_location_map,cold-layout.json} \
-        /srv/buildbarn/tiered/cms/{blocks,key_location_map}
-    sudo install -d -m 0755 /srv/bbindex/persistent_state /srv/buildbarn/tiered/cms/persistent_state
-    sudo find /srv/bbindex/persistent_state /srv/buildbarn/tiered/cms/persistent_state -mindepth 1 -delete
-    sudo systemctl start z8-buildbarn.service z8-buildbarn-worker.service
-)
-sudo journalctl -b -u z8-buildbarn -u z8-buildbarn-worker --no-pager
+sudo systemctl enable --now z8-cold-scan.timer
+sudo journalctl -u z8-cold-scan.service -n 100 --no-pager
+sudo flock -n /run/lock/z8-cold-scan.lock /usr/local/sbin/z8-cold-scan sata0
 ```
 
-守卫按原 `refreservation` 和 p9 可用量生成新几何，冷库文件长度不依赖旧块释放的进度。热 CS 的内容以 digest 寻址，可以继续提供直接读取；AC 每次返回结果前会检查引用对象。CMS 一起重建，因为固定镜像的 `SplitBlob` 可以直接返回旧清单，读路径此时未检查清单引用的 chunk 是否还在。mini 和 Mac 也有 CMS 读缓存，重接农场前按[边缘 CMS 恢复](../buildbarn/EDGE.md#权威冷库重建后的边缘-cms)清理。 [Buildbarn 热读与权威后端](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go#L21-L47) · [AC 完整性检查](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/completenesschecking/completeness_checking_blob_access.go#L219-L227) · [SplitBlob 读取清单](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/grpcservers/content_addressable_storage_server.go#L432-L443)
+测试环境先向可丢弃分片写入一个对象，记录索引所指的块设备偏移，再破坏该对象的编码字节。清掉热层中的测试对象或绕过热层后读取，检查日志出现 `Releasing … blocks due to a data integrity error`、返回 miss、重新上传后可读。读 EIO 由原始访问返回错误；变成可读但校验失败后 Buildbarn 才淘汰该块与同分片中更旧的块。不要在已有缓存的生产机上随意擦写。 [Buildbarn 读取与校验](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/flat_blob_access.go#L125-L151)
 
-## 6. I5 交给 Buildbarn
-
-先完成软件与目录准备，再装分核，最后启动服务。主方案要求 I4 持续写和缺盘演练通过、七盘接回且池 ONLINE。两路 kmem 应已上线，先执行 `systemctl is-active z8-pmem-kmem.service`，结果应为 `active`。以下从 `z8-kit` 根执行，`/srv/buildbarn/tiered` 在 P4618 XFS 上。
+## 5. I5 交给 Buildbarn
 
 ### I5.1 软件、目录与单元准备
 
-主方案与全 XFS 回退都先执行这个安装块。
+主方案和全 XFS 回退从 `z8-kit` 根执行：
 
 ```bash
 sudo apt install docker.io docker-compose-v2 jq sysstat
 sudo systemctl enable --now docker.service
-sudo docker compose version
 sudo install -d -m 0755 /opt/z8-kit /srv/buildbarn/tiered
 sudo install -m 0755 buildbarn/z8-buildbarn-check /usr/local/sbin/
 sudo cp -a buildbarn /opt/z8-kit/
-sudo install -m 0644 storage/systemd/{z8-buildbarn.service,z8-buildbarn-worker.service} \
-    /etc/systemd/system/
+sudo install -m 0644 storage/systemd/{z8-buildbarn.service,z8-buildbarn-worker.service} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/z8-buildbarn{,-worker}.service
-```
-
-主方案和全 XFS 回退都在启服务前构建 max 的兼容调度器并预拉镜像。在同一目录用下面两条命令。分层与回退使用同一组镜像。
-
-```bash
 cd /opt/z8-kit/buildbarn
 sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml build scheduler
 sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml pull cache runner-installer runner worker
 ```
 
-**主方案**继续执行下面的 p9 和 tiered 目录准备。采用全 XFS 回退的机器直接去 I5.2，回退的目录由回退手册创建。
+主方案在 P4618 上创建热存储目录。固定镜像默认 UID 0，使用 rootful Docker 默认用户映射。Compose 由 `z8-cold.service` 生成 `devices` 列表及容器可见的固定路径，启动前守卫核对所有可用切片的表和大小、活动分片的 checkpoint、热层 XFS 路径和既有文件几何。
 
 ```bash
-sudo systemctl start srv-bbindex.mount &&
-    findmnt -M /srv/bbindex -t xfs -o SOURCE,TARGET,FSTYPE &&
-    sudo install -d -m 0755 /srv/bbindex/persistent_state
 sudo install -d -m 0755 /srv/buildbarn/tiered/{cs-hot,cms,ac}/persistent_state
-findmnt -M /data/buildbarn -o SOURCE,TARGET,FSTYPE
-findmnt -T /srv/buildbarn/tiered -o SOURCE,TARGET,FSTYPE
-sudo docker compose --project-directory /opt/z8-kit/buildbarn \
-    -p z8-tiered -f /opt/z8-kit/buildbarn/compose.tiered.yaml config --quiet
+sudo z8-buildbarn-check
+sudo docker compose -p z8-tiered -f compose.tiered.yaml -f /run/z8-cold/compose.json config --quiet
 ```
-
-固定的 `bb-storage` 镜像的 OCI 配置是 `User=0`，默认 rootful Docker 无 userns-remap 时，首次创建的 root 目录即可使用。用 `docker image inspect <Compose 镜像引用> --format '{{.Config.User}}'` 复核。改镜像用户或启用 userns-remap 时，用实际映射 UID 初始化冷、热目录，随后用该容器做 CAS/AC 写读检查。 [Buildbarn 部署](../buildbarn/README.md)
-
-首次启用存储前，I4 压测文件须已移除。`z8-buildbarn-check` 从 `z8data/buildbarn` 的整 TiB `refreservation` 读冷文件大小。索引按 p9 XFS 首次可用空间向下取整到 GiB，再减 8 GiB。几何记录写到 `/srv/bbindex/cold-layout.json`，连同农场配置备份。后续启动核对预留和已存在的两个文件长度，沿用记录的索引大小。
 
 ### I5.2 分核与启动
 
-执行 [CPU 分核与 runner 归属](../host/CPU-PLACEMENT.md#生成并安装) 的两部分。先安装 CPU slice，再验证 Compose 和安装 runner drop-in。完成后回这里启用下面两个服务。走全 XFS 回退时，安装 CPU slice 后直接按 [回退手册](../buildbarn/README.md#全-xfs-回退) 启动，回退的 Compose 命令已包含分核覆盖。
+按 [CPU 分核与 runner 归属](../host/CPU-PLACEMENT.md#生成并安装) 安装 slice 及 runner drop-in。全 XFS 回退按 [专用命令](../buildbarn/README.md#全-xfs-回退) 启动。主方案先起 cache，再起 worker：
 
 ```bash
 sudo systemctl enable --now z8-buildbarn.service
-sudo cat /srv/bbindex/cold-layout.json
+sudo cat /run/z8-cold/cold-layout.json
 sudo systemctl enable --now z8-buildbarn-worker.service
 ss -ltn 'sport = :8980'
 ```
 
-正式上线后正常冷启一次，观察 `journalctl -b -o short-monotonic -u z8-dmzoned -u z8-zpool -u data-other.mount -u srv-bbindex.mount -u data-buildbarn.mount -u z8-buildbarn --no-pager`。存储服务启动后启动 Linux worker，再做真实 Buck2 远程执行、冷读和热读。
+首个代表性全量构建期间，另开终端运行 `watch -n 5 'sudo dmsetup status --target zoned'`。记录四个冷盘的 cache 水位峰值，同时保存原始构建和 I/O 日志。构建后验证冷读和重复热读、两种 worker 的 RE 和按需物化。冷库经常超过 70% 且写入受阻时，才考虑在前 944 GiB 内缩索引扩缓冲，重建冷 CAS；后 453 GiB 属于 ZFS 组。

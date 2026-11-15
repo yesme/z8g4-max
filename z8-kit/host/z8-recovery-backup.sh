@@ -220,12 +220,13 @@ root_disks=$(lsblk -snro TYPE,PATH -- "$root_source" | awk '$1 == "disk" && !see
 mapfile -t disks <<< "$root_disks"
 [[ ${#disks[@]} == 2 && -b "${disks[0]}" && -b "${disks[1]}" ]] ||
     die "Expected the two P4618 disks backing $root_source."
-special=$(sed -n 's/^Z8_SPECIAL=\(\/dev\/disk\/by-id\/nvme-[^[:space:]]*-part8\)$/\1/p' \
+optane=$(sed -n 's/^Z8_OPTANE=\(\/dev\/disk\/by-id\/nvme-[^[:space:]]*\)$/\1/p' \
     /etc/z8-storage/storage.env 2>/dev/null || true)
-if [[ -n "$special" ]]; then
-    optane=$(lsblk -dnro PKNAME -- "$special")
-    [[ -n "$optane" && -b "/dev/$optane" ]] || die 'Invalid Optane device in storage.env.'
-    disks+=("/dev/$optane")
+if [[ -n "$optane" && -b "$optane" && $(lsblk -dnro TYPE -- "$optane") == disk &&
+    $(blockdev --getsize64 "$optane") == 1500301910016 ]]; then
+    disks+=("$(readlink -f "$optane")")
+elif [[ -n "$optane" ]]; then
+    printf 'D4800X unavailable or unexpected geometry: %s\n' "$optane" > "$snapshot/storage/optane-unavailable.txt"
 fi
 for disk in "${disks[@]}"; do
     sgdisk --backup="$snapshot/gpt/${disk##*/}.sgdisk" "$disk" >&2
@@ -238,11 +239,11 @@ for path in /etc/fstab /etc/mdadm/mdadm.conf /etc/default/grub \
     /etc/apt/apt.conf.d/{51z8-kernel-manual,99z8-fit-boot} /etc/sudoers.d/z8-recovery-export \
     /etc/udev/rules.d/*z8*.rules /etc/default/irqbalance \
     /etc/sysctl.d/90-z8-tiering.conf /etc/modprobe.d/*zfs*.conf /etc/z8-infer-cpu.env \
-    /etc/z8-storage/{hybrid.tsv,storage.env,pmem-model.env,pmem-kmem.env,recovery-notes.txt,model-manifest.txt} \
-    /etc/systemd/system/{z8-*.service,z8-*.timer,z8*.slice,data-buildbarn.mount,data-other.mount,srv-bbindex.mount} \
-    /etc/systemd/system/{z8-*.service,z8*.slice,data-buildbarn.mount,data-other.mount,srv-bbindex.mount}.d/*.conf \
+    /etc/z8-storage/{hybrid.tsv,storage.env,pmem-model.env,pmem-kmem.env,recovery-notes.txt,model-manifest.txt,cold-layout.json} \
+    /etc/systemd/system/{z8-*.service,z8-*.timer,z8*.slice,data-other.mount} \
+    /etc/systemd/system/{z8-*.service,z8*.slice,data-other.mount}.d/*.conf \
     /opt/z8-kit/buildbarn/{*.jsonnet,disk.libsonnet,compose*.yaml,Dockerfile.scheduler,scheduler-command-platform.patch,buck2-shared-worker.buckconfig} \
-    /srv/bbindex/cold-layout.json /home/jackywang/.config/z8-infer/launch.sh
+    /home/jackywang/.config/z8-infer/launch.sh
 do
     copy_config "$path"
 done
@@ -262,7 +263,10 @@ if command -v zpool >/dev/null && zpool list -H -o name z8data >/dev/null 2>&1; 
     zpool get all z8data > "$snapshot/storage/zpool.txt"
     zpool get -H -o value guid z8data > "$snapshot/storage/zpool-guid.txt"
     zfs get -r all z8data > "$snapshot/storage/zfs.txt"
-    dmsetup table --target zoned > "$snapshot/storage/dmzoned.txt"
+fi
+if command -v dmsetup >/dev/null; then
+    dmsetup table --target zoned > "$snapshot/storage/dmzoned.txt" || true
+    dmsetup table --target linear | awk '$1 ~ /^z8-(cold|index)-sata[0-3]-[0-7]:$/' > "$snapshot/storage/cold-slices.txt" || true
 fi
 if command -v ndctl >/dev/null; then ndctl list -NRD > "$snapshot/hardware/namespaces.json"; fi
 if command -v ipmctl >/dev/null; then

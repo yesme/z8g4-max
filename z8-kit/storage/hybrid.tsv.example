@@ -1,8 +1,8 @@
-# Mapper label<TAB>SATA HC620 by-id<TAB>D4800X cache partition by-id
-hc620-0	/dev/disk/by-id/ata-REPLACE-SATA0	/dev/disk/by-id/nvme-REPLACE-D4800X-part1
-hc620-1	/dev/disk/by-id/ata-REPLACE-SATA1	/dev/disk/by-id/nvme-REPLACE-D4800X-part2
-hc620-2	/dev/disk/by-id/ata-REPLACE-SATA2	/dev/disk/by-id/nvme-REPLACE-D4800X-part3
-hc620-3	/dev/disk/by-id/ata-REPLACE-SATA3	/dev/disk/by-id/nvme-REPLACE-D4800X-part4
-hc620-4	/dev/disk/by-id/ata-REPLACE-SATA4	/dev/disk/by-id/nvme-REPLACE-D4800X-part5
-hc620-5	/dev/disk/by-id/ata-REPLACE-SATA5	/dev/disk/by-id/nvme-REPLACE-D4800X-part6
-hc620-6	/dev/disk/by-id/ata-REPLACE-SATA6	/dev/disk/by-id/nvme-REPLACE-D4800X-part7
+# mapper name<TAB>HC620 whole-disk ATA by-id<TAB>D4800X GPT label
+hc620-0	/dev/disk/by-id/ata-REPLACE-SATA0	dmz-sata0
+hc620-1	/dev/disk/by-id/ata-REPLACE-SATA1	dmz-sata1
+hc620-2	/dev/disk/by-id/ata-REPLACE-SATA2	dmz-sata2
+hc620-3	/dev/disk/by-id/ata-REPLACE-SATA3	dmz-sata3
+hc620-4	/dev/disk/by-id/ata-REPLACE-SATA4	dmz-sata4
+hc620-5	/dev/disk/by-id/ata-REPLACE-SATA5	dmz-sata5
+hc620-6	/dev/disk/by-id/ata-REPLACE-SATA6	dmz-sata6

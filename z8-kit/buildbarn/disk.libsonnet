@@ -1,10 +1,10 @@
-function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null, oldBlocks=8, currentBlocks=24)
+function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null, oldBlocks=8, currentBlocks=24, indexDevice=null)
   {
     'local': {
       keyLocationMap: {
-        onBlockDevice: {
+        onBlockDevice: if indexDevice == null then {
           file: { path: metadata + '/key_location_map', sizeBytes: indexBytes },
-        },
+        } else { devicePath: indexDevice },
         maximumGetAttempts: 16,
         maximumPutAttempts: 64,
       },
@@ -12,7 +12,8 @@ function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null, oldBlock
       currentBlocks: currentBlocks,
       newBlocks: newBlocks,
       blocksOnBlockDevice: {
-        source: { file: { path: blocks, sizeBytes: bytes } },
+        source: if indexDevice == null then { file: { path: blocks, sizeBytes: bytes } }
+        else { devicePath: blocks },
         spareBlocks: 3,
       },
       persistent: {

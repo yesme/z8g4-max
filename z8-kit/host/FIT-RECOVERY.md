@@ -95,7 +95,7 @@ I1 完成并验过本机 GRUB 后，用 `sudoedit /etc/z8-storage/recovery-notes
 )
 ```
 
-模型上线后把 GGUF 的 revision 和校验值放 `/etc/z8-storage/model-manifest.txt`。I4、I5、I7 和每次改存储配置后，运行 `sudo z8-recovery-backup`。手工运行 `dracut`、`update-grub` 或修改引导文件后，验证可启动再用 `sudo z8-recovery-backup --refresh-boot` 认可新的基线。
+模型上线后把 GGUF 的 revision 和校验值放 `/etc/z8-storage/model-manifest.txt`。I4、I5、I7 和每次改存储配置后，运行 `sudo z8-recovery-backup`。手工运行 `dracut`、`update-grub` 或修改引导文件后，验证可启动再用 `sudo z8-recovery-backup --refresh-boot` 认可新的基线。I4 的快照保存 D4800X 整盘 GPT、`/etc/z8-storage/cold-layout.json`、`hybrid.tsv` 和 `storage.env`，并采集已在线的 dm 表。冷库内容、裸索引和 checkpoint 属于可重建缓存。缺席时记录 D4800X 状态，其他元信息继续备份。
 
 脚本按同盘和卷标核验 `Z8RECOVERY`，每次临时挂载。备份记录写入独立目录、读回验 SHA-256，再原子更新 `latest`，保留最新 12 份。周检对比 EFI 和 `/boot` 的普通文件清单，排除 GRUB 自行改写的 `grubenv`。差异、缺基线或读取失败时，脚本仍保存元信息和 `boot-check.txt`，能取得原基线时也保存 `boot-baseline.sha256`。快照校验并卸载后才以非零退出，原基线仍可供排查。查看 `journalctl -u z8-recovery-backup.service -b` 和快照记录。
 

@@ -16,13 +16,9 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: /data/buildbarn
-        target: /cold
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /srv/bbindex
-        target: /cold-index
+        source: /run/z8-cold/cold-layout.json
+        target: /cold-layout.json
+        read_only: true
         bind:
           create_host_path: false
     restart: "no"

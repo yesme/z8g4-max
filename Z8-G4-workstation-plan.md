@@ -1,6 +1,6 @@
 # HP Z8 G4 双路工作站装机与部署计划
 
-2026 年 11 月 16 日 · v2.21 实施版
+2026 年 11 月 16 日 · v2.22 实施版
 
 主机名 `jackywang-xubuntu-max`，登录用户 `jackywang`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。槽 5 的实物为 Intel D4800X 1.5 TB U.2，已硬改为单口 Gen3 x4，装在 PCIe 转接卡上并加风扇。HC620 与 D4800X 组成可重建的冷 CAS 和归档池，冷索引放在 D4800X 的独立 XFS。模型从首装开始直接放在 App Direct。PMem 从 T3 起使用正式条带。
 
@@ -19,12 +19,12 @@
 | 操作系统 | 从现有 Ventoy 的 Xubuntu 26.04.1 Desktop ISO 导入本地 YAML，直接安装桌面和 md RAID0。FIT 1 GiB ESP、8 GiB `/boot`、24 GiB `Z8TOOLS`、8 GiB `Z8RECOVERY`，其余约 78 GiB 留空。P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
 | 主板与驱动 | 纯 UEFI，Secure Boot、SNC、ASPM 和 SATA 电源管理关，NUMA、HT、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
 | 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，默认每路 2 核，运行时 HT 伙伴留空，停服后全部归还 |
-| 冷库 | D4800X p1–p7 各 96 GiB，七组 dm-zoned → RAIDZ1。p8 192 GiB，做 special 与内嵌 ZIL；p9 约 533 GiB，做冷索引 XFS。池开启 `autotrim`，冷库用 `zle`，普通数据用 `zstd-3` |
-| 构建 | max 冷 CS 取冷数据集的 `refreservation`，首装按空池可用量的 55% 向下取整（约 41 TiB）。P4618 热 CS 512 GiB。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 运行权威 AC/CAS 和唯一调度器。Linux 与 Darwin 在同一实例下用平台属性分流 |
+| 存储 | SATA0–3 各用 24 GiB 写缓存，裸冷 CS 共 32 片、约 50.9 TiB；p5 是 848 GiB 裸索引。SATA4–6 各用 80 GiB 写缓存，组成约 25 TiB RAIDZ1；p9 约 213 GiB special，承载元数据、小块与 ZIL |
+| 构建 | max 热 CS 1,638 GiB，索引 26 GiB；冷分片 checkpoint 在 P4618。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 提供权威 AC/CAS 和唯一调度器，Linux 与 Darwin 由平台属性分流 |
 | 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、8 GiB GPU 专家缓存，按显存与工具闭环结果降档 |
 | 远程 | 板载有线为主，AX210 Wi-Fi 过渡，DHCP 保留、SSH/tmux，独立图形用 xrdp/Xfce，控制本机桌面用 P620 的 X11/NVENC + Sunshine/Moonlight |
 
-T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确认 1017 能在四卡加载并完成工具往返。I1 确认 FIT 冷启动可找到 RAID0，I4 确认 ZFS 老化写入和缺盘行为，I5 确认 Buck2 缓存与物化，I6–I7 确认推理显存、工具闭环和实际混合负载。只有未通过的项目进入对应排查或回退。
+T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确认 1017 能在四卡加载并完成工具往返。I1 确认 FIT 冷启动可找到 RAID0，I4 确认裸冷库覆写、ZFS 同步写和两组缺盘行为，I5 确认 Buck2 缓存与物化，I6–I7 确认推理显存、工具闭环和实际混合负载。只有未通过的项目进入对应排查或回退。
 
 ## 1. 测试 → 正式安装
 
@@ -49,7 +49,7 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 | **I1 · 操作系统** | 断开 V100 与数据盘，USB 只接三星 T3（Ventoy）和三星 FIT。从 Xubuntu Desktop Live 联网补 `mdadm`，导入 Ventoy 上的 `autoinstall.yaml`，复核序列号后重建 FIT 的 EFI、`/boot` 和 P4618 RAID0/XFS 根。核首启、Dracut、FIT 的 GRUB 救援菜单与元信息备份。 [FIT 救援方案](z8-kit/host/FIT-RECOVERY.md) [系统盘安装](z8-kit/host/INSTALL.md) |
 | **I2 · 远程入口** | 板载有线优先，缺网线时用 AX210。设开机自动联网和 DHCP 地址保留，再验 SSH 公钥、tmux 与 xrdp/Xfce。Sunshine 的 P620 硬件编码放 I3。 [远程入口](z8-kit/remote/README.md) |
 | **I3 · NVIDIA 显卡驱动与复接 V100** | V100 仍断开，在 Xubuntu 装 `nvidia-driver-580`。这是本方案为 P620 和 V100 选用的 NVIDIA Linux 显卡驱动。重启后用 P620 验桌面、Sunshine/NVENC 和 SSH，再关机接回 V100，核四卡枚举、NVLink 与快速 CUDA/NCCL。 [驱动安装和锁分支](z8-kit/host/INSTALL.md#安装并锁定-nvidia-显卡驱动) |
-| **I4 · 存储与 PMem** | 接回已慢扫的盘，首次划 D4800X 九分区，建七个 dm-zoned target 与 RAIDZ1，按 GUID 导入和挂载。跑持续写、ZFS scrub、两种缺盘冷启和恢复。按 T3 留下的 namespace UUID 恢复 DAX 模型卷和 kmem。 [存储](z8-kit/storage/README.md) · [PMem](z8-kit/host/PMEM.md) |
+| **I4 · 存储与 PMem** | 接回已慢扫的盘，首次划 D4800X 九分区，建七个 dm-zoned target、32 个冷分片和三盘 RAIDZ1。跑冷库覆写、ZFS scrub、三种缺盘冷启和恢复。按 T3 留下的 namespace UUID 恢复 DAX 模型卷和 kmem。 [存储](z8-kit/storage/README.md) · [PMem](z8-kit/host/PMEM.md) |
 | **I5 · Buildbarn 与 Buck2** | max 按每路预留 2 核安装 CPU slice 和 88 并发 runner 配置，依次启动 AC/CAS、调度器和 Linux worker。接入 mini 及 Mac 的边缘存储与 worker，验证一次 Linux/Darwin 跨平台构建、单测及按需物化。 [CPU 分核安装](z8-kit/host/CPU-PLACEMENT.md#生成并安装) · [Buildbarn](z8-kit/buildbarn/README.md) |
 | **I6 · 推理与 harness** | 用 llama.cpp v1.0.0、四张 V100 和一套 PMem 上的 1017 权重，验 128K 单槽目标、工具闭环和实际 harness，再保存参数并启动推理服务。OMP、Pi、DSH 可用已有密钥直连 DeepSeek 官方 API。各 CLI 验证账号、模型和工作树。 [推理](z8-kit/inference/README.md) · [服务配置](z8-kit/host/CPU-PLACEMENT.md#启停本地模型) · [CLI](z8-kit/harness/README.md) |
 | **I7 · 正式联调与恢复** | 冷启动检查 SSH、存储链和远程显示。验证本地 DeepSeek 启停时让出和归还 I5 已配置的核心，然后做一次 8 小时的编译、推理和 I/O 混合负载。保存引导、盘表、GUID、驱动/内核版本、服务配置及项目数据的独立副本。 [CPU 分核与启停](z8-kit/host/CPU-PLACEMENT.md) · [整机拷机](z8-kit/host/BURN-IN.md) |
@@ -99,40 +99,25 @@ HP 的公开 F10 手册未确认 Z8 G4 能让硬盘分批起转，供电按七�
 
 - I1 从三星 T3 的 Ventoy 启动 Xubuntu Desktop，在图形安装器导入填好的 `autoinstall.yaml`。回 Live 终端核对 FIT 和两个 P4618 端点的 `ID_SERIAL`，执行 `sudo touch /run/z8-storage-confirmed` 放行，再回图形界面确认安装。FIT 上的 GRUB 读入内核与 Dracut 初始化镜像，后者组装 P4618 根阵列。 [安装命令](z8-kit/host/INSTALL.md)
 
-- `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/jackywang` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS 和热 CS（块文件与索引）落 P4618。冷 CS 索引在 D4800X p9。单独在 `/srv/pmem-model` 挂 PMem XFS DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在安装配置里显式设 `crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
+- `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/jackywang` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS 和热 CS（块文件与索引）落 P4618。冷 CS 裸索引在 D4800X p5，冷分片状态在 P4618。单独在 `/srv/pmem-model` 挂 PMem XFS DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在安装配置里显式设 `crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
 - 首启为根 XFS 写 `noatime,nodiscard`，md 实测透出 discard 时用周期 TRIM。FIT 的 `/boot`、ESP 用 `noatime`，从周期 TRIM 排除。PMem 模型 XFS 用 `dax=always,noatime,nodiscard`。两个 ZFS 单元按依赖链以 `rw` 挂载，压缩、atime 和同步写策略保存在 dataset 属性。 [全机挂载参数及核对命令](z8-kit/host/MOUNTS.md) · [fstab 样例](z8-kit/host/fstab-boot.example)
 
 ### HC620 与 D4800X
 
-Xubuntu 26.04.1 的 Linux 7.0 块层用 zone write plugging 保持同一顺序区的写入次序。七块 HC620 保留系统默认 I/O 调度器。按 SATA0–6 记录 `host-managed`、两类区和实际调度器，命令见存储手册。 [Zoned Storage 写顺序](https://zonedstorage.io/docs/linux/sched)
+七块 HC620 保留 Linux 7.0 默认 I/O 调度器。每盘盘头的 524 个 conventional 区照常由 dm-zoned 管理。槽 5 的 D4800X 承接随机写缓冲，普通区有条件可作后台回收目的地。T4 确认 SATA 4Kn、`host-managed` 和 256 MiB 区。I4 通过 SATA by-id 和同卡 GPT 标签识别配对。`dmzadm --format` 只用于首次或明确重建，冷盘 `--seq=96`，ZFS 盘 `--seq=320`，两组 mapper 均为 52,152 个 chunk。 [分区和首次初始化](z8-kit/storage/README.md#2-建-gpt-与初始化-dm-zoned)
 
-D4800X 的 p1–p7 各 96 GiB，分别作为七个 dm-zoned 缓存。七个 mapper 做 RAIDZ1，按六份数据折算约 84.0 TB / 76.4 TiB，实际可用量再扣 RAIDZ 与池开销。p8 固定 192 GiB，供 special 元数据、小块和 ZIL 使用，预计含一个 1 GiB 内嵌日志区。p9 取余下约 533 GiB，XFS 存冷索引、持久状态和容量记录。I4 按现有 LBA 大小做 1 MiB 对齐。dm-zoned 向 ZFS 提供 4 KiB 块设备。 [D4800X 九分区命令](z8-kit/storage/README.md#新建-gpt-九分区) · [OpenZFS 内嵌日志区算法](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L1686-L1718)
-
-每块 HC620 盘头有 **524 个可随机读写的 `CONVENTIONAL` 区，共 131 GiB**。双设备 mapper 的前台缓冲走 D4800X。HC620 第 0 区存成员超级块，其余健康普通区纳入数据容量。后台回收分配不到顺序目的区时才尝试使用盘头普通区，所以这部分可以长期基本闲着。首装用 `dmzadm --seq=384`，让每组导出 52,152 个 chunk，略低于 HC620 的物理数据区数。 [盘头区用途与实机核对](z8-kit/storage/README.md#hc620-盘头随机写区在混合方案里的用途) · [WD HC620 区布局](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf#page=23)
-
-**`dmzadm --format` 仅在 I4 首次配对时运行一次。** 它重置 HC620 的顺序区写指针，并在配对的 D4800X 分区和 HC620 上写 dm-zoned 元数据，原有数据按不可保留处理。T4 裸盘验机与日常启动均跳过该命令。`hybrid.tsv` 只保存配对，开机用 `dmzadm --start` 读取已有元数据，再按依赖导入和挂载 ZFS。 [单组初始化命令](z8-kit/storage/README.md#首次初始化每组-dm-zoned)
-
-存储设备沿用 Linux 7.0 默认 I/O 队列。池开启 `autotrim`，OpenZFS 2.4.1 保持 32 TXG、32 KiB/128 MiB 过滤及切分参数，mapper 的设备能力另记 4 KiB/256 MiB。ARC 下限 2 GiB、上限 8 GiB，dirty data 和 TXG 周期沿用默认。 [OpenZFS TRIM 参数](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev_trim.c#L94)
-
-数据集平铺为 `z8data/buildbarn`、`z8data/other` 和 `z8data/reserve`，根只传递公共属性。冷库 `recordsize=1M,compression=zle,special_small_blocks=0`，约 41 TiB 预留同时定义块文件长度，排除快照。其它数据设 `recordsize=1M,special_small_blocks=24K`，继承 `zstd-3`。空数据集预留初始可用量的 10%，其它数据共享剩余量。这个预留给池留出可分配空间，实际碎片和回收吞吐在物理占用首次到 80% 时检查。整块 D4800X 故障会丢失全池和冷索引，独立设备保留恢复源。 [建池、容量与同步写](z8-kit/storage/README.md#3-建-zfs-池与-legacy-mount-数据集)
-
-**强制启动顺序**是 `z8-dmzoned.service → z8-zpool.service → data-buildbarn.mount → z8-buildbarn.service`。Buildbarn 同时要求 `srv-bbindex.mount`，p9 缺席仍可导入池。I4 将三个挂载单元设为开机启动。两个 ZFS 挂载拉起池导入，`/data/other` 的开机挂载独立于 Buildbarn。按 SATA by-id 和 p1–p7 逐一匹配，等设备最多 90 秒；p8 存在且至少六个 mapper 有效才尝试按 GUID 导入。正常停机逆序，池未导出时脚本拒绝拆 mapper。D4800X 整卡缺席时主机仍可 SSH。 [存储单元与安装步骤](z8-kit/storage/README.md#4-i4-安装存储依赖链)
+- **冷 CAS**。SATA0–3 位于机箱原生盘位，单盘八片，每片约 1.59 TiB。D4800X p1–p4 各 24 GiB，p5 的 848 GiB 裸索引也切 32 个。分片使用稳定的 dm-linear 名称。冷盘临时缺席时按 24 个分片运行，其余冷盘和 ZFS 可继续服务。更换盘只重建该盘的八份索引及 checkpoint。月度扫描从逻辑分片定位读错误。
+- **普通数据**。SATA4–6 位于三盘笼，分别配 D4800X p6–p8 的 80 GiB 缓存，组成三盘 RAIDZ1。p9 取尾部约 213.26 GiB 作 special，预计有 2 GiB 内嵌 ZIL。`z8data/other` 使用 `recordsize=1M,special_small_blocks=16K,compression=zstd-3`，`z8data/reserve` 预留初始可用量的 10%。保留 `autotrim=on`、每月 scrub、ARC 2–8 GiB。单 special 所在整卡损坏时从独立备份恢复。 [建池与属性](z8-kit/storage/README.md#3-建-zfs-池与-legacy-mount-数据集)
 
 ### 首次部署与以后每次启动
 
-首次部署先复制样例 `hybrid.tsv.example` 和 `storage.env.example`，把 SATA 口对应的七个 ATA 整盘 by-id 填到七行。例如 SATA3 对应 `hc620-3` 和 D4800X p4。所有 NVMe 分区统一使用同一根 by-id。先对确认可清空的 `hc620-0` 对应设备做一次初始化和启动，核 mapper 下只有对应的一块 HDD 和 p1 后，再处理另外六对。建池前用 `zpool create -n` 核对预览，建成后把 `zpool list -H -o guid z8data` 的结果写进 `Z8_POOL_GUID` 并导出。 [建池命令](z8-kit/storage/README.md#建池命令)
-
-I4 启用并启动 `data-buildbarn.mount`、`data-other.mount` 和 `srv-bbindex.mount`，检查安装结果，再做持续写、scrub 和缺盘冷启。I5 单独启用 `z8-buildbarn.service` 和 worker。池用 `cachefile=none` 并按 GUID 导入，两份 ZFS 数据集用 legacy mount。启动守卫核对冷库、p9、P4618 热层、预留和持久记录中的文件大小。
+`z8-dmzoned.service` 启动后，两条独立链分别构造 `z8-cold.service → z8-buildbarn.service` 和 `z8-zpool.service → data-other.mount`。冷库需要有效 p5 与已初始化可用分片，ZFS 需要 p9 和至少两个 SATA4–6 mapper。I4 启用冷库设备与一般数据挂载，完成受控覆写、初始化索引、同步写和缺盘演练。I5 启用 Buildbarn 和 worker，固定镜像只获准访问有效分片。 [I4 命令、验证和恢复](z8-kit/storage/README.md#4-i4-安装存储依赖链)
 
 ```bash
-sudo journalctl -b -o short-monotonic -u z8-dmzoned -u z8-zpool \
-    -u data-buildbarn.mount -u srv-bbindex.mount -u data-other.mount -u z8-buildbarn --no-pager
-sudo zpool status -P z8data
-findmnt -M /data/buildbarn -o SOURCE,TARGET,FSTYPE
-ss -ltn 'sport = :8980'
+bash host/run-step.sh i4-status
 ```
 
-停机换盘从 service 链发起停止，等 Buildbarn 退出、三个挂载点卸载和 `zpool export` 完成才拆 mapper。断电演练时先模拟单 HC620 缺席，重启看六个 mapper 和池的 DEGRADED 状态，再接回原盘原分区配对并等 resilver。整张 D4800X 缺席的冷启，预期启动链止于 dm-zoned，`/data/buildbarn` 无挂载且 8980 无监听，从 SSH 查看日志。永久换单盘按旧 vdev GUID 替换并更新对应 by-id。D4800X 整卡永久故障后，按 I4 重建池和 p9，再重建冷 CS 与 CMS，保留 P4618 上的热 CS 和 AC。mini 和 Mac 重接前清各自的 CMS 读缓存。 [停止与恢复命令](z8-kit/storage/README.md#缺盘停机恢复)
+主机断电再改接线，存储按依赖逆序停止。分别验证冷盘缺席、ZFS 盘缺席和 D4800X 整卡缺席，恢复后保留日志。D4800X 整卡缺席时主机仍可 SSH。冷库重建后处理 max、mini、Mac 的 CMS，保留仍有效的热 CS 和 AC。 [冷分片恢复](z8-kit/storage/README.md#缺盘停机恢复)
 
 ## 4. DeepSeek-V4.1-Flash-1017
 
@@ -178,9 +163,10 @@ I6 放行看近满上下文时每卡至少余 2 GiB、20 次连续工具往返�
 
 | 位置 | 部署 |
 |---|---|
-| P4618 RAID0/XFS | `/srv/work` 和 `buck-out`；`/srv/buildbarn/tiered` 存 AC、CMS、512 GiB 热 CS 及这些存储的索引和状态 |
-| HC620 RAIDZ1 | `/data/buildbarn` 仅挂在 Z8，存按其数据集预留确定的冷 CS 大块文件，预计约 41 TiB |
-| D4800X p9 XFS | `/srv/bbindex` 存冷 CS 索引、持久状态和 `cold-layout.json`，预计约 520 GiB 索引 |
+| P4618 RAID0/XFS | `/srv/work`、`buck-out`、AC、CMS、1,638 GiB 热 CS、索引与冷分片 checkpoint |
+| HC620 SATA0–3 | 32 个 256 MiB 对齐的裸冷 CAS 分片，合计约 50.9 TiB |
+| D4800X p5 | 848 GiB 裸索引，32 段各 26.5 GiB。持久设备清单在 `/etc/z8-storage/cold-layout.json` |
+| HC620 SATA4–6 与 D4800X p9 | 三盘 RAIDZ1 加 special，挂载 `/data/other` |
 | Linux | max 托管 AC/CAS、唯一调度器和 Linux worker。mini 用 PM9F1 热层、S3610 冷层，另提供 Linux worker |
 | Mac | Mac mini M4 提供原生 Darwin worker 和边缘读缓存。系统与 Xcode 用内置盘，其余先用外接 PM9F1 |
 
@@ -215,9 +201,9 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 1. **T1–T3 主机。** 两颗 CPU 都跑负载。DDR4-only 用 Memtest86+ 四个 pass 和 Linux 144 GiB、4 小时压力测试。随后插 PMem，应用 App Direct goal，重跑一轮混插内存测试。正式条带写一份 400 GiB 文件并在切 AC 后复核 SHA-256。devdax 每路先测 8 GiB，再测约 448 GiB 并验 CRC32C。留独立日志，再转 kmem。
 2. **T4 裸盘。** 七块 HC620 冷启稳定后并行跑 SMART 长检。按每盘报告的 ETA 预留一晚到一天以上，每块都要有最新的成功结果。
 3. **T5 算力坞。** GPU Burn 先单卡 15 分钟、再四卡 60 分钟。测每对 NVLink P2P、NCCL、PCIe Gen3 x8，查 Xid/ECC/AER，最后跑 1017 冒烟。
-4. **I4–I5 正式存储和服务。** 建池后用同一 512 GiB 文件跑三遍顺序覆盖，在测试文件仍在池中时 scrub。做单 HC620、整卡 D4800X 缺席演练及恢复。挂载通过后上线 Z8 Buildbarn，再验 mini 与 Mac 的边缘读缓存和两平台远程执行。验证 SSH、Sunshine 与 xrdp。
+4. **I4–I5 正式存储和服务。** 四盘各写 128 GiB 并原址覆盖三遍，采样回收水位；对三盘池单做同步写与 scrub。分别演练冷盘、ZFS 盘和整卡 D4800X 缺席。I5 再验边缘冷/热读、两平台远程执行以及 24 分片下的服务。
 5. **I7 整机。** 8 小时内轮流发 Buck2 冷读、热读和新上传，同时运行指向本机 1017 的探针或 OMP 本地 profile，并使用 SSH 和 RDP。保存启动期和混合负载的 kernel、RAS、NVMe/SMART、ZFS、NUMA 与 TTFT 记录。 [逐条命令与结果判读](z8-kit/host/BURN-IN.md)
 
-在有 `systemctl` 和 `apt-config` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖七盘齐全、缺一盘、缺两盘、p8 缺席、拒绝拆除已导入池的映射、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
+在有 `systemctl` 和 `apt-config` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖两条依赖链、分片缺席、索引和数据切片、错误注入扫描、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
 
 此前部署包已在 Ubuntu 26.04 用户空间用占位可执行文件检查 systemd 依赖，也核过官方 Live 包清单、Ubuntu 7.0.0-43 amd64 相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、整机安装、BIOS、PMem 上线时间、数据池和推理吞吐均需在目标 Z8 上确认。

@@ -1,0 +1,9 @@
+[Unit]
+Description=Monthly media scan of the Z8 cold CAS
+
+[Timer]
+OnCalendar=*-*-08 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

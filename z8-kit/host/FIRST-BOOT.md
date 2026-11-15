@@ -1,6 +1,6 @@
 # Z8 G4 上机操作顺序
 
-适用 v2.21，主机 `jackywang-xubuntu-max`，登录 `jackywang`。按 **T1–T4 验主机 → T5 验算力坞 → I1–I7 安装与上线** 执行。每一步链接到实际操作命令。
+适用 v2.22，主机 `jackywang-xubuntu-max`，登录 `jackywang`。按 **T1–T4 验主机 → T5 验算力坞 → I1–I7 安装与上线** 执行。每一步链接到实际操作命令。
 
 ## 0. 上电前
 
@@ -71,12 +71,12 @@
 ### I4 · PMem 复用、建数据池与冷启演练
 
 1. 关机断电接回 D4800X、SATA0–6 的七块 HC620；光驱在 SATA7。回正式系统按 T4 序列号逐一核盘。同一阶段安装 PMem 两份 env 和两个单元，设置 T3 用过的启动参数，重启，确认 `/srv/pmem-model` 仍挂为 XFS DAX、两个 kmem 节点上线。PMem 已有的 goal、namespace、XFS 和权重直接沿用。 [正式系统恢复 PMem](PMEM.md#i4-在正式系统复用-pmem)
-2. 从实测 D4800X 整盘 by-id 新建 **九分区**。按 `hybrid.tsv` 逐组初始化 **同卡 p1–p7 + 对应 HC620**，核七个 mapper。以七个 mapper 加 p8 建 RAIDZ1 与数据集，保存池 GUID 到 `storage.env`。p9 做冷索引用 XFS。 [I4 磁盘配置与建池](../storage/README.md#1-列出实体设备)
-3. 安装并启用三个开机挂载，确认 dm-zoned → 池导入 → ZFS 挂载的日志顺序，再核 p9。跑 512 GiB 种子和三遍覆写，在测试文件仍存在时 scrub。按手册做同步写检查，并清掉压测文件后执行全盘 → 少一块 HC620 → 恢复 → 整卡 D4800X 缺席 → 全恢复冷启。每轮看本次开机日志，最后确认七盘 ONLINE。持续写不达门槛时走既定全 XFS 回退。I4 配好后运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I4 单元和演练](../storage/README.md#4-i4-安装存储依赖链) · [全 XFS 回退](../buildbarn/README.md#全-xfs-回退)
+2. 从实测 D4800X 整盘 by-id 新建九分区。按 `hybrid.tsv` 逐组初始化映射；SATA0–3 用 24 GiB 缓存，SATA4–6 用 80 GiB。仅后三个 mapper 加 p9 建 RAIDZ1，保存池 GUID。p5 留作 848 GiB 裸索引。 [I4 磁盘配置与建池](../storage/README.md#1-列出实体设备)
+3. 启用 `data-other.mount` 和 `z8-cold.service`。先跑 `bash host/run-step.sh i4-cold-aging "$HOME/z8-burnin"`，再清零 32 个索引并启用分片。另对三盘 ZFS 做同步写和 scrub。分别冷启验证少一块冷盘、少一块 ZFS 盘、整卡 D4800X 缺席，每轮用 `bash host/run-step.sh i4-status` 收日志，恢复后确认 32 个分片和三盘池 ONLINE。冷库持续写不达门槛可用全 XFS 回退。I4 配好后运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I4 单元和演练](../storage/README.md#4-i4-安装存储依赖链) · [全 XFS 回退](../buildbarn/README.md#全-xfs-回退)
 
 ### I5 · Buildbarn 与 Buck2
 
-先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装默认每路 2 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#6-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
+先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装默认每路 2 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#5-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
 
 ### I6 · 正式推理和 CLI
 

@@ -4,10 +4,10 @@ set -euo pipefail
 tmp=$(mktemp -d)
 trap 'rm -r -- "$tmp"' EXIT
 export Z8_FIXTURE="$tmp" PATH="$tmp/bin:$PATH"
-mkdir -p "$tmp"/{bin,dev/disk/by-id,sys/class/block/nvme1n1/holders,sys/class/block/nvme1n1p1/holders}
+mkdir -p "$tmp"/{bin,dev/disk/by-id,dev/disk/by-partlabel,sys/class/block/nvme1n1/holders,sys/class/block/nvme1n1p1/holders}
 target="$tmp/dev/disk/by-id/nvme-test"
-touch "$target"
-sed -e 's/ -b / -f /g' -e "s@/dev/disk/by-id/@$tmp/dev/disk/by-id/@g" \
+touch "$target" "$tmp/dev/disk/by-partlabel/z8-special"
+sed -e 's/ -b / -f /g' -e "s@/dev/disk/@$tmp/dev/disk/@g" \
     -e "s@/sys/@$tmp/sys/@g" z8-kit/storage/partition-optane.sh > "$tmp/partition.sh"
 
 cat > "$tmp/bin/lsblk" <<'EOF'
@@ -19,14 +19,15 @@ case "$column" in
     MODEL) echo 'Intel sample' ;;
     SERIAL) echo 'dmz-optane-serial' ;;
     MOUNTPOINTS) if [[ -f "$Z8_FIXTURE/mounted" ]]; then echo /mnt/in-use; fi ;;
-    KNAME) printf 'nvme1n1\nnvme1n1p1\n' ;;
+    KNAME) if [[ "$1" == -dnro ]]; then echo nvme1n1; else printf 'nvme1n1\nnvme1n1p1\n'; fi ;;
+    PKNAME) echo nvme1n1 ;;
     *) echo 'drive preview' ;;
 esac
 EOF
 cat > "$tmp/bin/blockdev" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-    --getsize64) cat "$Z8_FIXTURE/capacity" ;;
+    --getsize64) if [[ "$2" == */z8-special ]]; then echo 228990521344; else cat "$Z8_FIXTURE/capacity"; fi ;;
     --getss) echo 4096 ;;
     *) exit 2 ;;
 esac
@@ -67,7 +68,7 @@ check_refused() {
 
 check_refused 'model or serial differs from T4' 'Intel sample' wrong dmz-optane-serial
 printf '3200631791616\n' > "$tmp/capacity"
-check_refused 'below 1.6 TB' 'Intel sample' dmz-optane-serial dmz-optane-serial
+check_refused 'expected the 1.5 TB' 'Intel sample' dmz-optane-serial dmz-optane-serial
 printf '1500301910016\n' > "$tmp/capacity"
 touch "$tmp/mounted"
 check_refused 'a child is mounted' 'Intel sample' dmz-optane-serial dmz-optane-serial
@@ -81,5 +82,7 @@ rmdir "$tmp/sys/module/zfs"
 check_refused 'typed serial did not match' 'Intel sample' dmz-optane-serial wrong
 run_partition 'Intel sample' dmz-optane-serial dmz-optane-serial
 grep -Fq -- '--zap-all' "$tmp/actions"
-grep -Fq -- '--new=8:0:+192G --change-name=8:z8-special --new=9:0:0 --change-name=9:z8-cold-index' "$tmp/actions"
+grep -Fq -- '--new=4:0:+24G --change-name=4:dmz-sata3 --new=5:0:+848G --change-name=5:z8-cold-index --new=6:0:+80G --change-name=6:dmz-sata4' "$tmp/actions"
+grep -Fq -- '--new=8:0:+80G --change-name=8:dmz-sata6 --new=9:0:0 --change-name=9:z8-special' "$tmp/actions"
+grep -Fq -- 'z8-special=228990521344 bytes' "$tmp/output"
 printf 'Optane partition tests passed: identity, capacity, mounts, holders, importing pool and typed confirmation.\n'

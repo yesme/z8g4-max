@@ -20,8 +20,7 @@ refuse() {
     $(lsblk -dno SERIAL -- "$disk") == "$serial" ]] || refuse 'model or serial differs from T4'
 bytes=$(sudo blockdev --getsize64 "$disk")
 [[ "$bytes" =~ ^[0-9]{13}$ ]] || refuse 'unexpected capacity'
-(( bytes >= (7 * 96 + 192 + 500) * 1024**3 + 2 * 1024**2 && bytes < 1600000000000 )) ||
-    refuse 'capacity must fit the nine partitions and be below 1.6 TB'
+[[ "$bytes" == 1500301910016 ]] || refuse 'expected the 1.5 TB D4800X namespace (1500301910016 bytes)'
 mounts=$(lsblk -nr -o MOUNTPOINTS -- "$disk")
 [[ -z ${mounts//[[:space:]]/} ]] || refuse 'the disk or a child is mounted'
 children=$(lsblk -nr -o KNAME -- "$disk")
@@ -55,14 +54,26 @@ read -r -p "To erase this disk and write the nine partitions, enter the recorded
 [[ "$confirmation" == "$serial" ]] || refuse 'typed serial did not match'
 
 gpt_args=(--clear --set-alignment="$align_sectors")
-for i in {1..7}; do
-    gpt_args+=(--new="$i:0:+96G" --change-name="$i:dmz-sata$((i-1))")
+for i in {1..4}; do
+    gpt_args+=(--new="$i:0:+24G" --change-name="$i:dmz-sata$((i-1))")
 done
-gpt_args+=(--new=8:0:+192G --change-name=8:z8-special --new=9:0:0 --change-name=9:z8-cold-index)
+gpt_args+=(--new=5:0:+848G --change-name=5:z8-cold-index)
+for i in {6..8}; do
+    gpt_args+=(--new="$i:0:+80G" --change-name="$i:dmz-sata$((i-2))")
+done
+gpt_args+=(--new=9:0:0 --change-name=9:z8-special)
 sudo sgdisk --zap-all "$disk"
 sudo sgdisk "${gpt_args[@]}" "$disk"
 sudo sgdisk --verify "$disk"
 sudo partprobe "$disk"
 sudo udevadm settle
+# GPT uses 128 entries of 128 bytes and one header at the end of the disk.
+last_gpt_bytes=$((16384 + logical_bytes))
+special_bytes=$((bytes - 1184 * 1024**3 - 1048576 - last_gpt_bytes))
+special=/dev/disk/by-partlabel/z8-special
+[[ -b "$special" && $(lsblk -dnro PKNAME -- "$special") == $(lsblk -dnro KNAME -- "$disk") &&
+    $(sudo blockdev --getsize64 "$special") == "$special_bytes" ]] ||
+    refuse "GPT special partition differs from the expected $special_bytes bytes"
+printf 'z8-special=%s bytes\n' "$special_bytes"
 sudo sgdisk --print "$disk"
 lsblk -b -o NAME,START,SIZE,PARTLABEL,FSTYPE,MOUNTPOINTS "$disk"

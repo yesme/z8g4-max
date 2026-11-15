@@ -1,7 +1,7 @@
 [Unit]
 Description=Verify FIT boot files and save Z8 recovery metadata
 RequiresMountsFor=/boot /boot/efi
-After=z8-dmzoned.service z8-zpool.service srv-bbindex.mount z8-pmem-kmem.service z8-pmem-model.service
+After=z8-dmzoned.service z8-zpool.service z8-cold.service z8-pmem-kmem.service z8-pmem-model.service
 
 [Service]
 Type=oneshot

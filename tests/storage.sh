@@ -1,58 +1,74 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script=z8-kit/storage/z8-storage
 tmp=$(mktemp -d)
 trap 'rm -r -- "$tmp"' EXIT
-export Z8_TEST="$tmp"
-export Z8_STORAGE_CONFIG="$tmp/config"
-export PATH="$tmp/bin:$PATH"
-mkdir -p "$tmp"/{bin,config,dev/disk/by-id,dev/mapper,sys/class/block}
+export Z8_TEST="$tmp" Z8_STORAGE_CONFIG="$tmp/config" PATH="$tmp/bin:$PATH"
+mkdir -p "$tmp"/{bin,config,dev/disk/by-id,dev/disk/by-partlabel,dev/mapper,sys/class/block,sys/module/zfs}
 
-# Only in the test copy, use file fixtures and a substitute sysfs tree.
-sed -e 's/ -b / -f /g' -e "s@/dev/@$tmp/dev/@g" \
-    -e "s@/sys/class/block/@$tmp/sys/class/block/@g" "$script" > "$tmp/storage"
-printf 'Z8_SPECIAL=%s/dev/disk/by-id/nvme-optane-part8\nZ8_POOL_GUID=123456\nZ8_DEVICE_WAIT=1\n' \
+sed -e 's/ -b / -f /g' -e "s@/dev/@$tmp/dev/@g" -e "s@/sys/@$tmp/sys/@g" \
+    z8-kit/storage/z8-storage > "$tmp/storage"
+printf 'Z8_OPTANE=%s/dev/disk/by-id/nvme-optane\nZ8_POOL_GUID=123456\nZ8_DEVICE_WAIT=1\n' \
     "$tmp" > "$Z8_STORAGE_CONFIG/storage.env"
 for i in {0..6}; do
-    printf 'hc620-%s\t%s/dev/disk/by-id/ata-disk%s\t%s/dev/disk/by-id/nvme-optane-part%s\n' \
-        "$i" "$tmp" "$i" "$tmp" "$((i+1))"
-    touch "$tmp/dev/disk/by-id/ata-disk$i" "$tmp/dev/disk/by-id/nvme-optane-part$((i+1))"
+    printf 'hc620-%s\t%s/dev/disk/by-id/ata-disk%s\tdmz-sata%s\n' "$i" "$tmp" "$i" "$i"
+    touch "$tmp/dev/disk/by-id/ata-disk$i" "$tmp/dev/disk/by-partlabel/dmz-sata$i"
 done > "$Z8_STORAGE_CONFIG/hybrid.tsv"
-touch "$tmp/dev/disk/by-id/nvme-optane-part8"
-# p9 is deliberately absent: pool import is independent of the cold index.
+touch "$tmp/dev/disk/by-id/nvme-optane" "$tmp/dev/disk/by-partlabel"/{z8-special,z8-cold-index}
 
 for cmd in modprobe udevadm; do
     printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/bin/$cmd"
 done
-printf '#!/usr/bin/env bash\necho host-managed\n' > "$tmp/bin/lsblk"
+cat > "$tmp/bin/lsblk" <<'MOCK'
+#!/usr/bin/env bash
+case "$2" in
+    KNAME) echo nvme-optane ;;
+    PKNAME) if [[ -e "$Z8_TEST/foreign-part" && "${@: -1}" == */z8-cold-index ]]; then echo other; else echo nvme-optane; fi ;;
+    ZONED) echo host-managed ;;
+    *) echo 'fixture disk' ;;
+esac
+MOCK
+cat > "$tmp/bin/blockdev" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "$1" == '--getss' ]]; then
+    if [[ "$2" == */nvme-optane ]]; then echo 512; else echo 4096; fi
+    exit
+fi
+case "$2" in
+    */nvme-optane) echo 1500301910016 ;;
+    */z8-special) echo 228990524928 ;;
+    */z8-cold-index) echo 910533066752 ;;
+    */dmz-sata[0-3]) echo 25769803776 ;;
+    */dmz-sata[4-6]) echo 85899345920 ;;
+    */hc620-*) echo 13999445901312 ;;
+    *) exit 1 ;;
+esac
+MOCK
 cat > "$tmp/bin/dmzadm" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == --start ]]
+case "$1" in
+    --check) exit 0 ;;
+    --format) printf '%s\n' "$*" >> "$Z8_TEST/format.log"; exit 0 ;;
+    --start) ;;
+    *) exit 1 ;;
+esac
 i=${3##*ata-disk}
 mapper="dm-$i"
 ln -s "$Z8_TEST/dev/$mapper" "$Z8_TEST/dev/mapper/hc620-$i"
 touch "$Z8_TEST/dev/$mapper"
 mkdir -p "$Z8_TEST/sys/class/block/$mapper/slaves"
-touch "$Z8_TEST/sys/class/block/$mapper/slaves/${2##*/}" \
-    "$Z8_TEST/sys/class/block/$mapper/slaves/${3##*/}"
+touch "$Z8_TEST/sys/class/block/$mapper/slaves/${2##*/}" "$Z8_TEST/sys/class/block/$mapper/slaves/${3##*/}"
 MOCK
 cat > "$tmp/bin/dmsetup" <<'MOCK'
 #!/usr/bin/env bash
-name=${@: -1}
 case "$1" in
-    info) test -L "$Z8_TEST/dev/mapper/$name" ;;
+    info) test -L "$Z8_TEST/dev/mapper/$2" ;;
     table)
-        test -L "$Z8_TEST/dev/mapper/$name" || exit 1
-        if [[ -e "$Z8_TEST/foreign-$name" ]]; then
-            if [[ "$2" == --target ]]; then exit 0; fi
-            echo '0 1000 linear 8:0 0'
-        else
-            echo '0 1000 zoned'
-        fi
+        test -L "$Z8_TEST/dev/mapper/$2" || exit 1
+        if [[ -e "$Z8_TEST/foreign-$2" ]]; then echo '0 1000 linear 8:0 0'; else echo '0 27342667776 zoned 8:1 8:2'; fi
         ;;
-    remove) rm -- "$Z8_TEST/dev/mapper/$name" ;;
+    remove) rm -- "$Z8_TEST/dev/mapper/$2" ;;
     *) exit 2 ;;
 esac
 MOCK
@@ -74,57 +90,64 @@ esac
 MOCK
 chmod +x "$tmp"/bin/*
 
-bash "$tmp/storage" map
-bash "$tmp/storage" import
-[[ $(grep -c '/dev/mapper/hc620-' "$tmp/import.args") -eq 7 ]]
+run() { bash "$tmp/storage" "$@"; }
+reject() { if run "$@"; then echo "Unexpected success: $*" >&2; exit 1; fi; }
+run format 0 --create <<< hc620-0
+run format 6 --replace <<< hc620-6
+grep -q -- '--label=hc620-0 --seq=96 ' "$tmp/format.log"
+grep -q -- '--label=hc620-6 --seq=320 --force ' "$tmp/format.log"
+run map
+reject format 6 --replace <<< hc620-6
+[[ $(run cold-ready | wc -l) -eq 4 ]]
+run import
+[[ $(grep -c '/dev/mapper/hc620-[456]' "$tmp/import.args") -eq 3 ]]
+if grep -q 'hc620-[0123]' "$tmp/import.args"; then exit 1; fi
 grep -qx '123456' "$tmp/import.args"
-if bash "$tmp/storage" unmap; then echo 'Unmapped a live pool' >&2; exit 1; fi
+reject unmap
 rm -- "$tmp/dev/disk/by-id/ata-disk3"
-bash "$tmp/storage" export
-bash "$tmp/storage" unmap
+[[ $(run cold-ready | wc -l) -eq 3 ]]
+run export
+run unmap
 [[ -z $(ls -A "$tmp/dev/mapper") ]]
 
-touch "$tmp/dev/disk/by-id/ata-disk3"
-bash "$tmp/storage" map
-rm -- "$tmp/dev/disk/by-id/ata-disk3"
-bash "$tmp/storage" map
-bash "$tmp/storage" import
-[[ $(grep -c '/dev/mapper/hc620-' "$tmp/import.args") -eq 6 ]]
-if grep -q 'hc620-3' "$tmp/import.args"; then exit 1; fi
-bash "$tmp/storage" export
-bash "$tmp/storage" unmap
-[[ -z $(ls -A "$tmp/dev/mapper") ]]
+rm -- "$tmp/dev/disk/by-id/ata-disk4"
+run map
+run import
+[[ $(grep -c '/dev/mapper/hc620-[456]' "$tmp/import.args") -eq 2 ]]
+run export
+rm -- "$tmp/dev/disk/by-id/ata-disk5"
+reject import
+[[ $(run cold-ready | wc -l) -eq 3 ]]
+rm -- "$tmp/dev/disk/by-partlabel/z8-special"
+touch "$tmp/dev/disk/by-id/ata-disk4" "$tmp/dev/disk/by-id/ata-disk5"
+run map
+[[ $(run cold-ready | wc -l) -eq 3 ]]
+reject import
+touch "$tmp/dev/disk/by-partlabel/z8-special"
+touch "$tmp/foreign-part"
+reject cold-ready
+run import
+run export
+rm -- "$tmp/foreign-part"
+rm -- "$tmp/dev/disk/by-id/nvme-optane"
+reject map
+reject cold-ready
+reject import
+touch "$tmp/foreign-hc620-0"
+reject unmap
+[[ $(ls -A "$tmp/dev/mapper") == hc620-0 ]]
 
-rm -- "$tmp/dev/disk/by-id/ata-disk2"
-if bash "$tmp/storage" map; then echo 'Started with five HDDs' >&2; exit 1; fi
-if bash "$tmp/storage" import; then echo 'Imported with five HDDs' >&2; exit 1; fi
-# Isolate the special-partition failure with all seven HDDs present.
-touch "$tmp/dev/disk/by-id/ata-disk2" "$tmp/dev/disk/by-id/ata-disk3"
-bash "$tmp/storage" unmap
-rm -- "$tmp/dev/disk/by-id/nvme-optane-part8"
-if bash "$tmp/storage" map; then echo 'Started without p8' >&2; exit 1; fi
-if bash "$tmp/storage" import; then echo 'Imported without p8' >&2; exit 1; fi
-touch "$tmp/dev/disk/by-id/nvme-optane-part8"
-bash "$tmp/storage" map
-touch "$tmp/foreign-hc620-3"
-if bash "$tmp/storage" unmap; then echo 'Unmapped a foreign device' >&2; exit 1; fi
-[[ $(ls -A "$tmp/dev/mapper") == hc620-3 ]]
-echo 'Mock storage paths passed: 7/6/5 disks, runtime HDD loss, missing p8, and live-pool/foreign mapping guards.'
-
-# Install the same units as I4, leaving the I5 Buildbarn units out.
 root="$tmp/systemd"
 units="$root/etc/systemd/system"
 mkdir -p "$units"
-install -m 0644 z8-kit/storage/systemd/{data-buildbarn.mount,data-other.mount,srv-bbindex.mount,z8-zpool.service,z8-dmzoned.service} "$units/"
-printf '[Unit]\nDescription=Boot target fixture\n' > "$units/multi-user.target"
-systemctl --root "$root" --quiet enable data-buildbarn.mount data-other.mount srv-bbindex.mount
-for mount in data-buildbarn.mount data-other.mount srv-bbindex.mount; do
-    [[ -L "$units/multi-user.target.wants/$mount" ]]
-    grep -Fxq 'DefaultDependencies=no' "$units/$mount"
-done
-for mount in data-buildbarn.mount data-other.mount; do
-    [[ -L "$units/z8-zpool.service.wants/$mount" ]]
-    grep -Fxq 'BindsTo=z8-zpool.service' "$units/$mount"
-    grep -Fxq 'After=z8-zpool.service' "$units/$mount"
-done
-echo 'I4 storage mounts enable independently of the Buildbarn service.'
+install -m 0644 z8-kit/storage/systemd/{data-other.mount,z8-zpool.service,z8-dmzoned.service,z8-cold.service,z8-cold-scan.timer,z8-cold-scan.service,z8-buildbarn.service} "$units/"
+for target in multi-user timers; do printf '[Unit]\nDescription=Target fixture\n' > "$units/$target.target"; done
+systemctl --root "$root" --quiet enable data-other.mount z8-cold.service z8-cold-scan.timer
+[[ -L "$units/multi-user.target.wants/data-other.mount" &&
+    -L "$units/multi-user.target.wants/z8-cold.service" &&
+    -L "$units/z8-zpool.service.wants/data-other.mount" &&
+    -L "$units/timers.target.wants/z8-cold-scan.timer" ]]
+grep -Fxq 'BindsTo=z8-dmzoned.service' "$units/z8-cold.service"
+grep -Fxq 'BindsTo=z8-cold.service' "$units/z8-buildbarn.service"
+grep -Fxq 'BindsTo=z8-zpool.service' "$units/data-other.mount"
+echo 'Storage tests passed: independent cold and ZFS chains, geometry, and degraded import.'
