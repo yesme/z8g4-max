@@ -20,7 +20,7 @@
 
 | 路径 | 首装值 |
 |---|---|
-| Advanced → Boot Options | USB Media Boot Enable，Fast Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 Off，手动按算力坞的上电顺序启动。UEFI Boot Order 先用 Samsung FIT 上的 Ubuntu 引导项，F9 可选 Memtest86+ 或救援 USB |
+| Advanced → Boot Options | USB Media Boot Enable，Fast Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 Off，手动按算力坞的上电顺序启动。验机时用 F9 选 Ventoy 或已装好的 SanDisk。I1 装好正式系统后，UEFI Boot Order 再以 Samsung FIT 上的 Ubuntu 引导项为首选 |
 | Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
 | Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），PCIe MMIO Assignment Mode Auto，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 和 AX210 蓝牙接用的内部 USB 打开；sSATA 无连接可禁用，按板上实际丝印确认 |

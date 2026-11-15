@@ -24,9 +24,12 @@ ln "$probe" "$WORK/build/${probe##*/}" &&
 
 ## mini
 
-先停止手动隧道，从 `z8-kit/buildbarn` 执行。两台 Linux worker 使用相同的容器内 `/worker/build`、镜像 digest、平台属性与 CPU 目标基线。工具链随镜像或项目输入提供，通用构建按项目选 `x86-64-v3`，禁用 `-march=native` 与 `-mtune=native`。
+先停止手动隧道，在 mini 装好 Docker 和 Compose，再从 `z8-kit/buildbarn` 执行。两台 Linux worker 使用相同的容器内 `/worker/build`、镜像 digest、平台属性与 CPU 目标基线。工具链随镜像或项目输入提供，通用构建按项目选 `x86-64-v3`，禁用 `-march=native` 与 `-mtune=native`。
 
-```
+```bash
+sudo apt update
+sudo apt install docker.io docker-compose-v2
+sudo systemctl enable --now docker.service
 install -Dm0644 edge-tunnel.service.example "$HOME/.config/systemd/user/z8-edge-tunnel.service"
 sudo loginctl enable-linger "$USER"
 systemctl --user daemon-reload
@@ -120,7 +123,11 @@ max 的冷 CS 重建后，mini 和 Mac 在重新接入前清空热盘上的 CMS 
 
 三台机器用同一个 `buck2-shared-worker.buckconfig`，都连接本机 8980。填 `macos_xcode`，与 Mac 的 `xcode` 一致。将 Linux 和 Darwin executor 样例合入项目注册的 execution platform，注册对应 OS、架构和工具链约束。项目应有分别指定默认目标平台的 Linux、Darwin 测试目标，测试框架须支持远程测试。执行一次并在调度日志核两个平台的实际 worker。 [Buck2 执行平台](https://buck2.build/docs/rule_authors/configurations/#custom-execution-platforms) · [Buck2 目标平台](https://buck2.build/docs/concepts/configurations/)
 
-```
+```bash
+# 先在 z8-kit/buildbarn 记下配置绝对路径，再 cd 到构建项目。
+farm_cfg="$(pwd -P)/buck2-shared-worker.buckconfig"
+test -r "$farm_cfg" || exit 1
+cd /path/to/project
 buck2 test --remote-only --config-file "$farm_cfg" //app:unit_linux //app:unit_darwin
 ```
 

@@ -30,7 +30,7 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 
 ### 第一阶段 · BIOS 设置和硬件测试
 
-顺序是 **CPU → DDR4 → PMem → 存储 → 算力坞**。从三星 Portable SSD T3 250 GB 上的 Ventoy 启动 Xubuntu 26.04.1 Desktop 和 Memtest86+。T1 先把 Xubuntu 装到可清空的 SanDisk Ultra Fit CZ430 128 GB，T1–T5 从该临时系统启动。T3 在同一系统用 Canonical 官方归档的三份 `.deb` 安装 `ipmctl`，用 26.04 软件源安装 `ndctl` 和 `daxctl`。测试日志和盘序列号保存在 SanDisk，I1 前拔下留存。换件前关机并断交流电。 [PMem 工具准备](z8-kit/host/PMEM.md)
+顺序是 **CPU → DDR4 → PMem → 存储 → 算力坞**。从三星 Portable SSD T3 250 GB 上的 Ventoy 启动 Xubuntu 26.04.1 Desktop 和 Memtest86+。T1 先把 Xubuntu 装到可清空的 SanDisk Ultra Fit CZ430 128 GB，T1–T5 的 Linux 验机从该临时系统启动，Memtest86+ 从 Ventoy 启动。Samsung FIT 在 T4 临时接入读取序列号，I1 才分区和写入正式引导。T3 在同一系统用 Canonical 官方归档的三份 `.deb` 安装 `ipmctl`，用 26.04 软件源安装 `ndctl` 和 `daxctl`。测试日志和盘序列号保存在 SanDisk，I1 前拔下留存。换件前关机并断交流电。 [PMem 工具准备](z8-kit/host/PMEM.md)
 
 固件随验机阶段处理。T1 最小配置稳定 POST 后核 HP BIOS 与 ME，T3 在提交 App Direct goal 前逐条核 PMem，T4 在 SSD 裸盘压测前核固件，T5 记录每张 V100 的 VBIOS。三星 DDR4 和无源直通板直接做硬件测试。 [固件更新条件与命令](z8-kit/host/FIRMWARE.md)
 
@@ -75,7 +75,7 @@ F10 首装使用 **纯 UEFI，Legacy/CSM 和 Secure Boot 都关闭**。Fast Boot
 
 **内网首装保留 VT-x、VT-d、默认 PCIe ACS、Intel ME 和 HP Sure Start 的固件恢复。** VT-x 给 KVM 等虚拟机提供 CPU 硬件加速，裸机 Buck2 和 1017 的性能继续按实测记录。关闭不用的 AMT、PXE、TXT 和 HP Sure Recover，保持设备级 DriveLock 未启用。新装 XFS 根若没有使用 TPM 解锁或密钥，可关闭 TPM State。接坞后先记录真实 NVLink 和 PCIe 拓扑，需使用裸机 PCIe P2P 时，按 NVIDIA 要求用 GRUB 单次关闭 Intel IOMMU 做该路径测试。 [F10 各项取值](z8-kit/host/BIOS.md#内网主机的安全与虚拟化设置) · [HP 服务手册](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [NVIDIA 多 GPU 指南](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/multi-gpu-systems.html#host-iommu-hardware-pci-access-control-services-and-vms)
 
-按 Esc → F10 后，在 `Advanced → Secure Boot Configuration → Configure Legacy Support and Secure Boot` 选择 **Legacy Support Disable and Secure Boot Disable**。保存后如出现 Boot Mode Change，输入屏幕确认码。保留 `UEFI Boot Order`，用 F9 选 Ventoy UEFI 后在菜单选 Memtest86+ 或 Xubuntu Desktop，也可直接选 FIT 的 UEFI 引导项。在 `Boot Options` 把 `After Power Loss` 设为 Off，按算力坞接线记录手动上电。在 `Slot Settings` 保持槽 1 的 Bifurcation 为 Auto，槽 2/3 改为 x8/x8（若固件提供该项），槽 5/7 保持 Enable。保存后先从 P620 看一次 POST，再进入 Linux 核验。 [HP F10 设置](https://support.hp.com/ee-en/document/ish_9642671-9641393-16)
+按 Esc → F10 后，在 `Advanced → Secure Boot Configuration → Configure Legacy Support and Secure Boot` 选择 **Legacy Support Disable and Secure Boot Disable**。保存后如出现 Boot Mode Change，输入屏幕确认码。保留 `UEFI Boot Order`，用 F9 选 Ventoy UEFI 后在菜单选 Memtest86+ 或 Xubuntu Desktop，验机从 SanDisk 启动，I1 装好正式系统后才选 FIT 的 UEFI 引导项。在 `Boot Options` 把 `After Power Loss` 设为 Off，按算力坞接线记录手动上电。在 `Slot Settings` 保持槽 1 的 Bifurcation 为 Auto，槽 2/3 改为 x8/x8（若固件提供该项），槽 5/7 保持 Enable。保存后先从 P620 看一次 POST，再进入 Linux 核验。 [HP F10 设置](https://support.hp.com/ee-en/document/ish_9642671-9641393-16)
 
 ```bash
 test -d /sys/firmware/efi && echo 'UEFI boot'

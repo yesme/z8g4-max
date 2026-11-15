@@ -11,6 +11,12 @@
 - **现场准备**。键盘接主机，显示器接 P620，AX210 接两根天线，备好 Wi-Fi 凭据。给容量相同的两只 U 盘贴上「SanDisk 验机」和「Samsung 引导」，给 HC620 数据线标 SATA0–6，给四根算力坞链路标槽号和分支。换盘、DIMM 或 PCIe 线前，先结束当前测试并正常关机，再切断相关设备的交流电。
 - **记录位置**。采集到 SanDisk 临时系统的 `~/z8-burnin`，包括 PMem UUID、两份 PMem env、磁盘序列号和测试日志。T5 结束后将 SanDisk 拔下留存。命令中的 `host/…`、`storage/…` 都相对于仓库的 `z8-kit`。记下每轮实际的启动介质、`uname -r` 和 BIOS 版本。
 
+## 在终端运行与取日志
+
+从仓库的 `z8-kit` 目录运行 `bash host/run-step.sh --help` 查看可执行步骤。Live、SanDisk 和正式系统都用同一个入口。`GPU-REPLACE…`、磁盘 by-id 和节点号用上一步实测值填。脚本把执行过程、退出码和日志绝对路径同时显示在终端。
+
+默认写到 `~/z8-burnin/steps/`，每次运行生成新文件。Live 退出前复制需要留存的文件到 Ventoy 大数据分区。后续排查时直接附上 `Log:` 后那份日志。压测或温度采样可在对应终端按 Ctrl+C 停止。
+
 ## 1. T1–T4 验主机
 
 ### T1 · CPU、F10 和 Wi-Fi
@@ -29,7 +35,7 @@
 
 1. 仍从 SanDisk 上的临时系统启动时，先装好 `ipmctl`、`ndctl`、`daxctl` 和 PMem 版 fio 所需工具。关机断电，DDR4 留在原位，每路在 **DIMM 2/4/6/7/9/11** 插六条 PMem 100。首次混插进 F10，看 12 条是否识别，并按手册临时解冻。 [T3 工具](PMEM.md#t3-准备工具) · [App Direct 第 1 步](PMEM.md#1-在-f10-查条并临时解冻)
 2. 回 SanDisk，保存 `ipmctl` 盘点和固件状态。需要初始化时在 **Linux** 提交 App Direct goal，再重启回 SanDisk，确认两路健康 region 和无待应用 goal。随后从 Ventoy 选 Memtest86+ 跑 **1 个完整 pass** 检查混插后的 DDR4，再回 SanDisk 做 PMem 测试。 [App Direct 第 2、3 步](PMEM.md#2-在-xubuntu-26041-记录现状并提交-goal) · [混插与专用压测](BURN-IN.md#t3-pmem-100app-direct-的专用检查)
-3. 按 socket 划两个 **258 GiB fsdax** 和两个剩余 **devdax**。两个 fsdax 条带化，首次格式化为正式 XFS DAX 模型卷。先做 fsdax 文件与两个裸 devdax 的专用写读校验，再将 fsdax 测试文件的 SHA-256 存到 SanDisk 上的日志目录，正常关机、切 AC、回 SanDisk 挂载复核。删掉测试文件再准备模型。 [模型卷命令](PMEM.md#模型卷) · [PMem 测试命令](BURN-IN.md#t3-pmem-100app-direct-的专用检查)
+3. 按 socket 划两个 **258 GiB fsdax** 和两个剩余 **devdax**。两个 fsdax 条带化，首次格式化为正式 XFS DAX 模型卷。先做 fsdax 文件与两个裸 devdax 的专用写读校验，再将 fsdax 测试文件的 SHA-256 存到 SanDisk 上的日志目录，正常关机、切 AC、回 SanDisk 挂载复核。删掉测试文件，再按 [T3 模型挂载服务](PMEM.md#交给启动服务)交给 systemd，供之后 T5 使用。 [模型卷命令](PMEM.md#模型卷) · [PMem 测试命令](BURN-IN.md#t3-pmem-100app-direct-的专用检查)
 4. 两个 devdax 的裸设备测试结束后才转 kmem。确认两路均为 online/Movable，逐路施压并核冷页下沉，按手册记录服务冷启动用时。保存两个按 socket 填好的 `pmem-model.env`、`pmem-kmem.env`，另记原始四个 namespace UUID、DDR4 节点编号和两路慢节点。I4 会复用这四个 namespace 以及模型卷。 [kmem 上线](PMEM.md#剩余-pmem-转-kmem) · [冷启计时](PMEM.md#t3-记录-kmem-冷启动时间) · [逐路下沉](PMEM.md#核实每路-ddr4-的冷页去向)
 
 ### T4 · 加存储，先验裸设备
@@ -41,7 +47,7 @@
 
 ## 2. T5 验算力坞
 
-1. 保持坞断开，先在临时 Xubuntu 装 R580，重启确认 P620 枚举。按 [R580 包与安装模拟](INSTALL.md#安装并锁定-nvidia-显卡驱动) 操作。关机断电，按 [槽位表](BIOS.md#板上槽位) 接槽 2/3 的 x8/x8 直通板。按底板供电方式确认坞的端点、电源和冷却能在主机 POST 时就绪，核四套水路和泵。若坞为独立手动供电，第一轮上机前核供应商启停顺序并记录。
+1. 保持坞断开，先在临时 Xubuntu 装 R580，重启确认 P620 枚举，并在 SanDisk 上[准备 CUDA 验机工具](INSTALL.md#算力坞验收)。按 [R580 包与安装模拟](INSTALL.md#安装并锁定-nvidia-显卡驱动) 操作。关机断电，按 [槽位表](BIOS.md#板上槽位) 接槽 2/3 的 x8/x8 直通板。按底板供电方式确认坞的端点、电源和冷却能在主机 POST 时就绪，核四套水路和泵。若坞为独立手动供电，第一轮上机前核供应商启停顺序并记录。
 2. 按 **单卡 → 每槽各验两卡 → 四卡** 冷启。每轮保存 GPU UUID、BDF、NUMA 归属和负载下 PCIe 速率/宽度。四卡再测六对 NVLink P2P、NCCL、四卡 1 小时 GPU Burn 和交错 DDR4 的 pinned H→D。检查新增 Xid、AER、ECC，并与 T4 比对存储枚举。 [T5 拷机](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机) · [CUDA/NCCL](INSTALL.md#算力坞验收) · [pinned DMA](PMEM.md#四卡-pinned-dma-验收)
 3. 可从 T5 开始安排约 **232 GiB** 的权重下载，直接写已核实挂载的 PMem 模型卷。四卡硬件过关后做 1017 冒烟。按 T5 手册的速度档判断是否进 I1，保存引擎、权重 revision、四卡 UUID、显存与工具来回结果。T5 的源码与编译产物在 SanDisk 上的临时系统。权重留在 PMem 给 I6 复用。 [T5 推理冒烟](BURN-IN.md#t5-末的-1017-推理冒烟)
 4. 停模型和测试服务。把保存在其他目录的验机记录一起收进 SanDisk 的 `~/z8-burnin`，确认日志、磁盘清单及两份 PMem env 都可读。正常关机，拔下并留存 SanDisk，I1 安装期间用不到它。
@@ -60,7 +66,7 @@
 
 ### I3 · 驱动、串流与复接 V100
 
-仅 P620 时装正式系统的 R580，重启核 ABI、驱动与 SSH。先用 P620 的本机 X11 桌面验 Sunshine/Moonlight 和编码会话，再关机断电接回 V100。固件启动后用 T5 的 UUID 对照四卡，快速复测 CUDA/NCCL 和 NVLink，确认串流仍由 P620 编码。HC620 与 P4800X 到 I4 再接。 [R580 和 I3 复接](INSTALL.md#安装并锁定-nvidia-显卡驱动) · [Sunshine](../remote/README.md#sunshine)
+仅 P620 时装正式系统的 R580，重启核 ABI、驱动与 SSH。先用 P620 的本机 X11 桌面验 Sunshine/Moonlight 和编码会话，再关机断电接回 V100。固件启动后用 T5 的 UUID 对照四卡，从 SanDisk 复制 [T5 的 CUDA 验机工具](INSTALL.md#算力坞验收)，快速复测 CUDA/NCCL 和 NVLink，确认串流仍由 P620 编码。HC620 与 P4800X 到 I4 再接。 [R580 和 I3 复接](INSTALL.md#安装并锁定-nvidia-显卡驱动) · [Sunshine](../remote/README.md#sunshine)
 
 ### I4 · PMem 复用、建数据池与冷启演练
 
@@ -78,4 +84,4 @@
 
 ### I7 · 冷启、混合负载与交付
 
-冷启后从另一台机器确认 SSH、存储和远程显示恢复。验证推理启停时普通任务的 CPU 集合变化，再用 I5 的 Buck2 与 I6 的推理档跑 **8 小时**混合负载。留存构建时间、首字延迟、decode、各盘和硬件错误增量、NUMA/PMem 计数。完成后保存 FIT 引导、盘表、池 GUID、PMem UUID、各服务配置和恢复资料，解除正式安装时的临时包 hold。 [I7 命令](BURN-IN.md#i7-正式安装后的整机混合负载) · [内核与驱动维护](INSTALL.md#固定-ga-轨道并试启新内核)
+冷启后从另一台机器确认 SSH、存储和远程显示恢复。采用全 XFS 回退时，按 [I5 回退命令](../buildbarn/README.md#全-xfs-回退)启动相应 Compose 项目。手动启动 `z8-infer.service`，检查 API 就绪，再验证推理启停时普通任务的 CPU 集合变化，再用 I5 的 Buck2 与 I6 的推理档跑 **8 小时**混合负载。留存构建时间、首字延迟、decode、各盘和硬件错误增量、NUMA/PMem 计数。完成后保存 FIT 引导、盘表、池 GUID、PMem UUID、各服务配置和恢复资料，解除正式安装时的临时包 hold。 [I7 命令](BURN-IN.md#i7-正式安装后的整机混合负载) · [内核与驱动维护](INSTALL.md#固定-ga-轨道并试启新内核)

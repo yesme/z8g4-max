@@ -90,7 +90,7 @@ I5 先完成 [Buildbarn 的软件、目录与单元准备](../storage/README.md#
 
 ## 启停本地模型
 
-以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
+以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
 
 **llama.cpp 的 `launch.sh`**
 
@@ -135,7 +135,7 @@ journalctl -fu z8-infer.service
 sudo systemctl stop z8-infer.service
 ```
 
-`Type=exec` 只确认启动器已执行，加载模型与 API 就绪继续从日志和 [I7 请求探针](../inference/README.md) 验证。llama.cpp 看 `/health`，Xolotl 用实际短生成跑过首次加载。服务的停止超时为 300 秒。
+`Type=exec` 只确认启动器已执行，加载模型与 API 就绪继续从日志和 [I6 请求探针](../inference/README.md#i6-推理放行) 验证。llama.cpp 看 `/health`，Xolotl 用实际短生成跑过首次加载。服务的停止超时为 300 秒。
 
 ## 本地构建与验证
 
@@ -170,15 +170,10 @@ grep -E '^(allocstall_normal|kswapd_low_wmark_hit_quickly|pgdemote_\S+) ' /proc/
 cat /proc/pressure/memory
 ```
 
+从 `z8-kit` 根运行下面的命令检查 runner 的容器、cgroup 及实际 CPU 集合。全 XFS 回退把最后的参数换成 `xfs`。
+
 ```bash
-# 已启用 Buildbarn worker 时。
-cd /opt/z8-kit/buildbarn
-runner=$(sudo docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml \
-    -f compose.cpu-layout.yaml ps -q runner)
-sudo docker inspect --format '{{.HostConfig.CgroupParent}} {{.HostConfig.NanoCpus}}' "$runner"
-pid=$(sudo docker inspect --format '{{.State.Pid}}' "$runner")
-sudo cat "/proc/$pid/cgroup"
-sudo grep '^Cpus_allowed_list:' "/proc/$pid/status"
+bash host/run-step.sh i5-worker tiered
 ```
 
 I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。运行中执行一次 `sudo systemctl daemon-reload`，核普通任务仍为 80 个逻辑 CPU。停止推理后应还到 92 个。

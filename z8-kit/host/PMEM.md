@@ -168,7 +168,7 @@ PY
 
 | 方式 | 出现在 Linux 的形式 | 在本机的用途 |
 |---|---|---|
-| `fsdax` | `/dev/pmemN` 块设备。XFS 提供普通文件名、权限和 DAX `mmap` | GGUF、Engram、DSpark 和引擎显式保存的文件型快照。读取映射页直接访问 PMem，文件仍可用普通工具管理 |
+| `fsdax` | `/dev/pmemN` 块设备。XFS 提供普通文件名、权限和 DAX `mmap` | 当前部署用来存 GGUF、Engram 和 tokenizer。读取映射页直接访问 PMem，文件仍可用普通工具管理 |
 | `devdax` | `/dev/daxX.Y` 字符设备。程序需要显式映射和管理偏移 | 上线前可逐路测设备。随后交给 `daxctl` 转 `system-ram`，由 `dax_kmem` 把该范围加进 Linux 的系统内存 |
 
 转为 `system-ram` 后由 Linux 管理可移动页，按慢层测试冷页下沉。两路分别上线，不做条带。`fsdax` 文件仍固定在模型卷的物理地址上，内核慢层对可迁移页的处理与模型文件布局独立。CUDA 已长期 pin 的页留在原驻留内存中，也要从 DDR4 预算扣除。
@@ -196,18 +196,21 @@ sudo install -d -o "$(id -u)" -g "$(id -g)" /srv/pmem-model/ds41-llamacpp
 sudo xfs_io -c 'extsize 2m' /srv/pmem-model/ds41-llamacpp
 ```
 
-这里用 `noatime` 免去权重、Engram 热读触发的访问时间更新，保留 XFS 日志和正常的写入同步语义。App Direct DAX 模型卷以读为主，使用 `nodiscard`。在该路径实际创建测试文件，执行 `xfs_io -r -c 'statx -r' /srv/pmem-model/burnin.bin`。核 `stx_attributes_mask` 和 `stx_attributes` 的 `STATX_ATTR_DAX` 位 `0x200000` 都为 1。此卷保存模型权重、Engram、DSpark 和支持持久化的 KV checkpoint，模型 revision、SHA-256 和下载清单留在 P4618。 [全机挂载表](MOUNTS.md) · [Linux 文件级 DAX 状态](https://docs.kernel.org/filesystems/dax.html) · [两个引擎的 KV 配置](../inference/README.md)
+这里用 `noatime` 免去权重、Engram 热读触发的访问时间更新，保留 XFS 日志和正常的写入同步语义。App Direct DAX 模型卷以读为主，使用 `nodiscard`。在该路径实际创建测试文件，执行 `xfs_io -r -c 'statx -r' /srv/pmem-model/burnin.bin`。核 `stx_attributes_mask` 和 `stx_attributes` 的 `STATX_ATTR_DAX` 位 `0x200000` 都为 1。此卷保存模型权重、Engram 和 tokenizer。模型 revision、SHA-256 和下载清单在 T5 留 SanDisk，在正式系统留 P4618。 [全机挂载表](MOUNTS.md) · [Linux 文件级 DAX 状态](https://docs.kernel.org/filesystems/dax.html) · [两个引擎的 KV 配置](../inference/README.md)
 
 `xfs_info` 应显示 `sunit=512 swidth=1024 blks` 和 `reflink=0`。2 MiB PMD 还要求物理范围、文件偏移和 mmap 地址相容，收紧分配对齐后仍可能回退。在 T5 模型下载后用 `xfs_io -r -c 'fiemap -v' "$DS41_GGUF"` 记录分片 extent；需要确认实际 PMD 命中时，用 `trace-cmd record -e fs_dax:dax_pmd_fault_done` 跟踪 `mmap` 负载。事件 `NOPAGE` 表示成功，`FALLBACK` 表示落入小页路径。Xolotl 的 Engram 走 `pread`，直接查它的 I/O 时延。 [Linux 2 MiB DAX 验证](https://nvdimm.docs.kernel.org/2mib_fs_dax.html)
 
 ### 交给启动服务
 
-首次测试后卸载并删除 mapper，再让服务接管。复制 `host/pmem-model.env.example` 为 `pmem-model.env`，填写两个 fsdax namespace UUID。
+T3 完成跨重启校验并删除测试文件后，让模型服务接管挂载，供后续 T5 使用。从 `z8-kit` 根执行，按 socket 填回实际的 `FS0_UUID`、`FS1_UUID`。用 `cp -n` 在 SanDisk 的日志目录复制样例，再编辑文件里的两个 UUID。
 
 ```bash
 sudo bash host/pmem-dax-stripe.sh unmount "$FS0_UUID" "$FS1_UUID"
 sudo install -d -m 0755 /etc/z8-storage
-sudo install -m 0600 pmem-model.env /etc/z8-storage/
+mkdir -p "$HOME/z8-burnin"
+cp -n host/pmem-model.env.example "$HOME/z8-burnin/pmem-model.env"
+nano "$HOME/z8-burnin/pmem-model.env"
+sudo install -m 0600 "$HOME/z8-burnin/pmem-model.env" /etc/z8-storage/
 sudo install -m 0755 host/pmem-dax-stripe.sh host/pmem-device-wait.sh /usr/local/sbin/
 sudo install -m 0644 host/systemd/z8-pmem-model.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -227,7 +230,9 @@ findmnt -M /srv/pmem-model
 grep -E '^CONFIG_(MHP_MEMMAP_ON_MEMORY|LRU_GEN|LRU_GEN_ENABLED)=' "/boot/config-$(uname -r)"
 cat /sys/module/memory_hotplug/parameters/memmap_on_memory
 sudo daxctl list
-# 把 DAX0、DAX1 设成两路实测的 daxX.Y 名称。全局开关应显示 Y 或 force。
+# 把 DAX0、DAX1 换成两路实测的 daxX.Y 名称。全局开关应显示 Y 或 force。
+DAX0=daxREPLACE_SOCKET0
+DAX1=daxREPLACE_SOCKET1
 (
     set -euo pipefail
     [[ $(cat /sys/module/memory_hotplug/parameters/memmap_on_memory) =~ ^(Y|force)$ ]]
@@ -255,7 +260,22 @@ MGLRU 管页回收顺序。`demotion_enabled` 控制回收时能否尝试把冷�
 
 ### T3 记录 kmem 冷启动时间
 
-手动检查通过后，在临时系统用 I4 的安装命令安装脚本、单元和实际 UUID 配置，只启用 `z8-pmem-kmem.service`。按实测的 memmap 设置持久化启动参数，再做三次冷启动。每次记录枚举耗时、每路 online 耗时和整个服务用时。保留两路 `daxctl list --devices` 的 `online_memblocks`、`total_memblocks` 与 `movable`。
+手动检查通过后，在 SanDisk 临时系统从 `z8-kit` 根执行下面的命令。按 socket 填两个 **devdax namespace UUID**，沿用手动上线时验证过的 `Z8_MEMMAP_ON_MEMORY` 值。模型单元此前已在 T3 接管挂载。
+
+```bash
+mkdir -p "$HOME/z8-burnin"
+cp -n host/pmem-kmem.env.example "$HOME/z8-burnin/pmem-kmem.env"
+nano "$HOME/z8-burnin/pmem-kmem.env"
+sudo install -d -m 0755 /etc/z8-storage
+sudo install -m 0600 "$HOME/z8-burnin/pmem-kmem.env" /etc/z8-storage/
+sudo install -m 0755 host/pmem-kmem.sh host/pmem-device-wait.sh /usr/local/sbin/
+sudo install -m 0644 host/systemd/z8-pmem-kmem.service /etc/systemd/system/
+sudo install -m 0644 host/90-z8-tiering.conf.example /etc/sysctl.d/90-z8-tiering.conf
+sudo systemctl daemon-reload
+sudo systemctl enable z8-pmem-kmem.service
+```
+
+按下文[设置 memmap 启动参数](#设置-memmap-启动参数)，再做三次冷启动。每次从 SanDisk 启动，记录枚举耗时、每路 online 耗时和整个服务用时。保留两路 `daxctl list --devices` 的 `online_memblocks`、`total_memblocks` 与 `movable`。
 
 ```bash
 sudo journalctl -b -u z8-pmem-kmem.service -o short-monotonic --no-pager
@@ -347,31 +367,35 @@ sudo install -d -m 0755 /etc/z8-storage /srv/pmem-model
 sudo install -m 0600 pmem-model.env pmem-kmem.env /etc/z8-storage/
 sudo install -m 0755 host/pmem-dax-stripe.sh host/pmem-kmem.sh host/pmem-device-wait.sh /usr/local/sbin/
 sudo install -m 0644 host/systemd/z8-pmem-{model,kmem}.service /etc/systemd/system/
-# 仅在 env 中 Z8_MEMMAP_ON_MEMORY=1 时添加，与 T3 验证过的设置一致。
+sudo systemctl daemon-reload
+sudo install -m 0644 host/90-z8-tiering.conf.example /etc/sysctl.d/90-z8-tiering.conf
+sudo systemctl enable z8-pmem-kmem.service z8-pmem-model.service
+```
+
+### 设置 memmap 启动参数
+
+T3 的 SanDisk 和 I4 的正式系统分别在自己的根文件系统设置这项参数。`Z8_MEMMAP_ON_MEMORY=1` 时运行下列命令，采用 T3 验过的 `on` 或 `force`。`Z8_MEMMAP_ON_MEMORY=0` 时跳过该参数。
+
+```bash
 sudo install -d /etc/default/grub.d
 sudo tee /etc/default/grub.d/60-z8-pmem.cfg >/dev/null <<'EOF'
 GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} memory_hotplug.memmap_on_memory=on"
 EOF
 sudo update-grub
-sudo systemctl daemon-reload
-sudo install -m 0644 host/90-z8-tiering.conf.example /etc/sysctl.d/90-z8-tiering.conf
-sudo systemctl enable z8-pmem-kmem.service
-sudo systemctl enable z8-pmem-model.service
 ```
 
-完成上述安装后重启。回到正式系统后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem，`sysctl kernel.numa_balancing` 应为 `2`。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。
+I4 完成上述安装后重启。回到正式系统后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem，`sysctl kernel.numa_balancing` 应为 `2`。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。
 
 ## 四卡 pinned DMA 验收
 
 两条 UPI 由 Z8 G4 主板布线决定，最高 10.4 GT/s/条。DDR4 交错是推理服务的固定策略，两个 DDR4 节点各有标称 96 GiB。PCIe Gen3 x8 每卡理论约 7.88 GB/s。按均匀交错和四卡同时传输估算，GPU 的净 H→D payload 在每个 UPI 方向约 7.88 GB/s 上限。DAX 文件的 CPU 跨路读取是另一项流量。当前方案在 CPU 侧从 PMem 取权重，按引擎需要用 DDR4 作 DMA staging。Linux 7.0 的 GUP 会拒绝对 fsdax 映射的长时间页 pin。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [Linux 7.0 GUP](https://github.com/torvalds/linux/blob/v7.0/mm/gup.c#L1200)
 
-T5 只测正式使用的交错策略。先按 `numactl -H` 设置实际两个 DDR4 节点，按验机记录填四张 GPU UUID。
+T5 只测正式使用的交错策略。先按[算力坞验收](INSTALL.md#算力坞验收)构建工具，再按 `numactl -H` 设置实际两个 DDR4 节点，按验机记录填四张 GPU UUID。
 
 ```bash
-nvcc -O3 -std=c++17 -arch=sm_70 -Xcompiler=-pthread host/pinned-copy.cu -o pinned-copy
-export CUDA_VISIBLE_DEVICES=GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
-DRAM_NODES=0,1
-numactl --interleave="$DRAM_NODES" ./pinned-copy 512 300 h2d
+bash host/run-step.sh t5-pinned 0,1 GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
 ```
+
+脚本选中四张 V100，用两个 DDR4 节点交错分配 staging，按卡打印 H→D 带宽并收集内核错误。
 
 确认四张卡的传输都完成，记录四卡合计 H→D 和 Xid/AER。传输报错或合计带宽异常时，再逐卡核链路并定位线材。只有真实推理同时出现跨路流量接近链路上限、H→D 或 TTFT 失速时，才加 Intel PCM 做归因。引擎已有独立 per-rank 缓冲时可把 staging 分配给各自的 DDR4 节点。Xolotl 单进程多 stage 要在缓冲分配处处理。 [Intel PCM](https://github.com/intel/pcm) · [Xolotl stage 初始化](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/engine/ds41_pipeline.cpp#L382)

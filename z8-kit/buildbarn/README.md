@@ -38,7 +38,7 @@ curl -fsS http://127.0.0.1:9980/metrics |
 
 `LocalBlobAccess` 在新块内递增分配偏移，旧块轮转后复用偏移。并发写可交错，文件覆写触发 ZFS CoW。淘汰只归还 Buildbarn allocator 的偏移，下一次覆写时旧 ZFS 块才有机会释放。 [Buildbarn 逻辑块分配](https://github.com/buildbarn/bb-storage/blob/ca3d8b4/pkg/blobstore/local/block_device_backed_block_allocator.go#L176-L187)
 
-首次用 `sudo docker compose -f compose.tiered.yaml config --images` 核镜像引用，用 `config` 核绑定。两个 Linux cache 配置以及 scheduler、worker、runner-installer 都固定到原 11 月 2 日标签的 GHCR 镜像索引 digest，标签供查版本。各索引包含 `linux/amd64`。首次启动需看日志确认 schema、文件/目录权限、GetCapabilities 和 CAS/AC 读写。`docker compose -p z8-tiered -f compose.tiered.yaml logs --tail 100` 与 `ss -ltn` 可复核。 [Buildbarn GHCR 包](https://github.com/buildbarn/bb-storage/pkgs/container/bb-storage) · [Docker digest 引用](https://docs.docker.com/reference/cli/docker/image/pull/#pull-an-image-by-digest-immutable-identifier)
+首次用 `sudo docker compose -f compose.tiered.yaml config --images` 核镜像引用，用 `config` 核绑定。两个 Linux cache 配置以及 scheduler、worker、runner-installer 都固定到原 11 月 2 日标签的 GHCR 镜像索引 digest，标签供查版本。各索引包含 `linux/amd64`。首次启动需看日志确认 schema、文件/目录权限、GetCapabilities 和 CAS/AC 读写。`sudo docker compose -p z8-tiered -f compose.tiered.yaml logs --tail 100` 与 `ss -ltn` 可复核。 [Buildbarn GHCR 包](https://github.com/buildbarn/bb-storage/pkgs/container/bb-storage) · [Docker digest 引用](https://docs.docker.com/reference/cli/docker/image/pull/#pull-an-image-by-digest-immutable-identifier)
 
 ```bash
 cd /opt/z8-kit/buildbarn
@@ -53,7 +53,7 @@ sudo ls -ld /srv/bbindex /srv/buildbarn/tiered/{cs-hot,cms,ac}
 
 容器启动后用 `stat`、`du -h` 和 `zfs list` 核块文件逻辑尺寸与实际分配。已配置的容量和索引几何随空库一起确定。后续改几何时按上面的空库流程处理。
 
-全闪存 `compose.yaml` 用于冷库回退。切换时先停 tiered service，两个配置都监听 8980，各用自己的索引与状态目录。
+冷库回退按[全 XFS 命令](#全-xfs-回退)启动，叠加 `compose.fallback-farm.yaml`、worker 和分核配置。切换时先停 tiered service，两套配置都监听 8980，各用自己的索引与状态目录。
 
 ## Buck2 客户端
 
@@ -65,7 +65,7 @@ Buck2 自带 Deferred Materialization，RE 产物在本地 action 需要时才�
 
 ### 验证 Linux 缓存
 
-I4 的覆盖脚本已验 dm-zoned 回收，I5 只走真实 Buck2 路径。在工作树 A 远程构建产生新 digest 的目标，确认 worker 写入结果；从干净工作树 B 读取同一产物，首次取回填热层。仅需核一次实际物化和热层读，AC hit 单独不足以证明下载。用 `zpool iostat -v z8data 2` 和 `iostat -xz 2` 核实际设备活动。 [I4 持续写与覆盖](../storage/README.md#5-i4-验证实际写入scrub-与缺盘)
+I4 的覆盖脚本已验 dm-zoned 回收，I5 只走真实 Buck2 路径。在工作树 A 远程构建产生新 digest 的目标，确认 worker 写入结果；从干净工作树 B 读取同一产物，首次取回填热层。仅需核一次实际物化和热层读，AC hit 单独不足以证明下载。主方案用 `zpool iostat -v z8data 2` 和 `iostat -xz 2` 核实际设备活动。全 XFS 回退用 `iostat -xz 2` 观察 P4618。 [I4 持续写与覆盖](../storage/README.md#5-i4-验证实际写入scrub-与缺盘)
 
 在 Linux 工作树 A 和同一提交的干净工作树 B 各执行一次下列命令，替换项目目标标签。分别保存两次的 log，检查缓存查询、AC 命中和 worker 的实际执行记录。
 
@@ -91,7 +91,7 @@ git -C example worktree list
 git -C example rev-parse --path-format=absolute --git-common-dir
 git -C example-codex rev-parse --path-format=absolute --git-common-dir
 findmnt -T /srv/work/jackywang -o SOURCE,TARGET,FSTYPE
-xfs_info /srv/work/jackywang
+xfs_info "$(findmnt -n -T /srv/work/jackywang -o TARGET)"
 ```
 
 前两个 Git 路径应指向同一主仓库的 `.git`。XFS 应显示 `reflink=1`。下面用真实写入过的文件做一次对照，预期 inode 不同、物理范围相同并标记 `shared`。测试文件只在工作区临时目录内。
@@ -123,7 +123,7 @@ filefrag -sv "$src" "$outdir/export"
 ## Linux worker
 
 1. I5 先启用本机 CAS，再启用 Linux worker。
-2. `compose.worker.yaml` 加入 scheduler、runner、worker，worker 通过 Docker 内网向同一个 `cache:8980` 读写 CS/CMS/AC。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。服务预建 XFS 上的 `worker/build`、`worker/cache` 与 `runner-bin`，共用 `/run/z8-bb-runner` 上的 socket。runner 启动时清理自己的残留 socket，worker 等 socket 出现再启动。固定镜像的 worker、runner-installer 和 runner 都以 UID 0 启动。用隔离 checkout 验实际 RE、按需下载、worker 停启后 CAS 持续服务。启服务前配置 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。 [Compose v2.40.3 按服务监控](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/up.go#L177)
+2. `compose.worker.yaml` 加入 scheduler、runner、worker，worker 通过 Docker 内网向同一个 `cache:8980` 读写 CS/CMS/AC。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `sudo docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。服务预建 XFS 上的 `worker/build`、`worker/cache` 与 `runner-bin`，共用 `/run/z8-bb-runner` 上的 socket。runner 启动时清理自己的残留 socket，worker 等 socket 出现再启动。固定镜像的 worker、runner-installer 和 runner 都以 UID 0 启动。用隔离 checkout 验实际 RE、按需下载、worker 停启后 CAS 持续服务。启服务前配置 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。 [Compose v2.40.3 按服务监控](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/up.go#L177)
 3. max 首装 72 个活动 action、72 CPU 时间额度和 512 GiB 内存上限，无容器 swap。推理时余 80 个逻辑 CPU，给系统、存储和协调进程留 8 个逻辑 CPU 的时间预算。较高并发用于覆盖取输入和 I/O 等待。按 2–4 GiB/action 算，72 个约用 144–288 GiB。worker 等两路 kmem 上线后启动。512 GiB 是 DDR4 与 kmem 的 memcg 总上限，PMem 的 `ZONE_MOVABLE` 可承接多数匿名页及文件页缓存，页表和其他不可移动内核分配仍需 DDR4。约 520 GiB 的 P4800X 冷索引是稀疏 mmap 文件长度，读到的页按需驻留。I7 用每路 Normal 水位、PSI 和实际吞吐验固定配置。kmem 未能上线时，Z8 的存储可以独立提供服务，Linux 客户端按本地应急流程运行。工具链可随 runner 镜像或项目输入提供。改镜像时同步 worker 和 Buck2 的 digest。异构 Linux worker 使用一致的 CPU 目标基线，避免 `-march=native` 与 `-mtune=native`。 [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable)
 
 [上游 Docker Compose](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose) · [Buck2 Buildbarn 样例](https://github.com/facebook/buck2/tree/main/examples/remote_execution/buildbarn)

@@ -25,16 +25,11 @@ T5 通过后关机断电，断开 V100、七块 HC620 和 P4800X。保留 DDR4�
 
 ### I1.2 生成安装配置并核身份
 
-在 T4 记录 FIT 和 P4618 两个硬件端点的 **三个唯一 `ID_SERIAL`**。给变量填已确认的整盘 by-id，在验机系统执行下列命令。若只有一个 P4618 端点或共享上行低于 Gen3 x8，回到 [T4 链路检查](BURN-IN.md#p4618-链路与双控制器)。
+在 T4 记录 FIT 和 P4618 两个硬件端点的 **三个唯一 `ID_SERIAL`**。把三个占位路径换成已确认的整盘 by-id，在验机系统从 `z8-kit` 根执行下列命令。若只有一个 P4618 端点或共享上行低于 Gen3 x8，回到 [T4 链路检查](BURN-IN.md#p4618-链路与双控制器)。
 
 ```bash
-FIT=/dev/disk/by-id/usb-REPLACE_FIT
-A=/dev/disk/by-id/nvme-REPLACE_P4618_A
-B=/dev/disk/by-id/nvme-REPLACE_P4618_B
-lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN "$FIT" "$A" "$B"
-for disk in "$FIT" "$A" "$B"; do
-    udevadm info --query=property --name="$disk" | grep '^ID_SERIAL='
-done
+bash host/run-step.sh i1-disks /dev/disk/by-id/usb-REPLACE_FIT \
+    /dev/disk/by-id/nvme-REPLACE_P4618_A /dev/disk/by-id/nvme-REPLACE_P4618_B
 ```
 
 在 Windows 打开三星 T3 上 Ventoy **存放 ISO 的大数据分区**，在根目录新建 `z8` 文件夹，把 [安装配置样例](root-storage.yaml.example) 复制为 `z8\autoinstall.yaml`。替换三个 `REPLACE_*_ID_SERIAL`，整串抄录且省略 `ID_SERIAL=` 前缀。用临时 Xubuntu 的 `openssl passwd -6` 交互生成密码哈希，将输出填入 `identity.password`。保存为无 BOM 的 UTF-8 文本，在 Windows 显示文件扩展名并确认文件名是 `autoinstall.yaml`。实填文件含密码哈希，保留在私有副本中。
@@ -61,20 +56,11 @@ done
 
 3. 在桌面打开 **Install Xubuntu 26.04.1 LTS**。选择 **Type of installation → Automated with autoinstall file → Select file…**，选家目录里的 `autoinstall.yaml`，点 **Import**。安装器会把文件写入 Live 环境的 `/autoinstall.yaml` 并重启后端。样例的 `early-commands` 会在写盘前等待，导入页可能暂时一直转圈。此时 `Alt+Tab` 回到 Live 终端。 [桌面导入源码](https://github.com/canonical/ubuntu-desktop-provision/blob/ubuntu/26.04/apps/ubuntu_bootstrap/lib/services/autoinstall_service.dart) · [Subiquity 的 early-commands](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#early-commands)
 
-4. 再次按 T4 记录定位三个整盘 by-id，填入下列命令。`cmp` 显示 Live 安装器采用的是刚导入的文件，`awk` 只显示磁盘布局和序列号。
+4. 再次按 T4 记录定位三个整盘 by-id，填入下列命令。脚本用 `cmp` 核对导入文件，只打印 `storage` 段和设备序列号。退出 Live 前可把该日志复制到 Ventoy 大数据分区。
 
    ```bash
-   lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN
-   FIT=/dev/disk/by-id/usb-REPLACE_FIT
-   A=/dev/disk/by-id/nvme-REPLACE_P4618_A
-   B=/dev/disk/by-id/nvme-REPLACE_P4618_B
-   for disk in "$FIT" "$A" "$B"; do
-       udevadm info --query=property --name="$disk" | grep '^ID_SERIAL='
-   done
-   sudo cmp -s "$HOME/autoinstall.yaml" /autoinstall.yaml && echo "Imported YAML matches"
-   sudo awk '/^  storage:/{show=1; print; next}
-       show && /^  [^[:space:]#]/{exit}
-       show' /autoinstall.yaml
+   bash host/run-step.sh i1-disks /dev/disk/by-id/usb-REPLACE_FIT \
+       /dev/disk/by-id/nvme-REPLACE_P4618_A /dev/disk/by-id/nvme-REPLACE_P4618_B --imported
    ```
 
 5. 看到 `Imported YAML matches`，三个 `ID_SERIAL` 与 T4 一致，根卷用两个 P4618 端点且 ESP、`/boot` 都在 FIT，才运行 `sudo touch /run/z8-storage-confirmed`。回到图形界面，在 **Ready to install** 再确认后点 **Install**。这会重建 FIT 和两个 P4618 端点的分区表。若导入报错或身份不一致，停在这一步检查。 [按序列号匹配磁盘](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#disk-selection-extensions) · [桌面安装器的最终确认](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#ready-to-install)
@@ -118,7 +104,7 @@ sudo lsinitrd -m "/boot/initrd.img-$abi" | grep -w mdraid
 sudo lsinitrd "/boot/initrd.img-$abi" | grep -E '(^|/)(mdadm|raid0\.ko|xfs\.ko|nvme\.ko)'
 ```
 
-第一次验证后再关机冷启一次，确认固件仍选中 FIT、三个挂载点一致、两个 md 成员齐全。若首启落到 initramfs，从 Ventoy 启动 Xubuntu Live 并执行下一段的组装检查。正常冷启也做一次救援演练。
+正常完成本节设置后可执行 `bash host/run-step.sh i1-boot`，一次保存当前 UEFI、FIT 分区、md 阵列、XFS 和当前 initramfs 的模块列表。第一次验证后再关机冷启一次，确认固件仍选中 FIT、三个挂载点一致、两个 md 成员齐全。若首启落到 initramfs，从 Ventoy 启动 Xubuntu Live 并执行下一段的组装检查。正常冷启也做一次救援演练。
 
 留存 RAID、GPT、EFI、fstab、`mdadm.conf`、驱动和软件包清单。救援演练从 Ventoy UEFI 启动同一份 Xubuntu Desktop ISO，选择 Try Xubuntu。根据安装记录核对两个 P4618 成员与 FIT 的现有 UUID。确认目标 md 未自动组装时，才用明确列出的两个成员只读组装。若 Live 缺少工具，先联网装 `mdadm` 和 `xfsprogs`。核对 `mdadm --detail` 后只读挂载根卷。已自动组装时复用该 md 设备。以下占位符来自 I1 实测记录，不能照抄设备名。
 
@@ -152,7 +138,7 @@ sudo umount /mnt/z8root
 sudo apt update
 sudo apt install mdadm xfsprogs nvme-cli numactl pciutils dmidecode \
     smartmontools mokutil efibootmgr openssh-server tmux intel-microcode \
-    linux-firmware-intel-wireless
+    linux-firmware-intel-wireless git curl e2fsprogs
 ```
 
 ### 目录和实际存储
@@ -194,7 +180,7 @@ nvidia-smi --query-gpu=name,pci.bus_id,driver_version --format=csv
 sudo journalctl -k -b -g 'NVRM|Xid'
 ```
 
-在 T5 核 P620 与 R580 后，返回 [算力坞测试](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机)。下文用于 I3 正式系统。确认 P620 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与快速 CUDA/NCCL，并在 Moonlight 串流时再核一次捕获的显示接口和 P620 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
+在 T5 核 P620 与 R580 后，返回 [算力坞测试](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机)。下文用于 I3 正式系统。确认 P620 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与[快速 CUDA/NCCL](#算力坞验收)，并在 Moonlight 串流时再核一次捕获的显示接口和 P620 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
 
 ## 固定 GA 轨道并试启新内核
 
@@ -259,13 +245,31 @@ sudo systemctl reboot
 
 ## 算力坞验收
 
-T5 从临时系统运行本节，I3 在正式系统复测。按 [PCIe P2P 的 IOMMU 设置](BIOS.md#接坞后的-pcie-p2p) 区分 NVLink 与 PCIe，确定内核启动参数后再做数据传输测试。用 CUDA 12.9.1 工具链构建 CUDA Samples 和 nccl-tests。在各自 checkout 构建后，显式给四张 V100 的 UUID。用实际构建输出路径替换下面两个可执行文件。
+T5 从 SanDisk 临时系统构建下列工具，产物留在 `~/z8-burnin/cuda-check`。CUDA 12.9.1 容器只负责编译，测试在装好 R580 的 Xubuntu 宿主执行。从 `z8-kit` 根运行，先用 `df -h / /var/lib` 检查 SanDisk 系统及 Docker 的剩余空间。 [NVIDIA CUDA 12.9.1 构建镜像](https://hub.docker.com/layers/nvidia/cuda/12.9.1-devel-ubuntu24.04/images/sha256-933d999bafbc7afa344e0e600fec13a6c3c0a191225fcd65db22185679b1476f) · [CUDA Samples v12.9 构建](https://github.com/NVIDIA/cuda-samples/blob/v12.9/Samples/5_Domain_Specific/p2pBandwidthLatencyTest/CMakeLists.txt) · [GPU Burn 构建](https://github.com/wilicc/gpu-burn/blob/master/Makefile) · [NCCL 测试构建](https://github.com/NVIDIA/nccl-tests/tree/v2.17.7#build)
 
 ```bash
-export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
-/path/to/p2pBandwidthLatencyTest
-NCCL_DEBUG=INFO /path/to/all_reduce_perf -b 8 -e 256M -f 2 -g 4
+bash host/run-step.sh t5-cuda-build
 ```
+
+脚本安装 Docker、在同一 CUDA 镜像构建 P2P、NCCL、GPU Burn 和 pinned-copy，保存实际源码提交、可执行文件和用户态共享库。
+
+I3 在正式系统复测时，按[只读挂载 SanDisk 的方法](PMEM.md#i4-在正式系统复用-pmem)挂到 `/mnt/z8-burnin-usb`，再运行下面的命令。若临时系统用了其他用户名，把 `src` 路径里的 `jackywang` 换掉。复制成功后卸载并拔下 SanDisk。
+
+```bash
+src=/mnt/z8-burnin-usb/home/jackywang/z8-burnin/cuda-check
+mkdir -p "$HOME/z8-burnin"
+sudo test -x "$src/all_reduce_perf" &&
+    sudo cp -R -- "$src" "$HOME/z8-burnin/" &&
+    sudo chown -R "$(id -u):$(id -g)" "$HOME/z8-burnin/cuda-check" &&
+    sudo umount /mnt/z8-burnin-usb
+```
+
+T5 和 I3 都在宿主从 `z8-kit` 根执行以下命令。日志里的 `ldd` 应没有 `not found`，`libcuda.so.1` 应来自宿主的 R580。按 [PCIe P2P 的 IOMMU 设置](BIOS.md#接坞后的-pcie-p2p)区分 NVLink 与 PCIe，再用四张 V100 的实际 UUID 运行。T5 首轮 GPU Burn 和 [pinned DMA](PMEM.md#四卡-pinned-dma-验收)也用这个目录的产物。
+
+```bash
+bash host/run-step.sh i3-cuda GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
+```
+
+脚本记录驱动、拓扑与动态库来源，然后运行 P2P 和四卡 NCCL all-reduce。
 
 记录每对 P2P 可达性与带宽、all-reduce 错误数和带宽。分别测试两张同 socket 卡与跨 socket 卡。用 CUDA H→D/D→H 负载运行时从另一终端读 `nvidia-smi -q -d PCI`，确认实际 Gen3 x8。加载四卡与 CPU 后检查 `journalctl -k -b` 的新增 Xid、AER、ECC；保留日志和各卡温度、功耗。 [NVIDIA CUDA 样例](https://github.com/NVIDIA/cuda-samples) · [NVIDIA nccl-tests](https://github.com/NVIDIA/nccl-tests)

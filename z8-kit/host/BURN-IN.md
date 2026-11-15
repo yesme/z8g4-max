@@ -12,24 +12,17 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 用 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu** 进入 Live。已核 Live 的 `linux-modules-7.0.0-30-generic` 含 `iwlwifi`、`iwlmvm`、`btusb` 和 `btintel`，镜像也带 `linux-firmware-intel-wireless` 与 NetworkManager。AX210 插好后即可尝试联网。用 Xfce 面板的网络图标连接实际 LAN 的 Wi-Fi，或用终端 `nmcli --ask` 提示输入密码。先确认 AX210、`iwlwifi`、接口、地址与路由，再验证 APT。普通 Live 的网络配置和临时安装的软件随重启清空。 [官方 Live 包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Linux AX210 驱动](https://wireless.docs.kernel.org/en/latest/en/users/drivers/iwlwifi.html) · [nmcli 手册](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli.html)
 
+`nmcli device wifi list` 可查看附近网络。连好 Wi-Fi 后，从 `z8-kit` 根运行。脚本打印 AX210 驱动、Wi-Fi 状态、地址、默认路由和 DNS，最后更新 APT 索引。Live 退出前保存 `Log:` 路径显示的文件。
+
 ```bash
-lspci -nnk | grep -A3 -Ei 'Network controller|AX210'
-rfkill list
-nmcli device status
-nmcli device wifi list
-# 使用 Xfce 图标连接，或把下面的占位符换成 SSID。
-nmcli --ask device wifi connect 'REPLACE_WITH_SSID'
-ip -br address
-ip route show default
-getent ahostsv4 archive.ubuntu.com
-sudo apt update
+bash host/run-step.sh t1-network
 ```
 
 如果扫不到 SSID，先核两根天线、F10 槽 7 和 `rfkill list`。软阻断时运行 `sudo rfkill unblock wifi`。PCIe 已识别但接口缺失时，看 `sudo journalctl -k -b --no-pager -g 'iwlwifi|firmware'`。如果日志确实报缺固件，用另一台联网机器从 26.04 官方源下载 `linux-firmware-intel-wireless` 的 `.deb`，经 USB 拷入，`sudo dpkg -i ./linux-firmware-intel-wireless_*.deb` 后在本机控制台运行 `sudo modprobe -r iwlmvm iwlwifi`，再运行 `sudo modprobe iwlwifi`。安装好的临时系统也可重启。能够连上 AP 但没有默认路由或 DNS 时，先处理 DHCP/DNS。`apt update` 若报告仓库访问失败，先解决该错误再安装工具。
 
 Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra Fit CZ430 128 GB**。此时 P4618 等存储还未安装，FIT 也先不接。先只插三星 Portable SSD T3 250 GB，从其 Ventoy 菜单启动，等进入 Live 再插 SanDisk。CZ430 的标称容量约为 119 GiB，供临时桌面系统、CUDA 构建工具和日志使用。 [SanDisk 型号规格](https://www.sandisk.com/products/usb-flash-drives/sandisk-ultra-fit-usb-3-1?sku=SDCZ430-128G-G46) · [Xubuntu 容量要求](https://xubuntu.org/download/#system-requirements)
 
-1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。Samsung FIT 也是 128 GB，所以不要按容量单独判断。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
+1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。此时 Samsung FIT 留在机外，T4 才接入读序列号。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
 2. 安装后按提示拔 Ventoy，SanDisk 留在原 USB 口。从 F9 启动指向 SanDisk 的 UEFI 引导项。运行 `findmnt /`、`findmnt /boot/efi`，用 `lsblk` 验证两者都在 SanDisk。用 AX210 重连 Wi-Fi 并执行 `sudo apt update`。
 3. 用 `mkdir -p "$HOME/z8-burnin"` 建日志目录。后续保存验机输出的命令从这个目录运行，或显式给出目录路径。T2/T3 内存测试时才从 Ventoy 选 Memtest86+，其余各轮从 SanDisk 上的临时 Xubuntu 启动。
 
@@ -38,51 +31,35 @@ Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra 
 从 SanDisk 上的临时系统启动并确认联网后，准备 CPU 微码和压测工具。微码安装后先重启，再记录两个物理 socket、每路一个 DDR4 节点和当前微码版本。若 `numactl --hardware` 显示的拓扑不符，先回 F10 核对 NUMA 开、SNC 关，再确认两路 DDR4 枚举。
 
 ```bash
-sudo apt update
-sudo apt install intel-microcode linux-firmware-intel-wireless stress-ng rasdaemon lm-sensors numactl
+bash host/run-step.sh t1-cpu-prepare
 ```
 
 重启进 SanDisk 临时系统后运行下列检查。
 
 ```bash
-sudo systemctl enable --now rasdaemon
-lscpu
-awk '/^microcode/ {print $3}' /proc/cpuinfo | sort -u
-numactl --hardware
-sudo ras-mc-ctl --errors
-stress-ng --cpu "$(nproc)" --cpu-method matrixprod --verify --timeout 30m --metrics-brief
-sudo ras-mc-ctl --errors
-sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
+bash host/run-step.sh t1-cpu
 ```
+
+这一步记录双路 CPU、微码和 DDR4 NUMA 节点，再跑 30 分钟 `matrixprod`，比较前后的 RAS。
 
 保留 `matrixprod` 作为通用负载，再单独跑 30 分钟 **AVX-512 VNNI**。Xubuntu 26.04 的 stress-ng 0.20.01 提供 `vpdpbusd512` intrinsic。8269CY 启动后应枚举 Linux 标志 `avx512f` 和 `avx512_vnni`。先跑 5 秒确认确有 bogo ops 且压力项通过，再跑双路全核。 [Ubuntu stress-ng VNNI 参数](https://manpages.ubuntu.com/manpages/resolute/man1/stress-ng.1.html) · [Cascade Lake AVX 频率实测](https://www.nas.nasa.gov/hecc/support/kb/cascade-lake-processors_579.html)
 
+先安装当前内核匹配的 `turbostat`。
+
 ```bash
-# 从 ~/z8-burnin 运行。
 sudo apt install linux-tools-common "linux-tools-$(uname -r)"
-sudo modprobe msr
-grep -m1 -w avx512f /proc/cpuinfo
-grep -m1 -w avx512_vnni /proc/cpuinfo
-lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE
-stress-ng --vnni 1 --vnni-intrinsic --vnni-method vpdpbusd512 --verify -t 5s --metrics-brief
 ```
 
-另开终端开始每 5 秒采样，留 30 秒空闲基线后开始 AVX-512 压测。
+温度终端先开始每 5 秒采样，留 30 秒空闲基线。
 
 ```bash
-sudo turbostat --quiet --cpu core --interval 5 \
-    --show Package,Core,CPU,Busy%,Bzy_MHz,CoreTmp,PkgTmp,CoreThr,PkgWatt,PKG_% \
-    --out t1-avx512-turbostat.txt
+bash host/run-step.sh t1-avx-temperature
 ```
 
+负载终端先确认 AVX-512 VNNI 标志和 5 秒预检，再跑 30 分钟双路负载，完成后继续采硬件事件。
+
 ```bash
-(
-    set -o pipefail
-    stress-ng --vnni "$(nproc)" --vnni-intrinsic --vnni-method vpdpbusd512 \
-        --verify --timeout 30m --metrics-brief 2>&1 | tee t1-avx512-stress-ng.log
-)
-sudo ras-mc-ctl --errors
-sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
+bash host/run-step.sh t1-avx
 ```
 
 负载结束，留 30 秒恢复记录后用 Ctrl+C 停 turbostat。两路分别比较满载 `Bzy_MHz`、`PkgTmp` 和 `PkgWatt`。AVX 的正常频率档可以低于常规负载。温度持续上升、`CoreThr` 增加、两路温差异常或出现新增硬件错误时，排查风道、散热器和 BIOS 电源配置。`PKG_%` 结合温度及功耗看。运行时可用 `watch -n 5 sensors` 对照风扇与温度。两轮通过再进 T2。 [Ubuntu turbostat 指标](https://manpages.ubuntu.com/manpages/resolute/man8/turbostat.8.html)
@@ -112,10 +89,11 @@ sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
 先装好本轮工具，再在系统安静时看可用量。
 
 ```bash
-sudo apt install stressapptest stress-ng rasdaemon fio ndctl daxctl \
-    hdparm smartmontools lm-sensors sysstat
-free -h
-numactl --hardware
+sudo apt install stressapptest fio ndctl daxctl hdparm smartmontools sysstat
+```
+
+```bash
+bash host/run-step.sh t2-memory
 ```
 
 - `free -h` 看 `Mem:` 行的 `total` 和 `available`。`total` 应接近 192 GiB，`available` 应明显高于 144 GiB，好让测试缓冲和程序开销都落在 DDR4 里。若可用量已接近 144 GiB，先退出占内存的程序，必要时重启验机系统后复查。 [Ubuntu free 手册](https://manpages.ubuntu.com/manpages/resolute/man1/free.1.html)
@@ -130,12 +108,7 @@ numactl --hardware
 监控终端先采几轮空闲数据，再开负载。`turbostat` 沿用 T1 已装的内核工具。
 
 ```bash
-cd "$HOME/z8-burnin"
-sudo modprobe coretemp
-sudo modprobe msr
-sensors | tee ddr4-sensors-before.log
-sudo turbostat --quiet --cpu package --interval 5 --header_iterations 1 \
-    --show Package,CPU,Busy%,Bzy_MHz,PkgTmp,CoreThr 2>&1 | tee ddr4-turbostat.log
+bash host/run-step.sh t2-temperature
 ```
 
 从开跑开始盯温度，读数趋稳后定时查看。**任一路 `PkgTmp` 到 `crit − 5°C`、总览行出现 `CoreThr > 0`、DIMM 出现高温告警、风扇停转或系统报过热，立即到压测终端按 Ctrl+C。** `crit − 5°C` 是本次验机选用的人工停测线。停负载后保留采样到温度回落，保存日志和 BIOS Event Log。检查散热器安装、风扇和风道，复测前先归档这一轮日志，再用相同 144 GiB 配置重跑。 [Intel 硬件热保护与 Linux 计数](https://docs.kernel.org/admin-guide/thermal/intel_thermal_throttle.html)
@@ -145,31 +118,19 @@ sudo turbostat --quiet --cpu package --interval 5 --header_iterations 1 \
 在另一个终端执行。压测退出后照常收集日志。
 
 ```bash
-cd "$HOME/z8-burnin"
-set -o pipefail
-sudo systemctl enable --now rasdaemon
-sudo ras-mc-ctl --status
-sudo ras-mc-ctl --errors | tee ddr4-ras-before.log
-sudo ras-mc-ctl --error-count | tee ddr4-ecc-before.log
-sudo journalctl -kb -o short-monotonic > ddr4-kernel-before.log
-numactl --interleave=0,1 stressapptest -s 14400 -M 147456 -m 24 -W 2>&1 \
-    | tee ddr4-4h.log
-sudo ras-mc-ctl --errors | tee ddr4-ras-after.log
-sudo ras-mc-ctl --error-count | tee ddr4-ecc-after.log
-sudo journalctl -kb -o short-monotonic > ddr4-kernel-after.log
-diff -u ddr4-ecc-before.log ddr4-ecc-after.log
+bash host/run-step.sh t2-ddr4 0,1
 ```
+
+把 `0,1` 换成上一步看到的两个 DDR4 节点号。脚本核两路有 CPU 且各有超过 72 GiB 空闲，交错分配 144 GiB，保存压测前后两次 ECC/RAS 和内核事件。
 
 放行要求是完成 4 小时、`Status: PASS`，且无新增 CE/UE、MCE 或掉条。跑完再停止温度采样。若中途停测，记录停测原因及当时的温度和日志。
 
 ### 70 GiB 只用于单路定位
 
-双路出现读写校验错误或新增内存相关的 CE、UE、MCE，要判断故障在哪一路时，再逐路跑 **70 GiB**（`-M 71680`）。掉条先恢复正常枚举，触发热告警先处理散热。单路定位沿用上面的监控，按实机把 `node=0` 改为待查节点，每次只跑一路。`-s 14400` 是最长运行时间，复现就可停。故障排除后，以双路 144 GiB 完整跑通作为 T2 放行依据。 [numactl 的绑核与绑内存](https://manpages.ubuntu.com/manpages/resolute/man8/numactl.8.html)
+双路出现读写校验错误或新增内存相关的 CE、UE、MCE，要判断故障在哪一路时，再逐路跑 **70 GiB**（`-M 71680`）。掉条先恢复正常枚举，触发热告警先处理散热。单路定位沿用上面的监控，按实机把命令最后的 `0` 改为待查节点，每次只跑一路。`-s 14400` 是最长运行时间，复现就可停。故障排除后，以双路 144 GiB 完整跑通作为 T2 放行依据。 [numactl 的绑核与绑内存](https://manpages.ubuntu.com/manpages/resolute/man8/numactl.8.html)
 
 ```bash
-node=0
-numactl --cpunodebind="$node" --membind="$node" \
-    stressapptest -s 14400 -M 71680 -m 12 -W 2>&1 | tee "ddr4-node${node}.log"
+bash host/run-step.sh t2-ddr4 0
 ```
 
 ## T3. PMem 100，App Direct 的专用检查
@@ -177,17 +138,10 @@ numactl --cpunodebind="$node" --membind="$node" \
 1. T2 通过后关机断电。DDR4 留在原位，往 CPU0 和 CPU1 各自的 DIMM 2/4/6/7/9/11 加 PMem。打开 [T3 的 App Direct 操作](PMEM.md#t3-配置-app-direct)，依次做 F10 查条与临时解冻、Linux 盘点和提交 App Direct goal、重启核对两路 region。再用 Memtest86+ 复测混插 DDR4 至少一个完整 pass。回 SanDisk 上的临时系统切 namespace，使用下面的诊断和写读校验验 PMem。
 
 ```bash
-sudo ipmctl show -units GiB -socket
-sudo ipmctl show -topology
-sudo ipmctl show -dimm
-sudo ipmctl show -firmware
-sudo ipmctl show -memoryresources
-sudo ipmctl show -region
-sudo ipmctl show -sensor
-sudo ipmctl show -error Thermal -dimm
-sudo ipmctl show -error Media -dimm
-sudo ipmctl start -diagnostic
+bash host/run-step.sh t3-pmem
 ```
+
+脚本收集拓扑、固件、区域、传感器和热/介质日志，再触发 `ipmctl` 内置诊断。
 
 这次运行覆盖 Quick、Config、Security、FW。Security 结果对照实际冻结/锁定策略；未预期的告警、region 缺失、介质错误增量或训练失败先处理。需要按模块复查时用 `sudo ipmctl start -diagnostic Quick -dimm 0xNNNN`，DIMM ID 用工具实际返回值。验收前后保存传感器的 Media/Controller 温度和模块报告的阈值，并记录有无节流，使用该批模块/固件阈值。 [Intel ipmctl 命令](https://www.intel.com/content/www/us/en/support/articles/000032861/technologies/memory-and-storage.html) · [诊断参数](https://docs.pmem.io/ipmctl-user-guide/debug/run-diagnostic)
 
@@ -198,12 +152,18 @@ sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=400G \
     fio --output-format=json --output=pmem-fsdax-verify.json host/pmem-fsdax.fio
 sudo env PMEM_TEST_DAX=/dev/dax0.1 PMEM_TEST_SIZE=8G \
     fio --output-format=json --output=pmem-devdax0-quick.json host/pmem-devdax.fio
-# 改成两个实际设备、合适的容量，分别执行 devdax job。
+```bash
+logs="$HOME/z8-burnin/pmem"
+mkdir -p "$logs"
+findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
+sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=400G \
+    fio --output-format=json --output="$logs/pmem-fsdax-verify.json" host/pmem-fsdax.fio
+sudo env PMEM_TEST_DAX=/dev/REPLACE_FIRST_DAX PMEM_TEST_SIZE=8G \
+    fio --output-format=json --output="$logs/pmem-devdax0-quick.json" host/pmem-devdax.fio
+# 用两个实际设备和各轮容量分别运行 devdax job，每轮使用不同的输出文件。
 ```
 
-对 fsdax 做跨重启持久性检查。给测试文件计算 SHA-256 并存到 SanDisk 上的 `~/z8-burnin`，`sync`、干净关机后切 AC。重新启动临时系统后，填回两个 fsdax UUID，执行 `sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"` 挂载，再用 `sha256sum -c` 核已保存的清单。测试后检查 fio `error=0`、所有 hash 一致，ipmctl 介质/热日志无新增错误。通过后移除本次 `/srv/pmem-model/burnin.bin`，保留 SanDisk 上的日志与校验值。 [fio PMDK 文件引擎](https://github.com/axboe/fio/blob/master/engines/libpmem.c) · [fio devdax 引擎](https://github.com/axboe/fio/blob/master/engines/dev-dax.c)
-
-3. 通过后按 [PMem 手册](PMEM.md#剩余-pmem-转-kmem) 打开全局和每设备的 `memmap_on_memory`，再把两个 devdax 转成 kmem。用 `numactl -H` 确认实际慢节点，逐节点试 `numactl --membind=<slow-node> stressapptest -s 7200 -M 131072 -m 12 -W`。检查测试进程的 `numastat -p`。这轮确认慢内存可以直接分配、写入和回读。记录介质错误、温度、节流及各慢节点在线容量。
+对 fsdax 做跨重启持久性检查。先执行 `sudo sha256sum /srv/pmem-model/burnin.bin > "$HOME/z8-burnin/pmem/burnin.sha256"`，`sync`、干净关机后切 AC。重新启动临时系统后，填回两个 fsdax UUID，执行 `sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"` 挂载，再执行 `sudo sha256sum -c "$HOME/z8-burnin/pmem/burnin.sha256"`。测试后检查 fio `error=0`、校验一致，ipmctl 介质/热日志无新增错误。通过后移除本次 `/srv/pmem-model/burnin.bin`，保留 SanDisk 上的日志与校验值。按 [模型挂载服务](PMEM.md#交给启动服务)完成 T3 的挂载交接。 [fio PMDK 文件引擎](https://github.com/axboe/fio/blob/master/engines/libpmem.c) · [fio devdax 引擎](https://github.com/axboe/fio/blob/master/engines/dev-dax.c)
 
 4. 保存 [双路 NUMA 拓扑](PMEM.md#核对双路-numa-拓扑)，用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，两路都通过后启用正常页下沉，再做 [kmem 冷启计时](PMEM.md#t3-记录-kmem-冷启动时间)。保存四个 UUID 和两份实填 env 后进入 T4。
 
@@ -242,7 +202,13 @@ sudo nvme id-ns -H "${ssds[2]}"
 sudo nvme id-ctrl -H "${ssds[2]}"
 ```
 
-记录 NVMe 的 Critical Warning、Available Spare、Percentage Used、Media and Data Integrity Errors。先按 [固件手册](FIRMWARE.md#t4-p4618p4800x-与-hc620) 判定两个 P4618 端点和 P4800X 是否需要更新。若更新，冷启后重新按序列号核两个 P4618 端点及 P4800X，再做以下测试。可分别用 `sudo fio --readonly --name=nvme-read --filename="$disk" --rw=read --bs=1M --ioengine=libaio --direct=1 --iodepth=16 --time_based --runtime=300 --group_reporting` 读每个已核身份的整盘五分钟，压前后比较 SMART 和温度。若内核报 I/O 错误、重置或介质错误增加，处理后重测。SSD 测完再开始 HDD 长自检。
+记录 NVMe 的 Critical Warning、Available Spare、Percentage Used、Media and Data Integrity Errors。先按 [固件手册](FIRMWARE.md#t4-p4618p4800x-与-hc620) 判定两个 P4618 端点和 P4800X 是否需要更新。若更新，冷启后重新按序列号核两个 P4618 端点及 P4800X，再做以下测试。在上一个命令块的终端里，沿用已核身份的 `ssds` 数组，逐个只读五分钟。压前后比较 SMART 和温度。若内核报 I/O 错误、重置或介质错误增加，处理后重测。SSD 测完再开始 HDD 长自检。
+
+```bash
+bash host/run-step.sh t4-nvme-read "${ssds[@]}"
+```
+
+脚本拒绝分区、重复设备和未找到的 by-id，逐个采集 SMART、只读五分钟、再采 SMART。
 
 记录 P4800X 当前逻辑扇区大小，I4 新建 GPT 时由命令自动读取该值来计算对齐。
 
@@ -250,30 +216,20 @@ sudo nvme id-ctrl -H "${ssds[2]}"
 
 等七盘冷启和风道确认后，给每块盘发一次 **SMART Extended Self-test**。命令很快返回，扫描由各盘固件独立运行。按七盘中最晚完成的一块安排时间。每盘先看 `smartctl -c` 的 Extended self-test polling time，实际启动后以工具回报的预计完成时间为准。先预留一晚到一天以上。作为量级参考，14 TB 若由主机以 150–200 MB/s 顺序读完，约需 19–26 小时；WD 给这款 14 TB 的最大持续速率为 233 MB/s。主机全盘读的估时和固件自检的 ETA 用各自的口径。 [smartctl 手册](https://manpages.ubuntu.com/manpages/resolute/man8/smartctl.8.html) · [WD HC620 规格表](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/data-sheet-ultrastar-dc-hc620.pdf)
 
+先用本机已核对的七个整盘 by-id 替换数组中的示例，然后留存一份启动前 SMART。
+
 ```bash
-# 替换成实机已核对的七个 ATA 整盘 by-id，按 SATA0–6 排列。
 hdds=(/dev/disk/by-id/ata-REPLACE_SATA{0..6})
-# 输出应为七个不同的 14 TB host-managed 整盘。
-lsblk -dn -o NAME,MODEL,SERIAL,SIZE,TYPE,ZONED "${hdds[@]}"
-# 把 logdir 指向 SanDisk 临时系统的日志目录。
-logdir="$PWD/logs/hc620"
-mkdir -p "$logdir"
-for disk in "${hdds[@]}"; do
-    sudo smartctl -x "$disk" > "$logdir/${disk##*/}.before.txt" 2>&1
-done
-# 先看各盘报告和已有自检状态，再发起新测试。
-for disk in "${hdds[@]}"; do
-    sudo smartctl -t long "$disk" 2>&1 | tee "$logdir/${disk##*/}.start.txt"
-done
-# 过一段时间按需查看进度及温度。
-for disk in "${hdds[@]}"; do
-    sudo smartctl -c -l selftest -A "$disk"
-done
-# 全部完成后留档。smartctl 的非零状态也可能来自历史错误，需读报告。
-for disk in "${hdds[@]}"; do
-    sudo smartctl -x "$disk" > "$logdir/${disk##*/}.after.txt" 2>&1
-done
+bash host/run-step.sh t4-hdd-status "${hdds[@]}"
 ```
+
+确认各盘没有正在运行的自检后，用同一终端发起七盘自检。脚本核对设备均为不同的 14 TB host-managed 整盘，随后发 `smartctl -t long`，磁盘在后台并行扫描。
+
+```bash
+bash host/run-step.sh t4-hdd-start "${hdds[@]}"
+```
+
+等待期间和最后一次分别重跑 `bash host/run-step.sh t4-hdd-status "${hdds[@]}"`。状态脚本逐盘采健康、温度、自检记录，SMART 的非零状态也可能来自历史错误，需要读报告。
 
 测试期间保持供电、通风，关闭自动休眠，避免同时跑 HDD 压测。每盘验最新一条 Extended 为 `Completed without error`，用启动前后日志的通电小时、序号和状态确认是这次结果。关注新增重映射、待处理扇区、不可校正扇区，以及内核 I/O 错误。若新增 SATA CRC 错误或链路 reset，先复核线材、供电与端口；若自检因关机或 reset 中断，处理原因后补跑该盘。无须在原始 HC620 上跑 `badblocks -w`，这类随机位置写入会遇到主机管理 SMR 的顺序写限制。正式安装的 scrub 校验池内已有数据的 checksum，裸盘慢扫查各盘自身的介质与自检结果。 [OpenZFS scrub](https://openzfs.github.io/openzfs-docs/man/master/8/zpool-scrub.8.html)
 
@@ -282,31 +238,26 @@ done
 AX210 自 T1 一直留在槽 7。七盘运行时复查 Wi-Fi 连接和蓝牙控制器，确认重启能重新连网，并记录 `iwlwifi` 日志。板载网口只记录枚举。主机保持独立，保存硬件、内核、RAS、SMART 与 SATA 对应表。P620 为唯一显卡。
 
 ```bash
-mkdir -p logs/host-baseline
-sudo bash host/inventory.sh | tee logs/host-baseline/inventory.txt
-sudo journalctl -k -b --no-pager > logs/host-baseline/kernel.txt
-sudo ras-mc-ctl --errors > logs/host-baseline/ras.txt
-lsblk -e 7 -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN,ZONED
+bash host/run-step.sh t4-inventory
 ```
 
 七盘自检和主机基线通过后进 T5。
 
 ## T5. 算力坞 V100 与 PCIe 拷机
 
-- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，`nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI` 保存前后。GPU Burn 用 CUDA 12.9.1 `make COMPUTE=70` 构建。分别跑单卡 15 min，再四卡 `gpu_burn -m 80% -tc 3600`，查校验、温度、频率、功耗、泵、VRM/HBM 和接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
+- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，`nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI` 保存前后。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
 - 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。然后做 1017 冒烟。
 
 ### T5 末的 1017 推理冒烟
 
-在 T5 开始时即可准备权重，约 232 GiB，Wi-Fi 下载时间单独安排。用临时 Xubuntu 的用户运行。编译和日志放 SanDisk 上的临时 Xubuntu，先用 `df -h / /var/lib` 核对剩余空间，再装 Docker 和下载 CUDA 构建镜像。模型权重直接写 T3 的正式模型卷。以下从 `z8-kit` 根目录执行；已挂载的卷也可用同一条 `mount` 命令核验。
+在 T5 开始时即可准备权重，约 232 GiB，Wi-Fi 下载时间单独安排。用临时 Xubuntu 的用户运行。编译和日志放 SanDisk 上的临时 Xubuntu，先用 `df -h / /var/lib` 核对剩余空间，再装 Docker 和下载 CUDA 构建镜像。模型权重直接写 T3 的正式模型卷。以下从 `z8-kit` 根目录执行；T3 已启用模型单元时用 `findmnt` 核验。若临时系统还未挂好模型卷，先执行 `sudo systemctl start z8-pmem-model.service`。
 
 ```bash
 kit=$(realpath .)
-sudo apt install docker.io libgomp1 libssl3t64 numactl pipx
+sudo apt install docker.io git libgomp1 libssl3t64 numactl pipx
 sudo systemctl enable --now docker.service
 export PATH="$HOME/.local/bin:$PATH"
 pipx install huggingface_hub
-sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"
 findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
 mkdir -p "$HOME/z8-smoke"
 cd "$HOME/z8-smoke"
@@ -315,23 +266,22 @@ cd "$HOME/z8-smoke"
 复制 [llama.cpp 主服务](../inference/README.md#llamacpp-v100-主服务) 中的编译、下载和启动命令，先完成下载，四卡硬件测试通过后再启动模型。`CUDA_VISIBLE_DEVICES` 和 `Z8_DRAM_INTERLEAVE` 用 T5、T3 记录的实值。用 `xfs_io -r -c 'fiemap -v' "$DS41_GGUF"` 记录首分片的 extent。另开终端执行下列命令，从仓库 `z8-kit` 根运行。若已切到 Xolotl，用 `--base http://127.0.0.1:8150/v1 --reasoning-effort none` 替换 `--usage`，以 Xolotl 服务日志记录生成速度。`--prompt-file` 可省略，冒烟用探针自带的短提示即可。
 
 ```bash
-python3 inference/probe.py --usage --repeats 1 --tools
-nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv
-sudo journalctl -k -b -g 'NVRM|Xid' --no-pager
+bash host/run-step.sh i6-probe --usage --repeats 1 --tools
 ```
 
 记录各卡显存、DDR4 页位置、是否能出字、工具往返和生成速度。显存不足时按推理手册依次降到 4 GiB 专家缓存、单槽，再试 Xolotl。工具往返成功且生成达到 5 tok/s 就进入 I1。2–5 tok/s 仍可进 I1，I6 给一天处理该差距。两种引擎均无法加载或降档后仍低于 2 tok/s 时，在验机窗口内决定算力坞的去留。完成后停服务、关机并断开 V100。
 
 ## I7. 正式安装后的整机混合负载
 
-按 [CPU 分核手册](CPU-PLACEMENT.md) 配置每路 6 核，核启停时普通任务 CPU 集合的变化。随后以这套正式配置跑一次 8 小时混合负载，涵盖 Buck2 上传、冷读和热读、1017 的实际工具请求、SSH/RDP。I6 通过双槽时使用两个并发 harness，单槽方案用串行请求。全程要求无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。出现错误回到相关硬件阶段复现。
+按 [CPU 分核手册](CPU-PLACEMENT.md) 配置每路 6 核，核启停时普通任务 CPU 集合的变化。随后以这套正式配置跑一次 8 小时混合负载，涵盖 Buck2 上传与回读、1017 的实际工具请求、SSH/RDP。主方案覆盖冷读和热读，全 XFS 回退覆盖其本地 CAS 写入与回读。I6 通过双槽时使用两个并发 harness，单槽方案用串行请求。全程要求无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。出现错误回到相关硬件阶段复现。
 
 ```bash
 # 分开终端运行，日志落 P4618。先确认 log 与测试进程都能在当前用户运行。
 nvidia-smi --query-gpu=timestamp,index,temperature.gpu,power.draw,pcie.link.gen.current,pcie.link.width.current --format=csv -l 5 > gpu.csv
 iostat -xz 5 > iostat.log
+# 主方案仅在 z8data 已导入时运行这一条。全 XFS 回退看上面的 iostat。
 sudo zpool iostat -v z8data 5 > zpool-iostat.log
 sudo journalctl -kf -o short-monotonic > kernel-follow.log
 ```
 
-用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。开始与结束各抓一次 `sudo bash host/pmem-numa-report.sh <PID>`。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。
+用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。在开始与结束各执行一次 `bash host/run-step.sh i7-snapshot PID`，用实际推理 PID 替换 `PID`。脚本收集 slice、两路内存、PMem 页迁移和内核错误。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。

@@ -20,7 +20,8 @@ df -h "$PMEM"
 在 `z8-kit` 根目录设置 `kit=$(pwd -P)`。正式系统从 `/srv/work/jackywang` 执行，T5 用 SanDisk 上的临时系统，从 `$HOME/z8-smoke` 执行。以下编译和下载命令在选定的工作目录运行。CUDA 容器用于编译，不需要访问 GPU。先取 CUDA runtime 库，两种引擎共享，R580 的设备驱动库由宿主提供。 [llama.cpp CUDA 构建配置](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/ggml/src/ggml-cuda/CMakeLists.txt)
 
 ```bash
-sudo apt install libgomp1 libssl3t64 numactl
+sudo apt install docker.io git libgomp1 libssl3t64 numactl
+sudo systemctl enable --now docker.service
 export Z8_CUDA_RUNTIME="$PWD/cuda-12.9-runtime"
 mkdir -p "$Z8_CUDA_RUNTIME"
 sudo docker run --rm --user "$(id -u):$(id -g)" \
@@ -178,11 +179,11 @@ numactl --interleave="$Z8_DRAM_INTERLEAVE" .venv-serve/bin/python tools/v41/serv
 
 ## I6 推理放行
 
-先运行以下探针，再用真实 harness 连续完成 20 个工具回合。默认双槽各 8K，读取真实 harness 首请求的 `usage.prompt_tokens`。若提示词和工具定义已超过 4K，或 8K 槽在实际循环中先满，试 `SLOTS=1 SLOT_CTX=16384` 并将 OMP 的 `contextWindow` 改成 `16384`，核启动日志中的 `n_ctx_slot` 和显存。显存不足时按上述降档处理。llama.cpp 的 `--parallel-pairs` 用于验证两路同时流式、各返自己的项目标记。单槽回退删去该参数。Xolotl 回退用端口 8150，加 `--reasoning-effort none`，删去 `--usage`。
+从 `z8-kit` 根运行以下探针。脚本打印请求时序、显存与内核错误并保存日志。再用真实 harness 连续完成 20 个工具回合。默认双槽各 8K，读取真实 harness 首请求的 `usage.prompt_tokens`。若提示词和工具定义已超过 4K，或 8K 槽在实际循环中先满，试 `SLOTS=1 SLOT_CTX=16384` 并将 OMP 的 `contextWindow` 改成 `16384`，核启动日志中的 `n_ctx_slot` 和显存。显存不足时按上述降档处理。llama.cpp 的 `--parallel-pairs` 用于验证两路同时流式、各返自己的项目标记。单槽回退删去该参数。Xolotl 回退用端口 8150，加 `--reasoning-effort none`，删去 `--usage`。
 
 ```bash
-python3 inference/probe.py --base http://127.0.0.1:18000/v1 --usage \
+bash host/run-step.sh i6-probe --base http://127.0.0.1:18000/v1 --usage \
     --model deepseek-v4.1-flash-1017 --repeats 3 --tools --parallel-pairs
 ```
 
-记录真实任务的首字延迟、生成速度与峰值显存，核 SSE、工具回传、项目标记和 OOM/Xid。两路任务需同时推进且输出正确。单槽通过但双槽无法稳定时保留单槽，生产配置直接进入 [I7](../host/BURN-IN.md#i7-正式安装后的整机混合负载)。若单用户生成中位数低于 10 tok/s，或代表性 8K 工单的 TTFT p95 超过 20 秒且影响使用，先查专家 miss 与显存。若大量 miss 且每卡仍有至少 3 GiB 峰值余量，将 GPU 专家缓存提高一次到 16384 MiB。仍无法满足实际工单时才验 Xolotl 回退。该速度目标用于判断是否需要调整配置。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)
+记录真实任务的首字延迟、生成速度与峰值显存，核 SSE、工具回传、项目标记和 OOM/Xid。两路任务需同时推进且输出正确。单槽通过但双槽无法稳定时保留单槽。若单用户生成中位数低于 10 tok/s，或代表性 8K 工单的 TTFT p95 超过 20 秒且影响使用，先查专家 miss 与显存。若大量 miss 且每卡仍有至少 3 GiB 峰值余量，将 GPU 专家缓存提高一次到 16384 MiB。仍无法满足实际工单时才验 Xolotl 回退。选定档位后，按[正式服务启停](../host/CPU-PLACEMENT.md#启停本地模型)写环境并启动 `z8-infer.service`，核 API 就绪后进入 [I7](../host/BURN-IN.md#i7-正式安装后的整机混合负载)。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)

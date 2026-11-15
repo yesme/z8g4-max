@@ -4,7 +4,7 @@ SATA0–6 的七块 HC620 各配一个 P4800X **96 GiB** 分区，组成七个 d
 
 ## 1. 列出实体设备
 
-从正式系统 I4 开始。关机断电接回 SATA0–6 与 P4800X，启动后用 T4 保存的 SMART、型号、序列号和 by-id 逐项对照。P4618 已在 I1 用作 XFS 根。以下建分区、dmzadm format 与建池会清除目标内容。重装或接回已建过的池时，复用原 GPT、映射表和 GUID，从第 4 节重新安装单元。
+从正式系统 I4 开始。关机断电接回 SATA0–6 与 P4800X，启动后用 T4 保存的 SMART、型号、序列号和 by-id 逐项对照。P4618 已在 I1 用作 XFS 根。以下建分区、dmzadm format 与建池会清除目标内容。重装系统或接回已有池时，先安装[第 1 节的工具](#1-列出实体设备)，再到第 4 节的[安装启动单元](#安装启动单元)复用原 GPT、文件系统、映射表和 GUID。
 
 ```bash
 uname -r
@@ -256,6 +256,8 @@ Buildbarn 固定镜像 `ca3d8b4` 写盘前已经对每个 CAS chunk 做 Zstd 编
 )
 ```
 
+### 安装启动单元
+
 **安装和重装都从这里继续。** 重装保留已有 p9 文件系统和池，使用原来的 `hybrid.tsv` 与 `storage.env`。本机只管理这一个 ZFS 池，下方在首次启动专用导入链前屏蔽已安装的系统默认导入服务。
 
 ```bash
@@ -323,7 +325,8 @@ fi
 ```bash
 sudo apt install fio sysstat
 sudo systemctl start data-buildbarn.mount
-logs=/path/to/external-log-disk
+logs="$HOME/z8-burnin/i4-cas-aging"
+mkdir -p "$logs"
 sudo bash storage/cas-aging.sh sequential "$logs"
 sudo zpool scrub -w z8data
 sudo zpool status -vP z8data
@@ -364,7 +367,7 @@ sudo journalctl -b -u z8-dmzoned -u z8-zpool -u data-other.mount -u srv-bbindex.
     -u data-buildbarn.mount -u z8-buildbarn --no-pager
 ```
 
-- 冷启验证依次做全设备、一盘断电缺席、全恢复、P4800X 断电缺席、再全恢复。每次先关机再动线。单盘演练完成后先等恢复盘完成 resilver，再演练 P4800X。每轮先查本次开机的 dm-zoned、池导入和挂载日志，再核 ZFS 与系统盘。P4800X 缺席时，日志必须显示链路尝试启动并在设备关口失败。只看目录未挂载或 SSH 可用无法判定守卫通过。设备后来才出现，先停止本链、复核设备，再运行 `sudo systemctl start data-buildbarn.mount data-other.mount srv-bbindex.mount`。I5 已上线后可用 `sudo systemctl start z8-buildbarn.service` 同时恢复应用。如果前次只建成少数 mapper，脚本会核对并复用已正确创建的映射。P4800X 丢失后的常规恢复路线是从原数据/构建重建 CAS。保留项目、构建配置、GUID、分区表和映射表的独立副本。
+- 冷启验证依次做全设备、一盘断电缺席、全恢复、P4800X 断电缺席、再全恢复。每次先关机再动线。单盘演练完成后先等恢复盘完成 resilver，再演练 P4800X。每轮从 `z8-kit` 根执行 `bash host/run-step.sh i4-status`，记录本次开机的 dm-zoned、池导入与挂载日志、mapper、ZFS 状态和四个挂载点。缺盘演练允许返回非零，以本轮预期和日志为准。P4800X 缺席时，日志必须显示链路尝试启动并在设备关口失败。只看目录未挂载或 SSH 可用无法判定守卫通过。设备后来才出现，先停止本链、复核设备，再运行 `sudo systemctl start data-buildbarn.mount data-other.mount srv-bbindex.mount`。I5 已上线后可用 `sudo systemctl start z8-buildbarn.service` 同时恢复应用。如果前次只建成少数 mapper，脚本会核对并复用已正确创建的映射。P4800X 丢失后的常规恢复路线是从原数据/构建重建 CAS。保留项目、构建配置、GUID、分区表和映射表的独立副本。
 
 临时缺盘回来时，原盘与原 P4800X 分区保持原配对。启动后用 `sudo zpool status -gP z8data` 观察旧成员、mapper、resilver 和校验计数。如果映射已恢复但 ZFS 仍标记 OFFLINE，先确认旧 vdev 标识，再对对应成员用 `sudo zpool online z8data <旧成员标识>`。仍是 UNAVAIL 时保留日志，检查 `dmsetup table` 与 `zdb -l /dev/mapper/hc620-N`，先核已有标签与池 GUID，避免重新格式化返回盘。
 
@@ -407,7 +410,7 @@ sudo journalctl -b -u z8-buildbarn -u z8-buildbarn-worker --no-pager
 主方案与全 XFS 回退都先执行这个安装块。
 
 ```bash
-sudo apt install docker.io docker-compose-v2 jq
+sudo apt install docker.io docker-compose-v2 jq sysstat
 sudo systemctl enable --now docker.service
 sudo docker compose version
 sudo install -d -m 0755 /opt/z8-kit /srv/buildbarn/tiered
