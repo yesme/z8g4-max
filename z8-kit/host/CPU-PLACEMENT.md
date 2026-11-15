@@ -90,7 +90,7 @@ I5 先完成 [Buildbarn 的软件、目录与单元准备](../storage/README.md#
 
 ## 启停本地模型
 
-以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
+以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。只有六对 NVLink 与 NCCL 已在正式默认内核参数下验过才保存 `export Z8_NVLINK_P2P=1`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
 
 **llama.cpp 的 `launch.sh`**
 

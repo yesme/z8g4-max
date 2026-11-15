@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly FIT boot integrity check and Z8 recovery metadata backup
+
+[Timer]
+OnCalendar=Mon *-*-* 03:30:00
+Persistent=true
+Unit=z8-recovery-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -17,7 +17,7 @@ with TemporaryDirectory() as directory:
     binaries.mkdir()
     for name in ("bb_storage", "bb_worker", "bb_runner"):
         (binaries / name).touch()
-    site = {"hostname": "test-mac", "xcode": "26.1", "caseInsensitive": False}
+    site = {"hostname": "test-mac", "xcode": "26.1"}
     for name in ("hot", "cold", "work", "developerDir"):
         path = root / name
         path.mkdir()
@@ -38,11 +38,6 @@ with TemporaryDirectory() as directory:
         result = subprocess.run(command, env=env, text=True, capture_output=True)
         assert result.returncode == 2 and field in result.stderr, result.stderr
         assert not output.exists()
-
-    for value in ("false", 0):
-        config.write_text(json.dumps({**site, "caseInsensitive": value}), encoding="utf-8")
-        result = subprocess.run(command, env=env, text=True, capture_output=True)
-        assert result.returncode == 2 and "caseInsensitive" in result.stderr, result.stderr
 
     config.write_text(json.dumps(site), encoding="utf-8")
     subprocess.run(command, env=env, check=True)

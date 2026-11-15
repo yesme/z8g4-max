@@ -1,9 +1,0 @@
-# Apply to upstream bb-deployments/docker-compose with modern Docker Compose.
-services:
-  frontend:
-    ports: !override
-      - "127.0.0.1:18980:8980"
-  scheduler:
-    ports: !reset []
-  portal:
-    ports: !reset []

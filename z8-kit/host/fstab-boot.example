@@ -1,5 +1,6 @@
 # I1: merge these three entries into /etc/fstab after first boot.
 # Use filesystem UUIDs from lsblk. Preserve other installer entries.
+# FIT p3 (Z8TOOLS) and p4 (Z8RECOVERY) are mounted on demand. Do not add them here.
 UUID=REPLACE_P4618_XFS_UUID  /          xfs   defaults,noatime,nodiscard                        0 0
 UUID=REPLACE_FIT_BOOT_UUID   /boot      ext4  defaults,noatime,errors=remount-ro,X-fstrim.notrim 0 2
 UUID=REPLACE_FIT_ESP_UUID    /boot/efi  vfat  defaults,noatime,umask=0077,X-fstrim.notrim         0 2

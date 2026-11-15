@@ -1,5 +1,5 @@
 [Unit]
-Description=Mount P4800X Buildbarn cold index
+Description=Mount D4800X Buildbarn cold index
 DefaultDependencies=no
 After=local-fs.target
 Conflicts=umount.target

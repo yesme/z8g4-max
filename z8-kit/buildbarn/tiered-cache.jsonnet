@@ -22,7 +22,7 @@ base + {
       chunkStorage: {
         local cold = import '../cold-index/cold-layout.json',
         readCaching: {
-          // Authoritative CS: P4800X p9 index and state, RAIDZ1 block file.
+          // Authoritative CS: D4800X p9 index and state, RAIDZ1 block file.
           slow: disk('/cold-index', '/cold/blocks', cold.tib * 1024 * GiB, cold.indexGib * GiB, 3, chunking, 22, 66),
           fast: disk('/store/cs-hot', '/store/cs-hot/blocks', 512 * GiB, 8 * GiB, 3, chunking),
           replicator: { 'local': {} },

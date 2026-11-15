@@ -29,6 +29,7 @@ local digest = 'dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
       endpoint: { address: 'unix:///run/bb-runner/runner.sock' },
       concurrency: 72,
       instanceNamePrefix: 'hardlinking',
+      environmentVariables: { PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' },
       platform: {
         properties: [
           { name: 'OSFamily', value: 'linux' },

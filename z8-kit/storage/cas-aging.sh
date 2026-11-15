@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# != 2 || $1 != sequential || $EUID != 0 ]]; then
-    echo "Usage: sudo bash $0 sequential EXISTING_LOG_DIRECTORY" >&2
+if [[ $# != 3 || $1 != sequential || $EUID != 0 ]]; then
+    echo "Usage: sudo bash $0 sequential EXISTING_LOG_DIRECTORY OPTANE_WHOLE_DISK_BY_ID" >&2
     exit 2
 fi
 target=/data/buildbarn
 pool=z8data
+optane=$3
+[[ "$optane" == /dev/disk/by-id/nvme-* && -b "$optane" &&
+    $(lsblk -dnro TYPE -- "$optane") == disk ]]
 [[ $(findmnt -n -M "$target" -o SOURCE,FSTYPE) == 'z8data/buildbarn zfs' ]]
 [[ $(zpool list -H -o health "$pool") == ONLINE ]]
 [[ $(zpool get -H -o value autotrim "$pool") == on ]]
@@ -49,6 +52,10 @@ snapshot() {
         dmsetup status --target zoned
     } >> "$log_dir/dmz.log"
     cat "$txgs" >> "$log_dir/txgs-$tag.log"
+    {
+        printf '%s %s\n' "$(date -Is)" "$tag"
+        nvme smart-log "$optane"
+    } >> "$log_dir/optane-smart.log"
 }
 snapshot start
 : > "$log_dir/txgs-periodic.log"
@@ -60,7 +67,7 @@ snapshot start
         wait "$sleeper"
         sleeper=
         snapshot periodic
-    done </dev/null >/dev/null 2>&1
+    done </dev/null >>"$log_dir/monitor.log" 2>&1
 ) & monitor_pid=$!
 zpool iostat -vpy -T u "$pool" 60 > "$log_dir/zpool-iostat.log" & iostat_pid=$!
 
@@ -87,6 +94,11 @@ for pass in 1 2 3; do
         passed=0
     fi
 done
+if ! kill -0 "$monitor_pid" "$iostat_pid" 2>/dev/null ||
+    [[ ! -s "$log_dir/zpool-iostat.log" || ! -s "$log_dir/txgs-periodic.log" ]]; then
+    echo 'Missing periodic monitoring. Check monitor.log and zpool-iostat.log.' | tee -a "$log_dir/timing.log"
+    passed=0
+fi
 if ! awk -v start="$last_seed_txg" '
     $1 ~ /^[0-9]+$/ && $1 > start && $12 > max { max=$12; id=$1 }
     END {
@@ -100,6 +112,6 @@ fi
 if (( passed )); then
     echo 'PASS: throughput and TXG duration' | tee -a "$log_dir/timing.log"
 else
-    echo 'FAIL: minimum 150 MB/s and maximum 60 s completed TXG duration required' | tee -a "$log_dir/timing.log"
+    echo 'FAIL: minimum 150 MB/s, maximum 60 s completed TXG duration, and live monitoring required' | tee -a "$log_dir/timing.log"
     exit 1
 fi

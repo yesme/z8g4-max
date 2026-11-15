@@ -9,10 +9,13 @@ I6 先启 **llama.cpp v1.0.0**。它用一套 ISTA 1017 权重提供 OpenAI 兼�
 先启 [PMem 模型卷](../host/PMEM.md#i4-在正式系统复用-pmem)。确认 XFS 的 DAX 挂载和 T3 建立的权重目录。T5 用临时系统用户下载；I6 以 `jackywang` 复用已下载文件，若数字 UID/GID 不同先在正式系统对该目录执行一次 `chown -R`。所有权重和 tokenizer 写到该卷。先下载约 232 GiB 的 ISTA IQ2_XXS + IQ4_NL Engram，一份供 llama.cpp 和 Xolotl 共用。 [ISTA 模型文件](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF)
 
 ```bash
-PMEM=/srv/pmem-model
-findmnt -rn -M "$PMEM" -t xfs -O dax=always || exit 1
-xfs_io -r -c extsize "$PMEM/ds41-llamacpp"
-df -h "$PMEM"
+(
+    set -e
+    PMEM=/srv/pmem-model
+    findmnt -rn -M "$PMEM" -t xfs -O dax=always
+    xfs_io -r -c extsize "$PMEM/ds41-llamacpp"
+    df -h "$PMEM"
+)
 ```
 
 ## llama.cpp v1.0.0 主服务
@@ -29,6 +32,7 @@ sudo docker run --rm --user "$(id -u):$(id -g)" \
         for library in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libnvJitLink.so.12; do
             cp -L "/usr/local/cuda/targets/x86_64-linux/lib/$library" /runtime/
         done
+        cp -L /usr/lib/x86_64-linux-gnu/libnccl.so.2 /runtime/
     '
 git clone --branch v1.0.0 --depth 1 https://github.com/ggml-org/llama.cpp.git
 git -C llama.cpp rev-parse HEAD
@@ -39,7 +43,8 @@ sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         nvcc --version
         git config --global --add safe.directory /src
         cmake -S . -B build -G Ninja -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_NATIVE=ON -DCMAKE_CUDA_ARCHITECTURES=70-real
+            -DGGML_NATIVE=ON -DCMAKE_CUDA_ARCHITECTURES=70-real \
+            -DCMAKE_INSTALL_RPATH="\$ORIGIN" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
         cmake --build build --target llama-server -j 8
         chown -R "$HOST_UID:$HOST_GID" build
     '
@@ -48,28 +53,31 @@ LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME" ldd "$LLAMA_BUILD/bin/llama-server"
 LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME" ldd "$LLAMA_BUILD/bin/libggml-cuda.so"
 ```
 
-两个 `ldd` 输出均应无 `not found`。
+内部 llama/ggml 共享库按 `$ORIGIN` 在可执行文件旁查找，NCCL 与 CUDA 库一起从同版容器拷贝。两个 `ldd` 输出均应无 `not found`。 [llama.cpp 发布构建的 RPATH](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/.github/workflows/release.yml#L225-L226)
 
 若尚无 `hf`，装 `pipx`，执行 `pipx install huggingface_hub`，再将 `$HOME/.local/bin` 加入 PATH。先给下载命令加 `--dry-run`，应列出五个主体文件和一个 Engram 文件。以下变量供两种引擎共用。链接在首次下载后创建一次。 [ISTA 分片链接约定](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF#llamacpp)
 
 ```bash
 PMEM=/srv/pmem-model
-findmnt -rn -M "$PMEM" -t xfs -O dax=always || exit 1
 DS41_MODEL_DIR="$PMEM/ds41-llamacpp"
-# T3 创建目录并设置了 extent 提示。I6 核对当前用户可写，必要时交给 jackywang。
-test -w "$DS41_MODEL_DIR" || exit 1
 DS41_STEM=DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS
 DS41_GGUF="$DS41_MODEL_DIR/$DS41_STEM-00001-of-00006.gguf"
 DS41_ENGRAM="$DS41_MODEL_DIR/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf"
-hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
-    --revision 65d53bc8be65123e255ff02f3ded958b6dbf54fd \
-    --include "$DS41_STEM-*-of-00006.gguf" "${DS41_ENGRAM##*/}" \
-    --local-dir "$DS41_MODEL_DIR"
-test -s "$DS41_GGUF" && test -s "$DS41_ENGRAM" || exit 1
-ln -sfn -- "${DS41_ENGRAM##*/}" "$DS41_MODEL_DIR/$DS41_STEM-00006-of-00006.gguf"
+(
+    set -e
+    findmnt -rn -M "$PMEM" -t xfs -O dax=always
+    # T3 创建目录并设置了 extent 提示。I6 核对当前用户可写，必要时交给 jackywang。
+    test -w "$DS41_MODEL_DIR"
+    hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
+        --revision 65d53bc8be65123e255ff02f3ded958b6dbf54fd \
+        --include "$DS41_STEM-*-of-00006.gguf" "${DS41_ENGRAM##*/}" \
+        --local-dir "$DS41_MODEL_DIR"
+    test -s "$DS41_GGUF" && test -s "$DS41_ENGRAM"
+    ln -sfn -- "${DS41_ENGRAM##*/}" "$DS41_MODEL_DIR/$DS41_STEM-00006-of-00006.gguf"
+)
 ```
 
-**固定部署档。** 四卡 layer split、2×8K、每请求独立活跃 KV。热点专家用 8192 MiB 合计 GPU 缓存，CUDA peer 已由 T5 验证。routed experts 留在 host，可按需从 PMem 的 `mmap` 读取，实际 pinned staging 由引擎分配。CPU miss share 固定 0，microbatch 固定 32，进入 v1.0.0 的缓存接纳范围。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [32-token 接纳上限](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L340)
+**固定部署档。** 四卡 layer split、2×8K、每请求独立活跃 KV。热点专家用 8192 MiB 合计 GPU 缓存，只在 T5/I3 用正式内核默认参数确认六对都走 NVLink且通过数据校验后，才 `export Z8_NVLINK_P2P=1`。未通过时沿用启动器默认关闭。routed experts 留在 host，可按需从 PMem 的 `mmap` 读取，实际 pinned staging 由引擎分配。CPU miss share 固定 0，microbatch 固定 32，进入 v1.0.0 的缓存接纳范围。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [32-token 接纳上限](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L340)
 
 ```bash
 export LLAMA_BUILD Z8_CUDA_RUNTIME DS41_GGUF
@@ -91,28 +99,34 @@ bash "$kit/inference/serve-llama.sh"
 3. `$GGUF_FIRST` 和 `$ENGRAM_GGUF` 指向本节下载目录里的四分片及独立 Engram。`$TOKENIZER_DIR` 指向 `/srv/pmem-model/ds41-1cat/base`，放固定 revision 的 1017 官方 tokenizer/config 文件。配置生成需 PyYAML。先给下载命令加 `--dry-run` 确认文件清单与容量。 [ISTA 四分片 revision](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF/tree/0d8f49fb15df73789a9c237a1b8b7b088423dbc0)
 
 ```bash
-PMEM=/srv/pmem-model
-findmnt -rn -M "$PMEM" -t xfs -O dax=always || exit 1
-sudo install -d -m 0750 -o jackywang -g "$(id -gn jackywang)" "$PMEM/ds41-1cat"
-hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
-    --revision 0d8f49fb15df73789a9c237a1b8b7b088423dbc0 \
-    --include '*IQ2_XXS*of-00004.gguf' '*Engram-IQ4_NL.gguf' \
-    --local-dir "$PMEM/ds41-1cat"
+(
+    set -e
+    PMEM=/srv/pmem-model
+    findmnt -rn -M "$PMEM" -t xfs -O dax=always
+    sudo install -d -m 0750 -o jackywang -g "$(id -gn jackywang)" "$PMEM/ds41-1cat"
+    hf download ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF \
+        --revision 0d8f49fb15df73789a9c237a1b8b7b088423dbc0 \
+        --include '*IQ2_XXS*of-00004.gguf' '*Engram-IQ4_NL.gguf' \
+        --local-dir "$PMEM/ds41-1cat"
+)
 ```
 
 ```bash
-kit=$(realpath /path/to/z8-kit)
-repo=$(realpath /path/to/1Cat-vLLM)
-findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
-"$repo/.venv/bin/python" "$kit/inference/configure.py" 1cat \
-    --upstream "$repo/benchmarks/deepseek_v41/serve-ds41-phase2.yaml" \
-    --model "$GGUF_FIRST" --engram "$ENGRAM_GGUF" --tokenizer "$TOKENIZER_DIR" \
-    --output "$PWD/1cat-4x16.yaml"
-export CUDA_VISIBLE_DEVICES=GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
-read -rsp 'Local API key: ' VLLM_API_KEY
-echo
-export VLLM_API_KEY
-numactl --interleave=0,1 bash "$kit/inference/serve-1cat.sh" "$repo" "$PWD/1cat-4x16.yaml"
+(
+    set -e
+    kit=$(realpath /path/to/z8-kit)
+    repo=$(realpath /path/to/1Cat-vLLM)
+    findmnt -rn -M /srv/pmem-model -t xfs -O dax=always
+    "$repo/.venv/bin/python" "$kit/inference/configure.py" 1cat \
+        --upstream "$repo/benchmarks/deepseek_v41/serve-ds41-phase2.yaml" \
+        --model "$GGUF_FIRST" --engram "$ENGRAM_GGUF" --tokenizer "$TOKENIZER_DIR" \
+        --output "$PWD/1cat-4x16.yaml"
+    export CUDA_VISIBLE_DEVICES=GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
+    read -rsp 'Local API key: ' VLLM_API_KEY
+    echo
+    export VLLM_API_KEY
+    numactl --interleave=0,1 bash "$kit/inference/serve-1cat.sh" "$repo" "$PWD/1cat-4x16.yaml"
+)
 ```
 
 1Cat 要对实际 CUDA worker 核 `numastat -p`，并用 `VmLck`/`VmPin` 和引擎日志查 pinned 分配。GGUF 与 Engram 留在 fsdax 上，cold expert staging 按实际 DDR4 缓冲和 PCIe 流量计算，另查 PMem 读取。 [运行时内存策略](../host/CPU-PLACEMENT.md#运行时的-numa-内存策略) · [PMem、pinned memory 与 H→D 测试](../host/PMEM.md#四卡-pinned-dma-验收)
@@ -132,47 +146,53 @@ Niko1221/Strata 的 1017 官方包未列 V100 的 SM70 运行支持。本机用 
 Buster 脚本使用 user systemd bus、`flock` 和 `MemoryMax=140G`，遇到内存上限先查实际工作集与 cgroup。生成的 profile 带 `STRATA_ENGRAM_RAWDEV=0`，使用普通用户的文件读取路径。DAX 上的 `pread` 可绕开普通页缓存，排查 PMD fault 时看采用 `mmap` 的引擎。 [Buster 启动脚本](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/buster/buster-engine.sh)
 
 ```bash
-sudo apt install cmake python3-venv
-findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
-XOL_DIR=/srv/pmem-model/ds41-xolotl
-XOL_TOKENIZER_DIR="$XOL_DIR/tokenizer"
-sudo install -d -m 0750 -o "$(id -u)" -g "$(id -g)" "$XOL_DIR"
-hf download IndrasMirror/DeepSeek-V4.1-Flash-GSQ-Uncensored \
-    --revision 0ae18f838e103fb03d952fa8ed73c7aa9c34002f \
-    --include 'tokenizer/*' --local-dir "$XOL_DIR"
-test -s "$XOL_TOKENIZER_DIR/vocab.json" || exit 1
-cd "$(dirname -- "$Z8_CUDA_RUNTIME")"
-git clone https://github.com/Indras-Mirror/Xolotl.git
-cd Xolotl
-git switch --detach db25febda3e2869333d72eca6b17296142916a9b
-git rev-parse HEAD
-sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-    -v "$PWD:/src" -w /src nvidia/cuda:12.9.1-devel-ubuntu24.04 bash -euc '
-        apt-get update
-        apt-get install -y build-essential cmake ninja-build git python3 libssl-dev ca-certificates
-        git config --global --add safe.directory /src
-        bash tools/xolotl/fetch-llama.sh
-        bash tools/buster/cmake-buster.sh /src/build-buster
-        ninja -C build-buster -j 8 ds41_generate test_cuda_cc_policy test_ds41_pipeline test_ds41_geometry
-        chown -R "$HOST_UID:$HOST_GID" build-buster
-    '
-export LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-ldd build-buster/ds41_generate > build-buster/ldd-ds41_generate.log || exit 1
-cat build-buster/ldd-ds41_generate.log
-if grep -Fq 'not found' build-buster/ldd-ds41_generate.log; then exit 1; fi  # 若缺 CUDA .so，从同版容器补拷后再验。
-DS41_TEST_GGUF="$DS41_GGUF" ctest --test-dir build-buster \
-    -R 'test_cuda_cc_policy|test_ds41_pipeline|test_ds41_geometry' --output-on-failure
+(
+    set -e
+    sudo apt install cmake python3-venv
+    findmnt -rn -M /srv/pmem-model -t xfs -O dax=always
+    XOL_DIR=/srv/pmem-model/ds41-xolotl
+    XOL_TOKENIZER_DIR="$XOL_DIR/tokenizer"
+    sudo install -d -m 0750 -o "$(id -u)" -g "$(id -g)" "$XOL_DIR"
+    hf download IndrasMirror/DeepSeek-V4.1-Flash-GSQ-Uncensored \
+        --revision 0ae18f838e103fb03d952fa8ed73c7aa9c34002f \
+        --include 'tokenizer/*' --local-dir "$XOL_DIR"
+    test -s "$XOL_TOKENIZER_DIR/vocab.json"
+    cd "$(dirname -- "$Z8_CUDA_RUNTIME")"
+    git clone https://github.com/Indras-Mirror/Xolotl.git
+    cd Xolotl
+    git switch --detach db25febda3e2869333d72eca6b17296142916a9b
+    git rev-parse HEAD
+    sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        -v "$PWD:$PWD" -w "$PWD" nvidia/cuda:12.9.1-devel-ubuntu24.04 bash -euc '
+            apt-get update
+            apt-get install -y build-essential cmake ninja-build git python3 libssl-dev ca-certificates
+            git config --global --add safe.directory "$PWD"
+            bash tools/xolotl/fetch-llama.sh
+            bash tools/buster/cmake-buster.sh "$PWD/build-buster"
+            ninja -C build-buster -j 8 ds41_generate test_cuda_cc_policy test_ds41_pipeline test_ds41_geometry
+            chown -R "$HOST_UID:$HOST_GID" build-buster
+        '
+    export LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    ldd build-buster/ds41_generate > build-buster/ldd-ds41_generate.log
+    cat build-buster/ldd-ds41_generate.log
+    if grep -Fq 'not found' build-buster/ldd-ds41_generate.log; then
+        printf 'Copy missing runtime libraries from the matching CUDA container first.\n' >&2
+        exit 1
+    fi
+    DS41_TEST_GGUF="$DS41_GGUF" ctest --test-dir build-buster \
+        -R 'test_cuda_cc_policy|test_ds41_pipeline|test_ds41_geometry' --output-on-failure
 
-python3 "$kit/inference/configure.py" xolotl --repo "$PWD" \
-    --model "$DS41_GGUF" --engram "$DS41_ENGRAM" \
-    --tokenizer "$XOL_TOKENIZER_DIR" --gpu "$BUSTER_PCI_INDICES" \
-    --context 8192 --output "$PWD/local-1017.json"
-python3 -m venv .venv-serve
-.venv-serve/bin/pip install jinja2 regex
-export STRATA_BUILD_DIR="$PWD/build-buster"
-.venv-serve/bin/python tools/v41/serve/serve_ds41.py --help
-numactl --interleave="$Z8_DRAM_INTERLEAVE" .venv-serve/bin/python tools/v41/serve/serve_ds41.py \
-    --engine strata --config local-1017.json --port 8150
+    python3 "$kit/inference/configure.py" xolotl --repo "$PWD" \
+        --model "$DS41_GGUF" --engram "$DS41_ENGRAM" \
+        --tokenizer "$XOL_TOKENIZER_DIR" --gpu "$BUSTER_PCI_INDICES" \
+        --context 8192 --output "$PWD/local-1017.json"
+    python3 -m venv .venv-serve
+    .venv-serve/bin/pip install jinja2 regex
+    export STRATA_BUILD_DIR="$PWD/build-buster"
+    .venv-serve/bin/python tools/v41/serve/serve_ds41.py --help
+    numactl --interleave="$Z8_DRAM_INTERLEAVE" .venv-serve/bin/python tools/v41/serve/serve_ds41.py \
+        --engine strata --config local-1017.json --port 8150
+)
 ```
 
 `BUSTER_PCI_INDICES` 按 checkout 实际识别顺序填写四张 V100 的索引，通过日志和 GPU UUID 复核。四卡 layer split 只处理一个活动请求，可以再利用内存会话缓存。Buster 的持久前缀实现限单 stage，四卡回退保持内存缓存和单槽。 [Xolotl 批处理条件](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/engine/ds41_generate.cpp#L615)

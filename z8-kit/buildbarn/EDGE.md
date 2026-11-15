@@ -13,7 +13,7 @@ max 运行唯一的 scheduler 和权威 AC/CAS。max、mini、Mac 的 Buck2 都�
 | jackywang-xubuntu-mini | PM9F1，系统、工作树与 buck-out 也在此盘 | S3610 上 640 GiB | 16 并发，16 CPU 配额，40 GiB |
 | Mac mini M4 | 外接 PM9F1 的 APFS，系统和 Xcode 留内置盘 | 初装用同一外接 PM9F1 上 512 GiB。四块 CMR 到货后为 4×3 TiB | 4 并发 |
 
-从持久的 `z8-kit/buildbarn` 目录把 `edge-site.json.example` 复制为 `edge-site.json`。填主机名及热、冷、工作目录的绝对路径。`socket` 用工作目录下的短绝对路径，例如 `/Volumes/Farm/w/r.sock`。Mac 再添加 `xcode`（`xcodebuild -version` 第一行去掉 `Xcode `）、`developerDir`（`xcode-select -p`）和 `caseInsensitive`（普通 APFS 为 `true`）。将 shell 变量 HOT、COLD、WORK 设为相同的路径。热、冷、工作目录填为对应已挂载卷下的子目录。先用 `df -h` 核实卷所在设备，再执行下列命令。worker 的两个子目录须在同一文件系统，输入靠硬链接物化。 [Buildbarn 硬链接后端](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/cmd/bb_worker/main.go#L293)
+从持久的 `z8-kit/buildbarn` 目录把 `edge-site.json.example` 复制为 `edge-site.json`。填主机名及热、冷、工作目录的绝对路径。`socket` 用工作目录下的短绝对路径，例如 `/Volumes/Farm/w/r.sock`。Mac 再添加 `xcode`（`xcodebuild -version` 第一行去掉 `Xcode `）、`developerDir`（`xcode-select -p`）。原生工作目录的大小写行为由实际 APFS 卷决定。将 shell 变量 HOT、COLD、WORK 设为相同的路径。热、冷、工作目录填为对应已挂载卷下的子目录。先用 `df -h` 核实卷所在设备，再执行下列命令。worker 的两个子目录须在同一文件系统，输入靠硬链接物化。 [Buildbarn 硬链接后端](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/cmd/bb_worker/main.go#L293)
 
 ```
 mkdir -p "$HOT"/{cs,cs-cold,cms}/persistent_state "$COLD/cs" "$WORK"/{build,cache}
@@ -101,18 +101,21 @@ done
 ```
 
 ```bash
-domain="gui/$(id -u)"
-launchctl bootout "$domain/local.z8.farm.cache"
-# 更新 edge-site.json 后继续。
-for n in 1 2 3 4; do
-    diskutil info "/Volumes/FarmCold$n" >/dev/null || exit 1
-    mkdir -p "/Volumes/FarmCold$n/buildbarn/cs" "$HOT/cs-cmr-$n/persistent_state" || exit 1
-done
-out=$(mktemp -d)/agents
-python3 macos-launch-agents.py "$HOME/.local/libexec/z8-buildbarn" "$out"
-cache="$HOME/Library/LaunchAgents/local.z8.farm.cache.plist"
-install -m 0644 "$out/local.z8.farm.cache.plist" "$cache"
-launchctl bootstrap "$domain" "$cache"
+(
+    set -e
+    domain="gui/$(id -u)"
+    launchctl bootout "$domain/local.z8.farm.cache"
+    # 更新 edge-site.json 后继续。
+    for n in 1 2 3 4; do
+        diskutil info "/Volumes/FarmCold$n" >/dev/null
+        mkdir -p "/Volumes/FarmCold$n/buildbarn/cs" "$HOT/cs-cmr-$n/persistent_state"
+    done
+    out=$(mktemp -d)/agents
+    python3 macos-launch-agents.py "$HOME/.local/libexec/z8-buildbarn" "$out"
+    cache="$HOME/Library/LaunchAgents/local.z8.farm.cache.plist"
+    install -m 0644 "$out/local.z8.farm.cache.plist" "$cache"
+    launchctl bootstrap "$domain" "$cache"
+)
 ```
 
 ## 权威冷库重建后的边缘 CMS
@@ -121,14 +124,12 @@ max 的冷 CS 重建后，mini 和 Mac 在重新接入前清空热盘上的 CMS 
 
 ## Buck2 上线
 
-三台机器用同一个 `buck2-shared-worker.buckconfig`，都连接本机 8980。填 `macos_xcode`，与 Mac 的 `xcode` 一致。将 Linux 和 Darwin executor 样例合入项目注册的 execution platform，注册对应 OS、架构和工具链约束。项目应有分别指定默认目标平台的 Linux、Darwin 测试目标，测试框架须支持远程测试。执行一次并在调度日志核两个平台的实际 worker。 [Buck2 执行平台](https://buck2.build/docs/rule_authors/configurations/#custom-execution-platforms) · [Buck2 目标平台](https://buck2.build/docs/concepts/configurations/)
+三台机器按 [Buck2 daemon 配置](README.md#装进-daemon-读取的配置)安装同一份 `buck2-shared-worker.buckconfig`，都连接本机 8980。填 `macos_xcode`，与 Mac 的 `xcode` 一致。将 Linux 和 Darwin executor 样例合入项目注册的 execution platform，注册对应 OS、架构和工具链约束。项目应有分别指定默认目标平台的 Linux、Darwin 测试目标，测试框架须支持远程测试。执行一次并在调度日志核两个平台的实际 worker。 [Buck2 执行平台](https://buck2.build/docs/rule_authors/configurations/#custom-execution-platforms) · [Buck2 目标平台](https://buck2.build/docs/concepts/configurations/)
 
 ```bash
-# 先在 z8-kit/buildbarn 记下配置绝对路径，再 cd 到构建项目。
-farm_cfg="$(pwd -P)/buck2-shared-worker.buckconfig"
-test -r "$farm_cfg" || exit 1
-cd /path/to/project
-buck2 test --remote-only --config-file "$farm_cfg" //app:unit_linux //app:unit_darwin
+# 先在实际构建项目的工作树刷新 daemon，再运行验证。
+buck2 kill
+buck2 test --remote-only //app:unit_linux //app:unit_darwin
 ```
 
 跨机器从同一提交的干净工作树查 AC 命中。max 停机时切项目本机执行平台，使用 `buck2 --isolation-dir local-rebuild build --local-only --no-remote-cache "$target"`。若增加外部 Darwin worker，沿用相同平台属性，仍可加入 max 队列。独立的商用 RE 后端另用一份 buckconfig 和一次调用。源码规则只依赖环境语义和工具链，凭据与地址放运行配置。

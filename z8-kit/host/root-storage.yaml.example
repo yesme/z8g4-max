@@ -1,6 +1,8 @@
 # Import this as autoinstall.yaml in the Xubuntu Desktop installer.
 autoinstall:
   version: 1
+  timezone: Asia/Shanghai
+  shutdown: poweroff
   refresh-installer:
     update: false
   source:
@@ -49,6 +51,16 @@ autoinstall:
         device: fit
         number: 2
         size: 8G
+      - id: fit-tools
+        type: partition
+        device: fit
+        number: 3
+        size: 24G
+      - id: fit-recovery
+        type: partition
+        device: fit
+        number: 4
+        size: 8G
       - id: raid-a
         type: partition
         device: p4618-a
@@ -71,6 +83,8 @@ autoinstall:
         devices: [raid-a, raid-b]
       - {id: esp-fs, type: format, volume: fit-esp, fstype: fat32}
       - {id: boot-fs, type: format, volume: fit-boot, fstype: ext4}
+      - {id: tools-fs, type: format, volume: fit-tools, fstype: ext4, label: Z8TOOLS}
+      - {id: recovery-fs, type: format, volume: fit-recovery, fstype: ext4, label: Z8RECOVERY}
       - id: root-fs
         type: format
         volume: root-raid

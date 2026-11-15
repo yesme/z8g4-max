@@ -1,12 +1,12 @@
 # Z8 G4 拷机与故障演练
 
-按 [上机操作顺序](FIRST-BOOT.md) 确认每轮接线和启动介质，再回本页执行 T1–T5 命令。T1 把 Xubuntu 26.04.1 装到可清空的 SanDisk U 盘，以便重启后继续使用显卡驱动与诊断工具。测试日志保存在 SanDisk，I1 前拔下留存。T3 配 PMem 专用测试卷，T4 查裸盘，HC620 与 P4800X 的数据池在 I4 创建。
+按 [上机操作顺序](FIRST-BOOT.md) 确认每轮接线和启动介质，再回本页执行 T1–T5 命令。T1 把 Xubuntu 26.04.1 装到可清空的 SanDisk U 盘，以便重启后继续使用显卡驱动与诊断工具。测试日志保存在 SanDisk，I1 前拔下留存。T3 配 PMem 专用测试卷，T4 查裸盘，HC620 与 D4800X 的数据池在 I4 创建。
 
 T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞断电。T4 完成后关机接坞，T5 通过后关机断开 V100，再做正式安装。
 
 ## T1. CPU、BIOS 与联网
 
-装两颗 8269CY、散热器、内存风道、12 条 DDR4、槽 4 的 P620 和槽 7 的 AX210。断电时接好 AX210 两根天线与蓝牙内部 USB 线，T1 联网只需要 PCIe Wi-Fi 路径。P4618、P4800X、HC620 和算力坞留到对应阶段。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
+装两颗 8269CY、散热器、内存风道、12 条 DDR4、槽 4 的 P620 和槽 7 的 AX210。断电时接好 AX210 两根天线与蓝牙内部 USB 线，T1 联网只需要 PCIe Wi-Fi 路径。P4618、D4800X、HC620 和算力坞留到对应阶段。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
 
 ### 首次 Live Wi-Fi 与临时验机系统
 
@@ -79,7 +79,7 @@ bash host/run-step.sh t1-avx
 ## T2. 只测 DDR4
 
 1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 和 AX210 分别留在槽 4 和槽 7。
-2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
+2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。I1 装好正式 FIT 后，日后复测可从 [FIT 的 GRUB 菜单](FIT-RECOVERY.md#i1-备好本机救援入口)选 Memtest86+。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
 3. 回 SanDisk 上的临时 Xubuntu，按下面顺序核容量、开温度采样、跑 Linux 压测。日志都留在 `~/z8-burnin`。
 
 ### 开跑前核容量和 NUMA
@@ -148,16 +148,18 @@ bash host/run-step.sh t3-pmem
 2. 用 **fsdax 文件与 devdax 设备分别做持久写入和 CRC32C 回读**。装 Ubuntu 26.04 amd64 的 fio 3.41-2，按 [PMem 工具清单](PMEM.md) 核 `libpmem` / `dev-dax`。按 [正式模型卷](PMEM.md#模型卷) 创建双路条带，在该卷写入并校验一份 400 GiB 测试文件，两个成员各承受约 200 GiB 的写入。对两个约 500 GiB 的 devdax 仅在全新、未 kmem online 且可清空的 namespace 执行，先 8 GiB，再约 448 GiB 或按可用量下调。2 MiB 的块大小与 devdax 对齐一致。切勿把正在用的生产设备代入 fio。
 
 ```bash
-sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=400G \
-    fio --output-format=json --output=pmem-fsdax-verify.json host/pmem-fsdax.fio
-sudo env PMEM_TEST_DAX=/dev/dax0.1 PMEM_TEST_SIZE=8G \
-    fio --output-format=json --output=pmem-devdax0-quick.json host/pmem-devdax.fio
+(
+    set -e
+    logs="$HOME/z8-burnin/pmem"
+    mkdir -p "$logs"
+    findmnt -rn -M /srv/pmem-model -t xfs -O dax=always
+    sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=400G \
+        fio --output-format=json --output="$logs/pmem-fsdax-verify.json" host/pmem-fsdax.fio
+)
+```
+
 ```bash
 logs="$HOME/z8-burnin/pmem"
-mkdir -p "$logs"
-findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
-sudo env PMEM_TEST_FILE=/srv/pmem-model/burnin.bin PMEM_TEST_SIZE=400G \
-    fio --output-format=json --output="$logs/pmem-fsdax-verify.json" host/pmem-fsdax.fio
 sudo env PMEM_TEST_DAX=/dev/REPLACE_FIRST_DAX PMEM_TEST_SIZE=8G \
     fio --output-format=json --output="$logs/pmem-devdax0-quick.json" host/pmem-devdax.fio
 # 用两个实际设备和各轮容量分别运行 devdax job，每轮使用不同的输出文件。
@@ -165,13 +167,15 @@ sudo env PMEM_TEST_DAX=/dev/REPLACE_FIRST_DAX PMEM_TEST_SIZE=8G \
 
 对 fsdax 做跨重启持久性检查。先执行 `sudo sha256sum /srv/pmem-model/burnin.bin > "$HOME/z8-burnin/pmem/burnin.sha256"`，`sync`、干净关机后切 AC。重新启动临时系统后，填回两个 fsdax UUID，执行 `sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"` 挂载，再执行 `sudo sha256sum -c "$HOME/z8-burnin/pmem/burnin.sha256"`。测试后检查 fio `error=0`、校验一致，ipmctl 介质/热日志无新增错误。通过后移除本次 `/srv/pmem-model/burnin.bin`，保留 SanDisk 上的日志与校验值。按 [模型挂载服务](PMEM.md#交给启动服务)完成 T3 的挂载交接。 [fio PMDK 文件引擎](https://github.com/axboe/fio/blob/master/engines/libpmem.c) · [fio devdax 引擎](https://github.com/axboe/fio/blob/master/engines/dev-dax.c)
 
+3. 按 [PMem 转 kmem](PMEM.md#剩余-pmem-转-kmem) 启动到 `memhp_default_state=offline`，两个 devdax 上线为 Movable 后用 `numactl -H` 查两个慢节点。逐节点对实测的慢节点号运行 `numactl --membind=慢节点号 stressapptest -s 7200 -M 131072 -m 12 -W`，用 `numastat -p` 核实际分配，并保存当轮的 PMem 温度和介质错误计数。
+
 4. 保存 [双路 NUMA 拓扑](PMEM.md#核对双路-numa-拓扑)，用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，两路都通过后启用正常页下沉，再做 [kmem 冷启计时](PMEM.md#t3-记录-kmem-冷启动时间)。保存四个 UUID 和两份实填 env 后进入 T4。
 
 ## T4. 存储、网络硬件和无坞基线
 
 ### P4618 链路与双控制器
 
-先装槽 1 的 P4618，从验机介质启动。记录桥接层次、各端口实际协商宽度和两个 NVMe 序列号，然后再装槽 5 的 P4800X。
+先装槽 1 的 P4618，从验机介质启动。记录桥接层次、各端口实际协商宽度和两个 NVMe 序列号，然后再装槽 5 的 D4800X。
 
 ```bash
 sudo apt install pciutils nvme-cli
@@ -184,33 +188,35 @@ sudo nvme list
 
 ### NVMe 健康与 SATA 枚举
 
-按 [SATA 接线与认盘](BIOS.md) 做 1 → 4 → 7 盘冷启动和 SATA7 光驱枚举。七块 HC620 全部在线后，按序列号保存 SATA0–6 对应的整盘 by-id，逐盘查 `ZONED` 和普通区、顺序写区。到此只操作裸设备的识别和测试。P4800X 分区、dm-zoned 格式化、RAIDZ1 建池和 scrub 都在正式安装 I4。
+按 [SATA 接线与认盘](BIOS.md) 做 1 → 4 → 7 盘冷启动和 SATA7 光驱枚举。七块 HC620 全部在线后，按序列号保存 SATA0–6 对应的整盘 by-id，逐盘查 `ZONED` 和普通区、顺序写区。到此只操作裸设备的识别和测试。D4800X 分区、dm-zoned 格式化、RAIDZ1 建池和 scrub 都在正式安装 I4。
 
 ```bash
 sudo apt install nvme-cli smartmontools hdparm fio
 sudo nvme list -v
 lsblk -d -o NAME,MODEL,SERIAL,SIZE,TRAN,ZONED,LOG-SEC,PHY-SEC
-# 核实为两个 3.2 TB P4618 端点及一个 1.5 TB P4800X，换成各自整盘 by-id。
+# 核实为两个 3.2 TB P4618 端点及一个 1.5 TB D4800X，换成各自整盘 by-id。
 ssds=(/dev/disk/by-id/nvme-REPLACE_P4618_A
       /dev/disk/by-id/nvme-REPLACE_P4618_B
-      /dev/disk/by-id/nvme-REPLACE_P4800X)
+      /dev/disk/by-id/nvme-REPLACE_D4800X)
 for disk in "${ssds[@]}"; do
     sudo nvme fw-log "$disk"
     sudo smartctl -x "$disk"
 done
 sudo nvme id-ns -H "${ssds[2]}"
 sudo nvme id-ctrl -H "${ssds[2]}"
+sudo nvme list-subsys "${ssds[2]}"
+sudo blockdev --getsize64 "${ssds[2]}"
 ```
 
-记录 NVMe 的 Critical Warning、Available Spare、Percentage Used、Media and Data Integrity Errors。先按 [固件手册](FIRMWARE.md#t4-p4618p4800x-与-hc620) 判定两个 P4618 端点和 P4800X 是否需要更新。若更新，冷启后重新按序列号核两个 P4618 端点及 P4800X，再做以下测试。在上一个命令块的终端里，沿用已核身份的 `ssds` 数组，逐个只读五分钟。压前后比较 SMART 和温度。若内核报 I/O 错误、重置或介质错误增加，处理后重测。SSD 测完再开始 HDD 长自检。
+记录 NVMe 的 Critical Warning、Available Spare、Percentage Used、Media and Data Integrity Errors。先按 [固件手册](FIRMWARE.md#t4-p4618d4800x-与-hc620) 判定两个 P4618 端点和 D4800X 是否需要更新。若更新，冷启后重新按序列号核两个 P4618 端点及 D4800X，再做以下测试。在上一个命令块的终端里，沿用已核身份的 `ssds` 数组，逐个只读五分钟。压前后比较 SMART 和温度。若内核报 I/O 错误、重置或介质错误增加，处理后重测。SSD 测完再开始 HDD 长自检。
 
 ```bash
 bash host/run-step.sh t4-nvme-read "${ssds[@]}"
 ```
 
-脚本拒绝分区、重复设备和未找到的 by-id，逐个采集 SMART、只读五分钟、再采 SMART。
+脚本拒绝分区、重复设备和未找到的 by-id，逐个采集 SMART、只读五分钟、再采 SMART。SMART 的非零位掩码会留在日志，三个端点仍都会尝试读测，整步最终报非零。
 
-记录 P4800X 当前逻辑扇区大小，I4 新建 GPT 时由命令自动读取该值来计算对齐。
+记录 D4800X 的 T4 整盘型号、序列号、字节数、LBAF、`cmic` 与唯一 NVMe 路径。用设备对应的 `lspci -Dvv -s 实测BDF` 对照负载前后的 Gen3 x4 和 AER，核 `/dev/disk/by-id/nvme-*`。这块盘的 GPT 在 I4 创建，届时再核同根 by-id 下的 `-part1` 到 `-part9`。
 
 ### 七块 HC620 并行慢扫
 
@@ -245,7 +251,7 @@ bash host/run-step.sh t4-inventory
 
 ## T5. 算力坞 V100 与 PCIe 拷机
 
-- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，`nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI` 保存前后。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
+- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
 - 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。然后做 1017 冒烟。
 
 ### T5 末的 1017 推理冒烟
@@ -258,9 +264,11 @@ sudo apt install docker.io git libgomp1 libssl3t64 numactl pipx
 sudo systemctl enable --now docker.service
 export PATH="$HOME/.local/bin:$PATH"
 pipx install huggingface_hub
-findmnt -rn -M /srv/pmem-model -t xfs -O dax=always || exit 1
-mkdir -p "$HOME/z8-smoke"
-cd "$HOME/z8-smoke"
+if findmnt -rn -M /srv/pmem-model -t xfs -O dax=always; then
+    mkdir -p "$HOME/z8-smoke" && cd "$HOME/z8-smoke"
+else
+    printf 'Mount the PMem model volume before continuing.\n' >&2
+fi
 ```
 
 复制 [llama.cpp 主服务](../inference/README.md#llamacpp-v100-主服务) 中的编译、下载和启动命令，先完成下载，四卡硬件测试通过后再启动模型。`CUDA_VISIBLE_DEVICES` 和 `Z8_DRAM_INTERLEAVE` 用 T5、T3 记录的实值。用 `xfs_io -r -c 'fiemap -v' "$DS41_GGUF"` 记录首分片的 extent。另开终端执行下列命令，从仓库 `z8-kit` 根运行。若已切到 Xolotl，用 `--base http://127.0.0.1:8150/v1 --reasoning-effort none` 替换 `--usage`，以 Xolotl 服务日志记录生成速度。`--prompt-file` 可省略，冒烟用探针自带的短提示即可。
@@ -269,7 +277,7 @@ cd "$HOME/z8-smoke"
 bash host/run-step.sh i6-probe --usage --repeats 1 --tools
 ```
 
-记录各卡显存、DDR4 页位置、是否能出字、工具往返和生成速度。显存不足时按推理手册依次降到 4 GiB 专家缓存、单槽，再试 Xolotl。工具往返成功且生成达到 5 tok/s 就进入 I1。2–5 tok/s 仍可进 I1，I6 给一天处理该差距。两种引擎均无法加载或降档后仍低于 2 tok/s 时，在验机窗口内决定算力坞的去留。完成后停服务、关机并断开 V100。
+记录各卡显存、DDR4 页位置、是否能出字、工具往返和生成速度。显存不足时按推理手册依次降到 4 GiB 专家缓存、单槽，再试 Xolotl。工具往返成功且生成达到 5 tok/s 就进入 I1。2–5 tok/s 仍可进 I1，I6 给一天处理该差距。两种引擎均无法加载或降档后仍低于 2 tok/s 时，在验机窗口内决定算力坞的去留。完成后停推理和压测，保留机器空闲一晚（关闭系统自动睡眠）。翌日重新执行 `bash host/run-step.sh t4-inventory` 并启动一次四卡传输，核 AER、Xid、掉卡、SATA link reset、NVMe reset/timeout 与设备数，再关机断开 V100。
 
 ## I7. 正式安装后的整机混合负载
 
@@ -284,4 +292,4 @@ sudo zpool iostat -v z8data 5 > zpool-iostat.log
 sudo journalctl -kf -o short-monotonic > kernel-follow.log
 ```
 
-用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。在开始与结束各执行一次 `bash host/run-step.sh i7-snapshot PID`，用实际推理 PID 替换 `PID`。脚本收集 slice、两路内存、PMem 页迁移和内核错误。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。
+用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。在开始与结束各执行一次 `bash host/run-step.sh i7-snapshot PID`，用实际推理 PID 替换 `PID`。脚本收集 slice、两路内存、PMem 页迁移和内核错误。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。混合负载结束后保留一次空闲过夜，翌日先跑 `bash host/run-step.sh i7-snapshot` 保存开机错误，再短跑构建和推理复查链路、NVMe/SMART 与池状态。

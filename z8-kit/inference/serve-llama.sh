@@ -28,7 +28,11 @@ model=$(realpath -e -- "$DS41_GGUF")
 findmnt -rn -M /srv/pmem-model -t xfs -O dax=always >/dev/null
 : "${Z8_CUDA_RUNTIME:=/srv/work/jackywang/cuda-12.9-runtime}"
 export LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export GGML_CUDA_P2P=1
+case ${Z8_NVLINK_P2P:-0} in
+    0) unset GGML_CUDA_P2P ;;
+    1) export GGML_CUDA_P2P=1 ;;
+    *) echo 'Z8_NVLINK_P2P must be 0 or 1' >&2; exit 2 ;;
+esac
 
 exec numactl --interleave="$Z8_DRAM_INTERLEAVE" "$LLAMA_BUILD/bin/llama-server" \
     --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017 \

@@ -33,12 +33,12 @@ sudo ipmctl show -dimm -firmware
 sudo ipmctl start -diagnostic FW
 ```
 
-## T4. P4618、P4800X 与 HC620
+## T4. P4618、D4800X 与 HC620
 
 先从 SanDisk 上的验机系统启动，用 `sudo nvme list -v`、`sudo nvme id-ctrl /dev/nvmeX`、`sudo nvme fw-log /dev/nvmeX` 及 `smartctl -x` 核型号、固件、序列号和健康。P4618 两个控制器各记录一行。使用实际序列号定位，重启后重新枚举。更新在 I1/I4 创建 RAID、GPT、dm-zoned 和 ZFS 前完成。
 
 - **P4618 6.4 TB**。Solidigm 11 月 2 日列表的通用版是 **VDV10194**。在临时 Xubuntu 装官方 SST 3.2 Linux `.deb`，其指南列明支持 Ubuntu 26.04。运行 `sudo sst show --ssd`，确认两个控制器和 `FirmwareUpdateAvailable`。对于工具明确接受的通用端点，逐个用 `sudo sst load --ssd "$ref"`，`ref` 填已核序列号或工具返回的索引。完成后按工具要求冷启，再确认两个端点和版本。若是 OEM 版，沿该 OEM 的版本分支核公告和包。 [Solidigm 固件列表](https://www.solidigm.com/support-page/drivers-downloads/ka-00099.html) · [SST 3.2 下载](https://www.solidigm.com/support-page/drivers-downloads/ka-00085.html) · [SST 更新操作](https://www.solidigm.com/support-page/maintenance-tools/ka-00052.html)
-- **P4800X 1.5 TB AIC**。Intel 对通用版列出 **E2010650**。旧版且更新工具明确识别该序列号时，用 Intel SSD Firmware Update Tool **4.1.248** 的 ISO 做独立 USB，F9 从该盘启动，按界面选对应 P4800X。若此机无法从该 USB 进入工具，可在 Intel MAS 2.5 支持的环境用 `sudo intelmas show -intelssd`、`sudo intelmas load -intelssd "$index"`。Intel 的 MAS 2.5 Linux 兼容列表未列 Xubuntu 26.04，因此首选独立 ISO。更新后回临时 Xubuntu 核 `nvme fw-log`、`id-ctrl` 与 `id-ns -H`。GPT 和 LBA 处理继续按存储手册。OEM 版本按 OEM 分支。 [Intel 固件列表](https://www.intel.com/content/www/us/en/support/articles/000017245/technologies/memory-and-storage.html) · [Intel 4.1.248 下载](https://www.intel.com/content/www/us/en/download/17903/intel-ssd-firmware-update-tool.html) · [Intel MAS 2.5](https://www.intel.com/content/www/us/en/download/19520/intel-memory-and-storage-tool-cli-command-line-interface.html)
+- **D4800X 1.5 TB U.2**。实物是双口盘，经硬改用单口 Gen3 x4，通过 PCIe 转接卡并加风扇。T4 读取 `nvme id-ctrl` 的完整型号、序列号、固件、`cmic`，以及 `nvme list-subsys` 的路径。对应的固件分支与更新工具支持尚未核实，保留到货固件。该盘不能套用 P4800X AIC 的 E2010650 升级步骤。 [D4800X 规格](https://www.intel.com/content/www/us/en/products/sku/129970/intel-optane-ssd-dc-d4800x-series-1-5tb-2-5in-pcie-2x2-3d-xpoint/specifications.html)
 - **七块 HC620 SATA 4Kn HM-SMR**。用 `smartctl -i` 逐盘记录完整型号、固件和序列号，同时抄标签 OEM P/N。按原固件验 ZAC 与慢扫。只有对应 OEM 明确覆盖完整料号和当前版本、且公告涉及实际故障或兼容性时才更新；更新后先验一块，重查 4Kn、zone 类型和完整长自检。不同 OEM 的版本字符串可以不同。 [WD HC620 SATA OEM 规范](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf)
 - **Samsung FIT 和 SATA7 光驱**。T4 确认光驱枚举，临时插入 FIT 记录型号和 `ID_SERIAL` 后拔下。FIT 的 UEFI 引导及冷启在 [I1.4 装完系统后](INSTALL.md#i14-核验-fit-引导并做救援验证)检查。若厂商工具对实物完整型号列出相关更新，再单独处理。 [Samsung FIT 支持](https://semiconductor.samsung.com/consumer-storage/magician/)
 

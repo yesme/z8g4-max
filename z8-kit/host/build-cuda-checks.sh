@@ -17,17 +17,20 @@ sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
         dpkg-query -W libnccl-dev
         git clone --depth 1 --branch v12.9 https://github.com/NVIDIA/cuda-samples.git
         git clone --depth 1 --branch v2.17.7 https://github.com/NVIDIA/nccl-tests.git
-        git clone --depth 1 https://github.com/wilicc/gpu-burn.git
+        git init gpu-burn
+        git -C gpu-burn fetch --depth=1 https://github.com/wilicc/gpu-burn.git 0d19c94dcb2e9b6858b7586a4c327674cd67113b
+        git -C gpu-burn checkout --detach FETCH_HEAD
         for src in cuda-samples nccl-tests gpu-burn; do
             printf "%s %s\n" "$src" "$(git -C "$src" rev-parse HEAD)"
         done > /out/revisions.txt
-        cmake -S cuda-samples/Samples/5_Domain_Specific/p2pBandwidthLatencyTest -B p2p
+        cmake -S cuda-samples/Samples/5_Domain_Specific/p2pBandwidthLatencyTest -B p2p \
+            -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$PWD/p2p/bin"
         cmake --build p2p -j 8
         make -C nccl-tests -j 8 CUDA_HOME=/usr/local/cuda
         make -C gpu-burn -j 8 COMPUTE=70
         nvcc -O3 -std=c++17 -arch=sm_70 -Xcompiler=-pthread \
             /kit/host/pinned-copy.cu -o /out/pinned-copy
-        cp p2p/p2pBandwidthLatencyTest nccl-tests/build/all_reduce_perf \
+        cp p2p/bin/p2pBandwidthLatencyTest nccl-tests/build/all_reduce_perf \
             gpu-burn/gpu_burn gpu-burn/compare.fatbin /out/
         mkdir -p /out/lib
         for library in libcudart.so.12 libcublas.so.12 libcublasLt.so.12 libnvJitLink.so.12; do

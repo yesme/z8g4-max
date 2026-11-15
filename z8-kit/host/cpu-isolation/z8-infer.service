@@ -2,7 +2,7 @@
 Description=Local DeepSeek with dedicated physical CPU cores
 BindsTo=z8-pmem-model.service
 After=z8-pmem-model.service
-ConditionPathIsExecutable=/home/jackywang/.config/z8-infer/launch.sh
+ConditionFileIsExecutable=/home/jackywang/.config/z8-infer/launch.sh
 
 [Service]
 Type=exec

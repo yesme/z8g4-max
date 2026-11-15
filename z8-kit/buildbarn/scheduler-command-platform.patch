@@ -1,0 +1,65 @@
+diff --git a/cmd/bb_scheduler/main.go b/cmd/bb_scheduler/main.go
+--- a/cmd/bb_scheduler/main.go
++++ b/cmd/bb_scheduler/main.go
+@@ -16,6 +16,7 @@
+ 	"github.com/buildbarn/bb-remote-execution/pkg/proto/remoteworker"
+ 	"github.com/buildbarn/bb-remote-execution/pkg/scheduler"
+ 	"github.com/buildbarn/bb-remote-execution/pkg/scheduler/initialsizeclass"
++	"github.com/buildbarn/bb-remote-execution/pkg/scheduler/platform"
+ 	"github.com/buildbarn/bb-remote-execution/pkg/scheduler/routing"
+ 	auth_configuration "github.com/buildbarn/bb-storage/pkg/auth/configuration"
+ 	blobstore_configuration "github.com/buildbarn/bb-storage/pkg/blobstore/configuration"
+@@ -92,6 +93,10 @@
+ 			)
+ 		}
+ 
++		// Configure the fallback once, before exposing any gRPC endpoints.
++		platform.ActionKeyExtractor = platform.NewCommandFallbackKeyExtractor(
++			platform.ActionKeyExtractor, cas.NewMessageReader[remoteexecution.Command](casInfo.ReadInfo, int(configuration.MaximumMessageSizeBytes)))
++
+ 		// Create an action router that is responsible for analyzing
+ 		// incoming execution requests and determining how they are
+ 		// scheduled.
+diff --git a/pkg/scheduler/platform/command_fallback_key_extractor.go b/pkg/scheduler/platform/command_fallback_key_extractor.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/scheduler/platform/command_fallback_key_extractor.go
+@@ -0,0 +1,38 @@
++package platform
++
++import (
++	"context"
++
++	remoteexecution "github.com/bazelbuild/remote-apis/build/bazel/remote/execution/v2"
++	"github.com/buildbarn/bb-storage/pkg/cas/reader"
++	"github.com/buildbarn/bb-storage/pkg/digest"
++	"github.com/buildbarn/bb-storage/pkg/util"
++)
++
++type commandFallbackKeyExtractor struct {
++	actionExtractor KeyExtractor
++	commands        reader.Reader[*remoteexecution.Command]
++}
++
++// NewCommandFallbackKeyExtractor uses the platform from REv2.2 Action messages
++// when present. Older clients, including Buck2 2026-11-15, require a CAS lookup
++// of Command to obtain the platform.
++func NewCommandFallbackKeyExtractor(actionExtractor KeyExtractor, commands reader.Reader[*remoteexecution.Command]) KeyExtractor {
++	return &commandFallbackKeyExtractor{actionExtractor: actionExtractor, commands: commands}
++}
++
++func (extractor *commandFallbackKeyExtractor) ExtractKey(ctx context.Context, function digest.Function, action *remoteexecution.Action) (Key, error) {
++	if len(action.GetPlatform().GetProperties()) != 0 {
++		return extractor.actionExtractor.ExtractKey(ctx, function, action)
++	}
++
++	commandDigest, err := function.NewDigestFromProto(action.GetCommandDigest())
++	if err != nil {
++		return Key{}, util.StatusWrap(err, "Invalid command digest for legacy execution platform")
++	}
++	command, err := extractor.commands.Read(ctx, commandDigest)
++	if err != nil {
++		return Key{}, util.StatusWrap(err, "Reading command for legacy execution platform")
++	}
++	return NewKey(function.GetInstanceName(), command.GetPlatform())
++}

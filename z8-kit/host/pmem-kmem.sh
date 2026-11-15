@@ -62,6 +62,14 @@ for device in "${devices[@]}"; do
         *) echo "Unexpected driver $driver for $device" >&2; exit 1 ;;
     esac
 done
+if (( ${#pending[@]} )); then
+    auto_online=/sys/devices/system/memory/auto_online_blocks
+    policy=$(<"$auto_online")
+    if [[ "$policy" != offline ]]; then
+        echo "Memory hotplug policy is $policy. Boot with memhp_default_state=offline before converting DAX." >&2
+        exit 1
+    fi
+fi
 for device in "${pending[@]}"; do
     start=$SECONDS
     daxctl reconfigure-device --mode=system-ram "$device"

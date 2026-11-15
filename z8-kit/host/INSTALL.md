@@ -6,13 +6,13 @@
 
 I1 接两只 USB 设备。**三星 Portable SSD T3 250 GB（Ventoy）** 启动 `xubuntu-26.04.1-desktop-amd64.iso` 并存放安装 YAML，**三星 FIT 128 GB** 是引导盘的写入目标。T1–T5 的临时 Xubuntu 和验机记录留在 SanDisk CZ430 128 GB。按 [T5 交接步骤](FIRST-BOOT.md#2-t5-验算力坞) 保存记录并关机，拔下 SanDisk，再接 FIT。
 
-T5 通过后关机断电，断开 V100、七块 HC620 和 P4800X。保留 DDR4、PMem、P620、P4618 和接好天线的 AX210。用 F9 选 Ventoy 的 UEFI 入口，在菜单选现有 Xubuntu 26.04.1 Desktop ISO。ISO 的 SHA-256 可在 Windows 用 `Get-FileHash -Algorithm SHA256` 核对。 [Xubuntu 26.04.1 ISO 与 SHA256SUMS](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/)
+T5 通过后关机断电，断开 V100、七块 HC620 和 D4800X。保留 DDR4、PMem、P620、P4618 和接好天线的 AX210。用 F9 选 Ventoy 的 UEFI 入口，在菜单选现有 Xubuntu 26.04.1 Desktop ISO。ISO 的 SHA-256 可在 Windows 用 `Get-FileHash -Algorithm SHA256` 核对。 [Xubuntu 26.04.1 ISO 与 SHA256SUMS](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/)
 
 正式安装时，图形界面负责导入 YAML 和确认，Subiquity 把明确列出的磁盘动作交给 Curtin 创建阵列和文件系统。桌面安装器的 [#1210](https://github.com/canonical/ubuntu-desktop-provision/issues/1210) 涉及手动分区页找不到预建 md 阵列。I1 直接走自动安装，P4618 在这一阶段由安装器分区和组阵。 [桌面安装器导入配置](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#type-of-installation) · [Subiquity RAID 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/howto/configure-storage.html#raid)
 
 | 设备 | 布局 |
 |---|---|
-| Samsung FIT 128 GB | 1 GiB FAT32 ESP 挂 `/boot/efi`，8 GiB ext4 挂 `/boot`，其余约 110 GiB 留作未分配空间。救援仍用 Ventoy 上的 Xubuntu Live |
+| Samsung FIT 128 GB | 1 GiB FAT32 ESP 挂 `/boot/efi`，8 GiB ext4 挂 `/boot`，p3 24 GiB ext4 `Z8TOOLS`，p4 8 GiB ext4 `Z8RECOVERY`，这两卷平时卸载。其余约 78 GiB 留空 |
 | P4618 两个 3.2 TB NVMe | 各取一个等大的成员分区，md RAID0、metadata 1.2、512 KiB chunk。XFS 挂 `/`，显式 `crc=1,reflink=1` 和 `su=512k,sw=2` |
 
 三星 FIT 128 GB 的 H2testw 实测为读取 **315 MB/s**、写入 **60 MB/s**（用户提供）。
@@ -36,6 +36,31 @@ bash host/run-step.sh i1-disks /dev/disk/by-id/usb-REPLACE_FIT \
 
 `CIDATA` 是 cloud-init 通过卷标自动寻找 NoCloud 配置时用的名字。此处由桌面安装器显式读取 YAML，Ventoy 的大分区可以保留原卷标和文件系统，现有 ISO 与 Memtest 工具继续从原菜单启动。 [Ventoy 的分区布局](https://www.ventoy.net/en/doc_disk_layout.html) · [NoCloud 卷标](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html#source-2-drive-with-labeled-filesystem)
 
+### 挂载 Ventoy 与保存 Live 日志
+
+Ventoy 1.1.18 起可在由它启动的 Linux Live 里重挂载 ISO 所在的数据分区。T1 进入 Live 就试读一次。先在 Thunar 侧栏点 Ventoy 大数据卷，确认能看到 ISO 和仓库副本。若侧栏无法打开，挂载 Ventoy 提供的 `/dev/mapper/VentoyPart`。
+
+```bash
+sudo udevadm trigger
+sudo udevadm settle
+findmnt -S /dev/mapper/VentoyPart -o SOURCE,TARGET,OPTIONS
+# 只有上条无输出且 /dev/mapper/VentoyPart 存在时，才手动挂载。
+sudo mkdir -p /mnt/ventoy
+sudo mount -o rw /dev/mapper/VentoyPart /mnt/ventoy
+```
+
+如果 Thunar 已挂载，把下面 `ventoy` 的值改成 `findmnt` 显示的 `TARGET`。退出 Live 前保存这轮日志。挂载点应显示 `rw`；试读失败时先按 Ventoy 官方 remount 步骤查 mapper，I1 可从另一只可读 U 盘取 YAML。
+
+```bash
+ventoy=/mnt/ventoy
+if findmnt -rn -M "$ventoy" -O rw >/dev/null; then
+    sudo mkdir -p "$ventoy/z8/live-logs" &&
+        sudo cp -n -- "$HOME"/z8-burnin/steps/*.log "$ventoy/z8/live-logs/" && sync
+fi
+```
+
+[Ventoy 1.1.18 的 Linux remount 说明](https://www.ventoy.net/en/doc_linux_remount.html)
+
 ### I1.3 在桌面安装器导入并确认写盘
 
 1. 进 **Try Xubuntu**，从 Xfce 面板连 AX210 Wi-Fi。打开终端，更新 APT 列表并给当前 Live 会话补上 `mdadm`。安装器需要它创建 RAID0，目标系统也需要通过 APT 安装它以便下次开机组阵。样例选择标准 `xubuntu-desktop` 源，APT 找不到可用镜像时中止。 [镜像软件包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Curtin 的存储依赖](https://github.com/canonical/curtin/blob/main/curtin/block/deps.py) · [安装源和 APT 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#source)
@@ -46,12 +71,11 @@ bash host/run-step.sh i1-disks /dev/disk/by-id/usb-REPLACE_FIT \
    lsblk -o NAME,PATH,SIZE,MODEL,FSTYPE,LABEL,MOUNTPOINTS
    ```
 
-2. 在 Thunar 打开 Ventoy 大数据分区，把 `z8/autoinstall.yaml` 复制到 Live 用户的家目录，便于文件选择器读取。若 Thunar 未列出该分区，先从上一步 `lsblk` 的 `MOUNTPOINTS` 查挂载路径，再从该路径复制。只有该分区尚未挂载时才执行以下命令，将占位符替换为从 `lsblk` 确认的 **Ventoy 大数据分区**路径。
+2. 按[挂载步骤](#挂载-ventoy-与保存-live-日志)打开 Ventoy 大数据分区。用实际 `TARGET` 设置 `ventoy`，再把 YAML 复制到 Live 用户的家目录。
 
    ```bash
-   sudo mkdir -p /mnt/ventoy
-   sudo mount -o ro /dev/REPLACE_VENTOY_PARTITION /mnt/ventoy
-   install -m 0600 /mnt/ventoy/z8/autoinstall.yaml "$HOME/autoinstall.yaml"
+   ventoy=/mnt/ventoy
+   install -m 0600 "$ventoy/z8/autoinstall.yaml" "$HOME/autoinstall.yaml"
    ```
 
 3. 在桌面打开 **Install Xubuntu 26.04.1 LTS**。选择 **Type of installation → Automated with autoinstall file → Select file…**，选家目录里的 `autoinstall.yaml`，点 **Import**。安装器会把文件写入 Live 环境的 `/autoinstall.yaml` 并重启后端。样例的 `early-commands` 会在写盘前等待，导入页可能暂时一直转圈。此时 `Alt+Tab` 回到 Live 终端。 [桌面导入源码](https://github.com/canonical/ubuntu-desktop-provision/blob/ubuntu/26.04/apps/ubuntu_bootstrap/lib/services/autoinstall_service.dart) · [Subiquity 的 early-commands](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#early-commands)
@@ -63,9 +87,9 @@ bash host/run-step.sh i1-disks /dev/disk/by-id/usb-REPLACE_FIT \
        /dev/disk/by-id/nvme-REPLACE_P4618_A /dev/disk/by-id/nvme-REPLACE_P4618_B --imported
    ```
 
-5. 看到 `Imported YAML matches`，三个 `ID_SERIAL` 与 T4 一致，根卷用两个 P4618 端点且 ESP、`/boot` 都在 FIT，才运行 `sudo touch /run/z8-storage-confirmed`。回到图形界面，在 **Ready to install** 再确认后点 **Install**。这会重建 FIT 和两个 P4618 端点的分区表。若导入报错或身份不一致，停在这一步检查。 [按序列号匹配磁盘](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#disk-selection-extensions) · [桌面安装器的最终确认](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#ready-to-install)
+5. 看到 `Imported YAML matches`，三个 `ID_SERIAL` 与 T4 一致，根卷用两个 P4618 端点且 FIT 有 EFI、`/boot`、`Z8TOOLS`、`Z8RECOVERY` 四分区，才运行 `sudo touch /run/z8-storage-confirmed`。回到图形界面，在 **Ready to install** 再确认后点 **Install**。这会重建 FIT 和两个 P4618 端点的分区表。若导入报错或身份不一致，停在这一步检查。需要重新导入时先重启到新的 Live 会话，再从 I1.3 开始。这样会重新运行 early-commands 等待点。 [按序列号匹配磁盘](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#disk-selection-extensions) · [桌面安装器的最终确认](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#ready-to-install)
 
-6. 安装完成后按提示拔下 **Ventoy**，FIT 留在原 USB 口。重启直接进入装好的 Xubuntu Desktop。必要时从 F9 选择指向 FIT 的 UEFI 引导项。用 Xfce 网络图标重新连 Wi-Fi，再执行 I1.4。
+6. 安装配置设了 `shutdown: poweroff`。安装器完成并关机后拔下 **Ventoy**，FIT 留在原 USB 口。再开机进入装好的 Xubuntu Desktop。必要时从 F9 选择指向 FIT 的 UEFI 引导项。用 Xfce 网络图标重新连 Wi-Fi，再执行 I1.4。
 
 ### I1.4 核验 FIT 引导并做救援验证
 
@@ -98,15 +122,17 @@ sudo install -d /etc/dracut.conf.d
 printf '%s\n' 'add_dracutmodules+=" mdraid "' 'force_drivers+=" nvme raid0 xfs "' | \
     sudo tee /etc/dracut.conf.d/51-z8-root.conf
 abi=$(uname -r)
-sudo dracut --force "/boot/initrd.img-$abi" "$abi"
-sudo update-grub
+backup="/boot/z8-initrd-$abi.pre-dracut"
+if sudo test -s "$backup" || sudo cp -a -- "/boot/initrd.img-$abi" "$backup"; then
+    sudo dracut --force "/boot/initrd.img-$abi" "$abi" && sudo update-grub
+fi
 sudo lsinitrd -m "/boot/initrd.img-$abi" | grep -w mdraid
 sudo lsinitrd "/boot/initrd.img-$abi" | grep -E '(^|/)(mdadm|raid0\.ko|xfs\.ko|nvme\.ko)'
 ```
 
-正常完成本节设置后可执行 `bash host/run-step.sh i1-boot`，一次保存当前 UEFI、FIT 分区、md 阵列、XFS 和当前 initramfs 的模块列表。第一次验证后再关机冷启一次，确认固件仍选中 FIT、三个挂载点一致、两个 md 成员齐全。若首启落到 initramfs，从 Ventoy 启动 Xubuntu Live 并执行下一段的组装检查。正常冷启也做一次救援演练。
+正常完成本节设置后可执行 `bash host/run-step.sh i1-boot`，一次保存当前 UEFI、FIT 分区、md 阵列、XFS 和当前 initramfs 的模块列表。第一次验证后再关机冷启一次，确认固件仍选中 FIT、三个常驻挂载点一致、两个 md 成员齐全。随后按 [FIT 救援手册](FIT-RECOVERY.md#i1-备好本机救援入口)装 Memtest86+、复制工具和 ISO、加入 GRUB 菜单，完成首份备份和外部副本。若首次引导即失败，从 Ventoy 启动 Xubuntu Live 做下方组装检查。FIT 救援菜单布置后也从 FIT 启动 Live 做一次同样的只读演练。
 
-留存 RAID、GPT、EFI、fstab、`mdadm.conf`、驱动和软件包清单。救援演练从 Ventoy UEFI 启动同一份 Xubuntu Desktop ISO，选择 Try Xubuntu。根据安装记录核对两个 P4618 成员与 FIT 的现有 UUID。确认目标 md 未自动组装时，才用明确列出的两个成员只读组装。若 Live 缺少工具，先联网装 `mdadm` 和 `xfsprogs`。核对 `mdadm --detail` 后只读挂载根卷。已自动组装时复用该 md 设备。以下占位符来自 I1 实测记录，不能照抄设备名。
+留存 RAID、GPT、EFI、fstab、`mdadm.conf`、驱动和软件包清单。首启失败时从 Ventoy UEFI 启动同一份 Xubuntu Desktop ISO 并选择 Try Xubuntu。FIT 救援菜单配置完成后，可在 FIT 的 GRUB 菜单进入 Live 并执行同样的只读检查。根据安装记录核对两个 P4618 成员与 FIT 的现有 UUID。确认目标 md 未自动组装时，才用明确列出的两个成员只读组装。若 Live 缺少工具，按 [从 Live 离线装 mdadm](FIT-RECOVERY.md#从-live-离线装-mdadm)处理。`xfsprogs` 可从工具盘 `debs/` 补上。核对 `mdadm --detail` 后只读挂载根卷。已自动组装时复用该 md 设备。若更新后 initrd 损坏，按本页维修挂载方式先独立挂上 FIT 的 `/boot`，将 `z8-initrd-<ABI>.pre-dracut` 复制回对应的 `initrd.img-<ABI>`。以下占位符来自 I1 实测记录，不能照抄设备名。
 
 ```bash
 lsblk -f
@@ -220,10 +246,10 @@ old_entry='REPLACE_SUBMENU_ID>REPLACE_OLD_KERNEL_MENUENTRY_ID'
 sudo grub-set-default "$old_entry"
 sudo grub-editenv list
 dpkg-query -W "linux-image-$old_abi" "linux-modules-$old_abi" \
-    "linux-modules-extra-$old_abi" "linux-modules-nvidia-580-$old_abi"
+    "linux-main-modules-zfs-$old_abi" "linux-modules-nvidia-580-$old_abi"
 # 把上面确实已安装的四项标为 manual，防止自动清理回退 ABI。
 sudo apt-mark manual "linux-image-$old_abi" "linux-modules-$old_abi" \
-    "linux-modules-extra-$old_abi" "linux-modules-nvidia-580-$old_abi"
+    "linux-main-modules-zfs-$old_abi" "linux-modules-nvidia-580-$old_abi"
 sudo apt update
 sudo apt-get -s dist-upgrade
 # 把新 ABI 填作 7.0.0-N-generic，包含末尾的 -generic。
@@ -241,7 +267,7 @@ sudo grub-editenv list
 sudo systemctl reboot
 ```
 
-新内核起来后，核 `uname -r`、`grub-editenv list` 中 `next_entry` 已消费，并从客户端验证 Wi-Fi SSH。再查 `nvidia-smi -L`、`zpool status -x z8data`、`sudo dmsetup status --target zoned` 的七个成员、模型卷的实际挂载点、`sudo daxctl list` 两路 online 和 `sudo journalctl -k -b -p err`。成功才 `sudo grub-set-default "$new_entry"`。若试启失联，机旁优先用控制台重启或从 GRUB 选择旧项。先在本机验证一次性项确实被消费，才依赖下一次重启回旧项。
+新内核起来后，核 `uname -r`、`grub-editenv list` 中 `next_entry` 已消费，并从客户端验证 Wi-Fi SSH。再查 `nvidia-smi -L`、`zpool status -x z8data`、`sudo dmsetup status --target zoned` 的七个成员、模型卷的实际挂载点、`sudo daxctl list` 两路 online 和 `sudo journalctl -k -b -p err`。成功才 `sudo grub-set-default "$new_entry"`，并执行 `sudo z8-recovery-backup --refresh-boot`，再[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。若试启失联，机旁优先用控制台重启或从 GRUB 选择旧项。先在本机验证一次性项确实被消费，才依赖下一次重启回旧项。
 
 ## 算力坞验收
 
@@ -253,7 +279,7 @@ bash host/run-step.sh t5-cuda-build
 
 脚本安装 Docker、在同一 CUDA 镜像构建 P2P、NCCL、GPU Burn 和 pinned-copy，保存实际源码提交、可执行文件和用户态共享库。
 
-I3 在正式系统复测时，按[只读挂载 SanDisk 的方法](PMEM.md#i4-在正式系统复用-pmem)挂到 `/mnt/z8-burnin-usb`，再运行下面的命令。若临时系统用了其他用户名，把 `src` 路径里的 `jackywang` 换掉。复制成功后卸载并拔下 SanDisk。
+I3 在正式系统复测时，按[只读挂载 SanDisk 的方法](PMEM.md#i4-在正式系统复用-pmem)挂到 `/mnt/z8-burnin-usb`，再运行下面的命令。若临时系统用了其他用户名，把 `src` 路径里的 `jackywang` 换掉。复制成功后卸载并拔下 SanDisk。I3 快速复测通过后，将 `cuda-check/` 再写一份到 [FIT 工具盘](FIT-RECOVERY.md#离线工具和-i3-cuda-工具)。
 
 ```bash
 src=/mnt/z8-burnin-usb/home/jackywang/z8-burnin/cuda-check
@@ -264,12 +290,12 @@ sudo test -x "$src/all_reduce_perf" &&
     sudo umount /mnt/z8-burnin-usb
 ```
 
-T5 和 I3 都在宿主从 `z8-kit` 根执行以下命令。日志里的 `ldd` 应没有 `not found`，`libcuda.so.1` 应来自宿主的 R580。按 [PCIe P2P 的 IOMMU 设置](BIOS.md#接坞后的-pcie-p2p)区分 NVLink 与 PCIe，再用四张 V100 的实际 UUID 运行。T5 首轮 GPU Burn 和 [pinned DMA](PMEM.md#四卡-pinned-dma-验收)也用这个目录的产物。
+T5 和 I3 都在宿主从 `z8-kit` 根执行以下命令。日志里的 `ldd` 应没有 `not found`，`libcuda.so.1` 应来自宿主的 R580。用正式启动默认的内核参数测试，再填四张 V100 的实际 UUID。`intel_iommu=off` 只用于 [PCIe 路径排查](BIOS.md#接坞后的-pcie-p2p)。T5 首轮 GPU Burn 和 [pinned DMA](PMEM.md#四卡-pinned-dma-验收)也用这个目录的产物。
 
 ```bash
 bash host/run-step.sh i3-cuda GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3
 ```
 
-脚本记录驱动、拓扑与动态库来源，然后运行 P2P 和四卡 NCCL all-reduce。
+脚本记录 NVLink 能力矩阵、链路状态和动态库来源，运行 P2P 带宽测试、四卡和六个两卡组合的 NCCL all-reduce 校验。四卡全互联的验收要求六对均显示 NVLink 可用且六对校验错误数为 0。某对无 NVLink 时保存实际拓扑，推理保持 `Z8_NVLINK_P2P=0`。
 
-记录每对 P2P 可达性与带宽、all-reduce 错误数和带宽。分别测试两张同 socket 卡与跨 socket 卡。用 CUDA H→D/D→H 负载运行时从另一终端读 `nvidia-smi -q -d PCI`，确认实际 Gen3 x8。加载四卡与 CPU 后检查 `journalctl -k -b` 的新增 Xid、AER、ECC；保留日志和各卡温度、功耗。 [NVIDIA CUDA 样例](https://github.com/NVIDIA/cuda-samples) · [NVIDIA nccl-tests](https://github.com/NVIDIA/nccl-tests)
+记录每对 P2P 可达性与带宽、all-reduce 错误数和带宽。分别测试两张同 socket 卡与跨 socket 卡。用 CUDA H→D/D→H 负载运行时从另一终端执行 `nvidia-smi --query-gpu=uuid,pci.bus_id,pcie.link.gen.current,pcie.link.width.current --format=csv`，确认实际 Gen3 x8。加载四卡与 CPU 后检查 `journalctl -k -b` 的新增 Xid、AER、ECC；保留日志和各卡温度、功耗。 [NVIDIA CUDA 样例](https://github.com/NVIDIA/cuda-samples) · [NVIDIA nccl-tests](https://github.com/NVIDIA/nccl-tests)

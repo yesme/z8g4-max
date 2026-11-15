@@ -21,13 +21,15 @@ base + {
         buildDirectoryPath: workerRoot + '/build',
         cacheDirectoryPath: workerRoot + '/cache',
         maximumCacheSizeBytes: (if darwin then 16 else 64) * 1024 * 1024 * 1024,
-        caseInsensitive: darwin && edge.caseInsensitive,
       },
       runners: [
         runner + {
           endpoint: { address: 'unix://' + (if darwin then edge.socket else '/worker/r.sock') },
           concurrency: if darwin then 4 else 16,
           workerId: { hostname: edge.hostname },
+          environmentVariables: if darwin then {
+            PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin',
+          } else runner.environmentVariables,
           platform: if darwin then {
             properties: [
               { name: 'OSFamily', value: 'macos' },

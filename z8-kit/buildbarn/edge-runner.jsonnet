@@ -4,7 +4,6 @@ local darwin = std.objectHas(edge, 'xcode');
 
 base + {
   buildDirectoryPath: if darwin then edge.work + '/build' else '/worker/build',
-  setTmpdirEnvironmentVariable: true,
   grpcServers: [{
     listenPaths: [if darwin then edge.socket else '/worker/r.sock'],
     authenticationPolicy: { allow: {} },

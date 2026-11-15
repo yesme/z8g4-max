@@ -12,6 +12,7 @@ cat > "$tmp/bin/findmnt" <<'EOF'
 EOF
 cat > "$tmp/bin/numactl" <<'EOF'
 #!/usr/bin/env bash
+printf 'p2p=%s ' "${GGML_CUDA_P2P:-unset}"
 printf '%s ' "$@"
 EOF
 chmod +x "$tmp"/bin/*
@@ -19,9 +20,11 @@ export PATH="$tmp/bin:$PATH"
 export LLAMA_BUILD="$tmp/build" DS41_GGUF="$tmp/model/model.gguf"
 export CUDA_VISIBLE_DEVICES=GPU-0,GPU-1,GPU-2,GPU-3 Z8_DRAM_INTERLEAVE=0,1
 
-default=$(bash "$tmp/serve.sh")
+default=$(GGML_CUDA_P2P=1 bash "$tmp/serve.sh")
+[[ "$default" == 'p2p=unset '* ]]
 [[ "$default" == *' --cache-prompt '* && "$default" == *' --parallel 2 --ctx-size 16384 '* ]]
-single=$(CACHE_PROMPT=0 SLOTS=1 SLOT_CTX=16384 Z8_INFER_THREADS=8 bash "$tmp/serve.sh")
+single=$(CACHE_PROMPT=0 SLOTS=1 SLOT_CTX=16384 Z8_INFER_THREADS=8 Z8_NVLINK_P2P=1 bash "$tmp/serve.sh")
+[[ "$single" == 'p2p=1 '* ]]
 [[ "$single" == *' --no-cache-prompt '* && "$single" == *' --parallel 1 --ctx-size 16384 '* ]]
 [[ "$single" == *' --threads 8 --threads-batch 8 '* ]]
 if SLOTS=2 SLOT_CTX=16384 bash "$tmp/serve.sh" > "$tmp/invalid.log" 2>&1; then

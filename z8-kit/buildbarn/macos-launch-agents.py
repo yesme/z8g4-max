@@ -29,9 +29,6 @@ def main():
         value = site.get(field)
         if not isinstance(value, str) or not value.strip():
             parser.error(f"set {field} to a non-empty string in edge-site.json")
-    if not isinstance(site.get("caseInsensitive"), bool):
-        parser.error("set caseInsensitive to true or false in edge-site.json")
-
     work = Path(site["work"])
     socket = Path(site["socket"])
     if not work.is_absolute() or socket.parent != work:

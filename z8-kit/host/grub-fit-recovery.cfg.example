@@ -1,0 +1,11 @@
+menuentry 'Z8 recovery - Xubuntu 26.04.1 Live on FIT' --id z8-fit-live {
+    insmod part_gpt
+    insmod ext2
+    insmod loopback
+    insmod iso9660
+    search --no-floppy --label --set=z8tools Z8TOOLS
+    set isofile=/iso/xubuntu-26.04.1-desktop-amd64.iso
+    loopback loop ($z8tools)$isofile
+    linux (loop)/casper/vmlinuz boot=casper iso-scan/filename=$isofile ---
+    initrd (loop)/casper/initrd
+}

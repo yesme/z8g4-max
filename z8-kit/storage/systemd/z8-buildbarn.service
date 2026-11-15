@@ -14,6 +14,7 @@ Environment=BB_DATA_DIR=/srv/buildbarn/tiered
 ExecStartPre=/usr/local/sbin/z8-buildbarn-check
 ExecStart=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml up --abort-on-container-exit cache
 ExecStop=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml stop --timeout 30 cache
+SuccessExitStatus=143 SIGTERM
 TimeoutStopSec=60
 
 [Install]

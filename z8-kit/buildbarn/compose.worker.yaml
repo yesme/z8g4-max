@@ -1,6 +1,10 @@
 services:
   scheduler:
-    image: ghcr.io/buildbarn/bb-scheduler:20261102T094740Z-c9ba98c@sha256:50789bdae47ee83905c059f88adbf22c9253139883723f76fbed27def8b0c566
+    image: z8/bb-scheduler:c9ba98c-command-platform
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
     command: ["/config/shared-scheduler.jsonnet"]
     ports:
       - "127.0.0.1:8983:8983"

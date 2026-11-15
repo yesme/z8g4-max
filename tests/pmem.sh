@@ -10,7 +10,9 @@ export Z8_DAX0_UUID=00000000-0000-0000-0000-000000000001
 export Z8_DAX1_UUID=00000000-0000-0000-0000-000000000002
 fs0=00000000-0000-0000-0000-000000000003
 fs1=00000000-0000-0000-0000-000000000004
-mkdir -p "$tmp"/{bin,dev,sys/module/memory_hotplug/parameters,sys/kernel/mm/numa}
+mkdir -p "$tmp"/{bin,dev,sys/module/memory_hotplug/parameters,sys/kernel/mm/numa,sys/devices/system/memory}
+policy="$tmp/sys/devices/system/memory/auto_online_blocks"
+printf 'online\n' > "$policy"
 
 # Only the disposable script copies know the fixture paths.
 for script in pmem-device-wait pmem-kmem pmem-dax-stripe; do
@@ -63,6 +65,10 @@ case "$1" in
         cat "$Z8_FIXTURE/$4.json"
         ;;
     reconfigure-device|online-memory)
+        if [[ $1 == reconfigure-device && $(<"$Z8_FIXTURE/sys/devices/system/memory/auto_online_blocks") == online* ]]; then
+            echo 'daxctl rejected automatic onlining' >&2
+            exit 1
+        fi
         device=${@: -1}
         for dax in dax0.0 dax1.0; do
             test "$(cat "$Z8_FIXTURE/sys/bus/dax/devices/$dax/memmap_on_memory")" = 1
@@ -161,6 +167,10 @@ expect_failure 'has no DAX driver yet' bash "$tmp/pmem-kmem.sh"
 test ! -e "$tmp/actions"
 test "$(cat "$tmp/sys/kernel/mm/numa/demotion_enabled")" = 0
 printf 'force\n' > "$param"
+expect_failure 'Boot with memhp_default_state=offline' env Z8_PMEM_DEVICE_WAIT=2 bash "$tmp/pmem-kmem.sh"
+test ! -e "$tmp/actions"
+test "$(cat "$tmp/sys/kernel/mm/numa/demotion_enabled")" = 0
+printf 'offline\n' > "$policy"
 Z8_PMEM_DEVICE_WAIT=2 bash "$tmp/pmem-kmem.sh"
 diff -u <(printf 'reconfigure-device dax0.0\nreconfigure-device dax1.0\n') "$tmp/actions"
 test "$(cat "$tmp/sys/kernel/mm/numa/demotion_enabled")" = 1

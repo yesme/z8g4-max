@@ -31,8 +31,16 @@ if tmux has-session -t "=$session" 2>/dev/null; then
     fi
     exec tmux attach-session -t "=$session"
 fi
+session_env=()
+case "$cli" in
+    omp|pi|dsh)
+        if [[ -n ${DEEPSEEK_API_KEY:-} ]]; then
+            session_env=(-e "DEEPSEEK_API_KEY=$DEEPSEEK_API_KEY")
+        fi
+        ;;
+esac
 if [[ -n ${TMUX:-} ]]; then
-    tmux new-session -d -s "$session" -c "$worktree" env -- "$cli_path" "$@"
+    tmux new-session -d "${session_env[@]}" -s "$session" -c "$worktree" env -- "$cli_path" "$@"
     exec tmux switch-client -t "=$session"
 fi
-exec tmux new-session -s "$session" -c "$worktree" env -- "$cli_path" "$@"
+exec tmux new-session "${session_env[@]}" -s "$session" -c "$worktree" env -- "$cli_path" "$@"

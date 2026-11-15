@@ -21,6 +21,9 @@ assert_index_size() {
 }
 assert_index_size "$tmp/config/tiered-cache.rendered.json" '["readCaching","fast","local"]' 8
 assert_index_size "$tmp/config/edge-cache.rendered.json" '["readCaching","fast","local"]' 4
+jq -e '.buildDirectories[0] | (.native | has("caseInsensitive") | not)
+    and (.runners[0].environmentVariables.PATH | contains("/usr/bin"))' \
+    "$tmp/config/edge-worker.rendered.json" >/dev/null
 
 jq -e '
     .contentAddressableStorageServer.contentAddressableStorage.chunkStorage.readCaching.slow.local
@@ -30,15 +33,18 @@ jq -e '
 ' "$tmp/config/tiered-cache.rendered.json" >/dev/null
 
 jq '. + {xcode:"26.1", developerDir:"/Applications/Xcode.app/Contents/Developer",
-    caseInsensitive:true, coldShards:["/Volumes/Cold1","/Volumes/Cold2","/Volumes/Cold3","/Volumes/Cold4"]}' \
+    coldShards:["/Volumes/Cold1","/Volumes/Cold2","/Volumes/Cold3","/Volumes/Cold4"]}' \
     "$tmp/config/edge-site.json" > "$tmp/edge-darwin.json"
 mv "$tmp/edge-darwin.json" "$tmp/config/edge-site.json"
 for source in "$tmp"/config/edge-*.jsonnet; do
     jsonnet "$source" > "${source%.jsonnet}.rendered.json"
 done
 assert_index_size "$tmp/config/edge-cache.rendered.json" '["readCaching","fast","local"]' 4
+jq -e '.buildDirectories[0] | (.native | has("caseInsensitive") | not)
+    and (.runners[0].environmentVariables.PATH | contains("/opt/homebrew/bin"))' \
+    "$tmp/config/edge-worker.rendered.json" >/dev/null
 
-# The XFS fallback may be started without the P4800X index or its geometry.
+# The XFS fallback may be started without the D4800X index or its geometry.
 rm "$tmp/cold-index/cold-layout.json"
 jsonnet "$tmp/config/fallback-farm.jsonnet" > "$tmp/config/fallback-farm.rendered.json"
 assert_index_size "$tmp/config/fallback-farm.rendered.json" '["local"]' 1

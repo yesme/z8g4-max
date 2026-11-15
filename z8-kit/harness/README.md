@@ -28,7 +28,14 @@ DeepSeek 官方 API 的模型 ID 是 `deepseek-flash`，当前服务版本是 V4
 用 `jackywang` 在工作站上安装。OMP 可用 Bun 安装，Pi 和 DSH 用用户态 Node/npm。用 Node 24.9 或更高，先看各包实际声明的版本约束。将用户态 bin 目录加入登录环境，验证三个命令的版本。 [OMP 安装](https://github.com/can1357/oh-my-pi#installation) · [Pi 安装](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#installation) · [DSH CLI](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/README.md)
 
 ```bash
+# 如果还没有 Node 24 和 Bun，先以普通用户安装。已有的话从版本检查开始。
+git clone --branch v0.40.3 --depth 1 https://github.com/nvm-sh/nvm.git "$HOME/.nvm"
+. "$HOME/.nvm/nvm.sh"
+nvm install 24
+curl -fsSL https://bun.sh/install | bash
+export PATH="$HOME/.bun/bin:$PATH"
 node --version
+bun --version
 npm view @earendil-works/pi-coding-agent version engines
 npm view @deepseek-ai/dsh version engines
 bun install -g @oh-my-pi/pi-coding-agent
@@ -38,7 +45,7 @@ pi --version
 dsh --version
 ```
 
-在实际运行 CLI 的 SSH shell 或 tmux pane 内读入密钥。凭证通过环境变量交给进程，命令历史和配置样例只记录变量名。每条启动命令在各自 worktree 执行。
+在启动 CLI 的交互 SSH shell 内读入密钥。通过 `agent-session.sh` 新建 OMP、Pi 或 DSH 会话时，脚本把密钥传给该新会话，即使 tmux 服务已在运行。凭证通过环境变量交给进程，命令历史和配置样例只记录变量名。每条启动命令在各自 worktree 执行。
 
 ```bash
 read -rsp 'DeepSeek API key: ' DEEPSEEK_API_KEY
@@ -56,7 +63,7 @@ pi --model deepseek/deepseek-flash
 dsh --profile headless '读取 README.md，用两句话说明项目用途。'
 ```
 
-若 DSH 已有自定义 profile 或保存了其他模型选择，先在实际 profile 查 `agent-default-model`，在新会话前确认 `provider: deepseek-official` 与 `model: deepseek-flash`。已保存的 DSH provider 凭证和自定义 endpoint 也要核对。三个 CLI 都先用合成工单验证读文件、一次工具调用和工具回传。已有 tmux 会话可直接进入对应 pane 再读 key。 [Pi 环境变量](https://pi.dev/docs/latest/providers) · [DSH 模型设置](https://deepseek-harness.github.io/deepseek-harness/en/guide/providers)
+若 DSH 已有自定义 profile 或保存了其他模型选择，先在实际 profile 查 `agent-default-model`，在新会话前确认 `provider: deepseek-official` 与 `model: deepseek-flash`。已保存的 DSH provider 凭证和自定义 endpoint 也要核对。三个 CLI 都先用合成工单验证读文件、一次工具调用和工具回传。已启动的 CLI 不会因外部 shell 重读密钥而更新，换 key 时结束该 CLI，再用新变量启动会话。 [Pi 环境变量](https://pi.dev/docs/latest/providers) · [DSH 模型设置](https://deepseek-harness.github.io/deepseek-harness/en/guide/providers)
 
 ### 本地 1017 验机入口
 

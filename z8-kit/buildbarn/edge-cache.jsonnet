@@ -32,6 +32,7 @@ base + {
   executeAuthorizer: { instanceNamePrefix: { allowedInstanceNamePrefixes: ['hardlinking'] } },
   contentAddressableStorageServer+: {
     contentAddressableStorage+: {
+      cdcParameterCache: (import 'shared-worker.jsonnet').blobstore.contentAddressableStorage.cdcParameterCache,
       chunkStorage: readCache(
         readCache(upstream, cold),
         disk(edge.hot + '/cs', edge.hot + '/cs/blocks', 256 * GiB, 4 * GiB, 3),

@@ -45,19 +45,32 @@ kernel_events() {
 }
 
 ras() {
+    local status=0
     sudo ras-mc-ctl --status || true
-    sudo ras-mc-ctl --errors
+    sudo ras-mc-ctl --errors || status=$?
     sudo ras-mc-ctl --error-count || printf "ECC counters unavailable; check EDAC and the kernel log.\n"
+    return "$status"
 }
 
 stress_with_ras() {
-    local result=0
+    local result=0 interrupted=0
     sudo systemctl enable --now rasdaemon
+    printf '\n[RAS before stress]\n'
     ras
+    # Keep collecting evidence when the terminal interrupts the load.
+    trap 'interrupted=1' INT
     "$@" || result=$?
-    ras
+    trap - INT
+    if (( interrupted )); then result=130; fi
+    printf '\n[RAS after stress]\n'
+    if ! ras && (( result == 0 )); then result=1; fi
     kernel_events
     return "$result"
+}
+
+gpu_snapshot() {
+    nvidia-smi -q -d ECC,POWER,TEMPERATURE,PAGE_RETIREMENT
+    nvidia-smi --query-gpu=uuid,pci.bus_id,pcie.link.gen.current,pcie.link.width.current --format=csv
 }
 
 driver_status() {
@@ -84,6 +97,13 @@ select_v100s() {
     export CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES="$requested"
     cd -- "$HOME/z8-burnin/cuda-check"
     export LD_LIBRARY_PATH="$PWD/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+}
+
+smart_snapshot() {
+    local status=0
+    sudo smartctl -x "$1" || status=$?
+    if (( status )); then printf 'smartctl status for %s: %s (bitmask)\n' "$1" "$status" >&2; fi
+    return "$status"
 }
 
 check_disk_ids() {
@@ -185,14 +205,15 @@ run_step() {
             sudo ras-mc-ctl --errors
             ;;
         t4-nvme-read)
-            [[ $# == 3 ]] || fail 'Supply both P4618 namespaces and the P4800X by-id.'
+            [[ $# == 3 ]] || fail 'Supply both P4618 namespaces and the D4800X by-id.'
             check_disk_ids nvme- "$@"
             for disk in "$@"; do
-                sudo smartctl -x "$disk"
+                smart_snapshot "$disk" || result=1
                 sudo fio --readonly --name=nvme-read --filename="$disk" --rw=read --bs=1M \
-                    --ioengine=libaio --direct=1 --iodepth=16 --time_based --runtime=300 --group_reporting
-                sudo smartctl -x "$disk"
+                    --ioengine=libaio --direct=1 --iodepth=16 --time_based --runtime=300 --group_reporting || result=1
+                smart_snapshot "$disk" || result=1
             done
+            return "$result"
             ;;
         t4-hdd-status|t4-hdd-start)
             [[ $# == 7 ]] || fail 'Supply seven confirmed SATA by-ids in SATA0–6 order.'
@@ -205,7 +226,7 @@ run_step() {
             if [[ "$step" == t4-hdd-start ]]; then
                 for disk in "$@"; do sudo smartctl -t long "$disk" || result=1; done
             else
-                for disk in "$@"; do sudo smartctl -x "$disk" || result=1; done
+                for disk in "$@"; do smart_snapshot "$disk" || result=1; done
             fi
             return "$result"
             ;;
@@ -215,9 +236,9 @@ run_step() {
             count=1; duration=900
             if [[ "$1" == *,* ]]; then count=4; duration=3600; fi
             select_v100s "$1" "$count"
-            nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI
+            gpu_snapshot
             ./gpu_burn -m 80% -tc "$duration" || result=$?
-            nvidia-smi -q -d ECC,POWER,TEMPERATURE,PCI
+            gpu_snapshot
             kernel_events
             return "$result"
             ;;
@@ -269,9 +290,18 @@ run_step() {
             [[ $# == 1 ]] || fail 'Supply four V100 UUIDs.'
             driver_status
             select_v100s "$1" 4
+            nvidia-smi topo -p2p n
             ldd ./p2pBandwidthLatencyTest ./all_reduce_perf
             ./p2pBandwidthLatencyTest
-            NCCL_DEBUG=INFO ./all_reduce_perf -b 8 -e 256M -f 2 -g 4
+            NCCL_DEBUG=INFO ./all_reduce_perf -b 8 -e 256M -f 2 -g 4 -c 1
+            IFS=, read -ra v100s <<< "$CUDA_VISIBLE_DEVICES"
+            for ((i = 0; i < 4; i++)); do
+                for ((j = i + 1; j < 4; j++)); do
+                    pair="${v100s[i]},${v100s[j]}"
+                    printf '\n[NCCL pair: %s]\n' "$pair"
+                    CUDA_VISIBLE_DEVICES="$pair" NCCL_DEBUG=INFO ./all_reduce_perf -b 1M -e 16M -f 2 -g 2 -c 1
+                done
+            done
             kernel_events
             ;;
         i4-status)
@@ -336,15 +366,18 @@ log_dir="${Z8_LOG_DIR:-$HOME/z8-burnin/steps}"
 mkdir -p -- "$log_dir"
 log=$(mktemp -- "$log_dir/$step-$(date +%Y%m%d-%H%M%S)-XXXXXX.log")
 printf "Log: %s\n" "$log"
+# The logger and parent survive Ctrl+C. The child restores normal signal handling.
+trap ':' INT
 set +e
 (
+    trap - INT
     set -e
     printf "Started %s at %s on %s (kernel %s)\n" "$step" "$(date -Is)" "$(hostname)" "$(uname -r)"
     if [[ "$step" != i6-probe ]]; then set -x; fi
     run_step "$@"
-) 2>&1 | tee "$log"
+) 2>&1 | tee -i "$log"
 statuses=("${PIPESTATUS[@]}")
 set -e
-printf "Finished %s: exit %s, logger exit %s\nLog: %s\n" "$step" "${statuses[0]}" "${statuses[1]}" "$log" | tee -a "$log"
+printf "Finished %s: exit %s, logger exit %s\nLog: %s\n" "$step" "${statuses[0]}" "${statuses[1]}" "$log" | tee -ia "$log"
 (( statuses[1] == 0 )) || exit "${statuses[1]}"
 exit "${statuses[0]}"

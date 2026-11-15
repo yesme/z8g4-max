@@ -68,7 +68,7 @@ DDR4-only 测试通过后断电，把 12 条 PMem 插进空槽。第一次混插
 
 ```bash
 mkdir -p "$HOME/z8-burnin"
-sudo modprobe acpi_nfit
+sudo modprobe nfit
 {
     uname -r
     sudo ipmctl show -units GiB -socket
@@ -77,7 +77,7 @@ sudo modprobe acpi_nfit
     sudo ipmctl show -dimm -firmware
     sudo ipmctl show -memoryresources
     sudo ipmctl show -region
-    sudo ipmctl show -goal
+    sudo ipmctl show -a -goal
     sudo ndctl list -N
 } 2>&1 | tee "$HOME/z8-burnin/pmem-before.log"
 ```
@@ -90,16 +90,16 @@ sudo modprobe acpi_nfit
 
 ```bash
 sudo ipmctl create -goal MemoryMode=0 PersistentMemoryType=AppDirect
-sudo ipmctl show -goal
+sudo ipmctl show -a -goal
 ```
 
-`MemoryMode=0` 表示 PMem 的 0% 用作 Intel Memory Mode，DDR4 仍是主内存。`AppDirect` 请求让每路的六条 PMem 做硬件交错。`show -goal` 要看到 `Status: New`，即请求已提交、等 BIOS 执行。此时在终端运行 `sudo reboot`，从 F9 回 SanDisk 上的临时系统。启动期间 BIOS 应用 goal，无需到 F10 再点 Apply。 [ipmctl create -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/create-memory-allocation-goal) · [HP Linux 配置，第 11 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=11)
+`MemoryMode=0` 表示 PMem 的 0% 用作 Intel Memory Mode，DDR4 仍是主内存。`AppDirect` 请求让每路的六条 PMem 做硬件交错。`show -a -goal` 要看到 `Status: New`，即请求已提交、等 BIOS 执行。此时在终端运行 `sudo reboot`，从 F9 回 SanDisk 上的临时系统。启动期间 BIOS 应用 goal，无需到 F10 再点 Apply。 [ipmctl create -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/create-memory-allocation-goal) · [HP Linux 配置，第 11 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=11)
 
 ### 3. 重启回 Xubuntu，核对生效再切 namespace
 
 ```bash
 {
-    sudo ipmctl show -goal
+    sudo ipmctl show -a -goal
     sudo ipmctl show -units GiB -socket
     sudo ipmctl show -memoryresources
     sudo ipmctl show -region
@@ -130,7 +130,7 @@ sudo ndctl list -RNXu
 
 预期两个 fsdax 块设备（`/dev/pmemX[.Y]`）给模型卷，两个 devdax 字符设备（`/dev/daxX.Y`）先跑 fio，之后才转 kmem。以输出为准记录四个 namespace UUID、容量、所属 socket。全部验证后恢复原 NVDIMM Freeze 策略。正式系统使用相同 UUID 恢复挂载和 kmem，已有 goal、namespace 和文件系统可直接复用。
 
-两路按同样的方式划分。每路 258 GiB 给 fsdax，剩余约 500 GiB 给 devdax，再转 kmem。
+两路按同样的方式划分。每路 258 GiB 给 fsdax，region 剩余约 498 GiB 给 devdax，再转 kmem。保留 devdax 的 `map=dev`，避免启动时先从 DDR4 占用每路近 8 GiB。
 
 | 物理插槽 | 每路 DDR4 | 每路的 fsdax namespace | 每路的 devdax namespace |
 |---|---:|---|---|
@@ -139,7 +139,7 @@ sudo ndctl list -RNXu
 
 T3 把两个 `fsdax` 直接组成正式模型卷。两个 `devdax` 各自按固件给的目标节点上线，供 Linux 迁移可回收的页。
 
-**用实机地址核一次容量。** 12 MiB 和 2 GiB 的最小公倍数是 6 GiB。若实机的 region 对齐与热插拔块确为这两个粒度，258 GiB 同时满足两个长度网格。用下面的命令核 devdax 真正暴露的地址。内核把每段起点向上、末端向下取整到热插拔块边界，因而整个段的损失取决于绝对地址和 namespace 内部偏移。已有 255 GiB 的分区可按同一方法量损失，确认需要额外容量后才重切。 [Linux 7.0 x86 热插拔粒度](https://github.com/torvalds/linux/blob/v7.0/arch/x86/mm/init_64.c) · [Linux 7.0 DAX kmem 取整](https://raw.githubusercontent.com/torvalds/linux/v7.0/drivers/dax/kmem.c)
+**用实机地址核一次容量。** 12 MiB 或 96 MiB 的 region 对齐与 2 GiB 热插拔块，最小公倍数均为 6 GiB。258 GiB 同时满足这几种长度约束，region 的接受粒度以 `ndctl list -Ruv` 的实读数据为准。用下面的命令核 devdax 真正暴露的地址。内核把每段起点向上、末端向下取整到热插拔块边界，因而整个段的损失取决于绝对地址和 namespace 内部偏移。已有 255 GiB 的分区可按同一方法量损失，确认需要额外容量后才重切。 [Linux 7.0 x86 热插拔粒度](https://github.com/torvalds/linux/blob/v7.0/arch/x86/mm/init_64.c) · [Linux 7.0 DAX kmem 取整](https://raw.githubusercontent.com/torvalds/linux/v7.0/drivers/dax/kmem.c)
 
 ```bash
 python3 - 3< <(sudo daxctl list --devices --mappings) <<'PY'
@@ -224,9 +224,10 @@ findmnt -M /srv/pmem-model
 
 ## 剩余 PMem 转 kmem
 
-先完成两块 devdax 的专用 fio 测试。用 `sudo daxctl list` 找到真实的两个 `daxX.Y`。把 `struct page` 等热插拔页描述符放在 PMem 内部，Linux 7.0 需要两个开关。T3 在 GRUB 临时给当前内核的 `linux` 行追加 `memory_hotplug.memmap_on_memory=on`，启动后在每个 DAX 设备上写 `1`，然后才绑定 kmem。Ubuntu `7.0.0-43-generic` 的配置包含 `CONFIG_MHP_MEMMAP_ON_MEMORY=y`。两个设备合计约 1 TiB，按 4 KiB 页和 64 B 页描述符估算约 16 GiB 元数据，实际在线容量和 DDR4 节约量按热插拔粒度、对齐和实机节点统计核算。 [Linux 7.0 全局热插拔参数](https://github.com/torvalds/linux/blob/v7.0/mm/memory_hotplug.c#L95) · [DAX 设备开关](https://github.com/torvalds/linux/blob/v7.0/drivers/dax/bus.c#L1244) · [kmem 绑定时应用](https://github.com/torvalds/linux/blob/v7.0/drivers/dax/kmem.c#L158)
+先完成两块 devdax 的专用 fio 测试。用 `sudo daxctl list` 找到真实的两个 `daxX.Y`。把 `struct page` 等热插拔页描述符放在 PMem 内部，Linux 7.0 需要两个开关。T3 在 GRUB 临时给当前内核的 `linux` 行追加 `memhp_default_state=offline memory_hotplug.memmap_on_memory=on`，启动后确认 `auto_online_blocks` 是 `offline`，在每个 DAX 设备上写 `1`，再由 daxctl 转换并上线为 Movable。Ubuntu 默认的 `online` 会让 daxctl 拒绝转换。 [daxctl 自动上线限制](https://pmem.io/ndctl/daxctl/daxctl-reconfigure-device.html) Ubuntu `7.0.0-43-generic` 的配置包含 `CONFIG_MHP_MEMMAP_ON_MEMORY=y`。每路约 498 GiB 的 devdax 先扣约 7.8 GiB 的 namespace 页描述符；转成 kmem 后按整热插拔块上线，再从 PMem 留约 7.6 GiB 给新页描述符。估计每路可用约 480–482 GiB、两路约 960–965 GiB。约 15 GiB 的 kmem 页描述符由 memmap 开关移出 DDR4，实际容量以实机节点统计为准。 [Linux 7.0 全局热插拔参数](https://github.com/torvalds/linux/blob/v7.0/mm/memory_hotplug.c#L95) · [DAX 设备开关](https://github.com/torvalds/linux/blob/v7.0/drivers/dax/bus.c#L1244) · [kmem 绑定时应用](https://github.com/torvalds/linux/blob/v7.0/drivers/dax/kmem.c#L158)
 
 ```bash
+cat /sys/devices/system/memory/auto_online_blocks
 grep -E '^CONFIG_(MHP_MEMMAP_ON_MEMORY|LRU_GEN|LRU_GEN_ENABLED)=' "/boot/config-$(uname -r)"
 cat /sys/module/memory_hotplug/parameters/memmap_on_memory
 sudo daxctl list
@@ -235,6 +236,7 @@ DAX0=daxREPLACE_SOCKET0
 DAX1=daxREPLACE_SOCKET1
 (
     set -euo pipefail
+    [[ $(cat /sys/devices/system/memory/auto_online_blocks) == offline ]]
     [[ $(cat /sys/module/memory_hotplug/parameters/memmap_on_memory) =~ ^(Y|force)$ ]]
     [[ "$DAX0" != "$DAX1" ]]
     for device in "$DAX0" "$DAX1"; do
@@ -374,12 +376,12 @@ sudo systemctl enable z8-pmem-kmem.service z8-pmem-model.service
 
 ### 设置 memmap 启动参数
 
-T3 的 SanDisk 和 I4 的正式系统分别在自己的根文件系统设置这项参数。`Z8_MEMMAP_ON_MEMORY=1` 时运行下列命令，采用 T3 验过的 `on` 或 `force`。`Z8_MEMMAP_ON_MEMORY=0` 时跳过该参数。
+T3 的 SanDisk 和 I4 的正式系统分别在自己的根文件系统写入 `memhp_default_state=offline`。使用 `Z8_MEMMAP_ON_MEMORY=1` 时保留 `memory_hotplug.memmap_on_memory=on`，必要时按 T3 实测改为 `force`。`Z8_MEMMAP_ON_MEMORY=0` 时从下面的 GRUB 行删除 memmap 参数，保留 `offline`。
 
 ```bash
 sudo install -d /etc/default/grub.d
 sudo tee /etc/default/grub.d/60-z8-pmem.cfg >/dev/null <<'EOF'
-GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} memory_hotplug.memmap_on_memory=on"
+GRUB_CMDLINE_LINUX_DEFAULT="${GRUB_CMDLINE_LINUX_DEFAULT} memhp_default_state=offline memory_hotplug.memmap_on_memory=on"
 EOF
 sudo update-grub
 ```

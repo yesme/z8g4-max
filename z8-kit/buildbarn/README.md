@@ -2,7 +2,7 @@
 
 ## P4618 热层与 HC620 冷层
 
-工作树、`buck-out` 和 materializer DB 在 P4618 XFS。Buildbarn 的 512 GiB 热 CS、64 GiB CMS、216 GiB AC 及各自索引和持久状态也在该卷。HC620 RAIDZ1 的 `/data/buildbarn` 存权威 CS 块文件，P4800X p9 的 `/srv/bbindex` 存冷索引、状态和容量记录。新上传写权威冷 CS，首次冷读回填热 CS。I4 持续写未过线时走全 XFS 回退。 [Buildbarn 读缓存](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
+工作树、`buck-out` 和 materializer DB 在 P4618 XFS。Buildbarn 的 512 GiB 热 CS、64 GiB CMS、216 GiB AC 及各自索引和持久状态也在该卷。HC620 RAIDZ1 的 `/data/buildbarn` 存权威 CS 块文件，D4800X p9 的 `/srv/bbindex` 存冷索引、状态和容量记录。新上传写权威冷 CS，首次冷读回填热 CS。I4 持续写未过线时走全 XFS 回退。 [Buildbarn 读缓存](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
 `z8data/buildbarn` 本地设置 `compression=zle`，继承 `primarycache=all`。 [冷 CAS 配置](../storage/README.md#冷-cas-压缩)
 
@@ -38,7 +38,7 @@ curl -fsS http://127.0.0.1:9980/metrics |
 
 `LocalBlobAccess` 在新块内递增分配偏移，旧块轮转后复用偏移。并发写可交错，文件覆写触发 ZFS CoW。淘汰只归还 Buildbarn allocator 的偏移，下一次覆写时旧 ZFS 块才有机会释放。 [Buildbarn 逻辑块分配](https://github.com/buildbarn/bb-storage/blob/ca3d8b4/pkg/blobstore/local/block_device_backed_block_allocator.go#L176-L187)
 
-首次用 `sudo docker compose -f compose.tiered.yaml config --images` 核镜像引用，用 `config` 核绑定。两个 Linux cache 配置以及 scheduler、worker、runner-installer 都固定到原 11 月 2 日标签的 GHCR 镜像索引 digest，标签供查版本。各索引包含 `linux/amd64`。首次启动需看日志确认 schema、文件/目录权限、GetCapabilities 和 CAS/AC 读写。`sudo docker compose -p z8-tiered -f compose.tiered.yaml logs --tail 100` 与 `ss -ltn` 可复核。 [Buildbarn GHCR 包](https://github.com/buildbarn/bb-storage/pkgs/container/bb-storage) · [Docker digest 引用](https://docs.docker.com/reference/cli/docker/image/pull/#pull-an-image-by-digest-immutable-identifier)
+首次用 `sudo docker compose -f compose.tiered.yaml config --images` 核镜像引用，用 `config` 核绑定。cache、worker 和 runner 继续使用固定镜像摘要。max 的调度器从原 `c9ba98c` 构建本地兼容镜像，底层仍用原 OCI 摘要。首次启动需看日志确认 schema、文件/目录权限、GetCapabilities 和 CAS/AC 读写。`sudo docker compose -p z8-tiered -f compose.tiered.yaml logs --tail 100` 与 `ss -ltn` 可复核。 [Buildbarn GHCR 包](https://github.com/buildbarn/bb-storage/pkgs/container/bb-storage) · [Docker digest 引用](https://docs.docker.com/reference/cli/docker/image/pull/#pull-an-image-by-digest-immutable-identifier)
 
 ```bash
 cd /opt/z8-kit/buildbarn
@@ -55,13 +55,32 @@ sudo ls -ld /srv/bbindex /srv/buildbarn/tiered/{cs-hot,cms,ac}
 
 冷库回退按[全 XFS 命令](#全-xfs-回退)启动，叠加 `compose.fallback-farm.yaml`、worker 和分核配置。切换时先停 tiered service，两套配置都监听 8980，各用自己的索引与状态目录。
 
+## 调度器的 Buck2 平台兼容
+
+固定版 Buildbarn 只读 `Action.platform`。2026-11-15 的官方 Buck2 发布版 `5b3b13d` 仍把属性写入 `Command.platform`，Docker 对照实测在 `hardlinking` 上返回 `platform {}`。max 只重建调度器。它优先使用 `Action.platform`，空时用当前分块 CAS 的 Command reader 获取旧字段；worker、存储、三台官方 Buck2 与平台约束沿用原配置。同一条 `--remote-only` Linux 工单换用兼容调度器后成功执行，并拉回了结果。由 [I5 软件准备](../storage/README.md#i51-软件目录与单元准备)构建后，`docker compose` 使用本机的 `z8/bb-scheduler:c9ba98c-command-platform`。上游 Buck2 发版支持 Action 平台后，再用官方调度器回归同一 Linux 和 Darwin 工单。 [Buck2 Action 和 Command 源码](https://github.com/facebook/buck2/blob/5b3b13d3eacefe325bf971369197e33c5f4b3968/app/buck2_execute/src/execute/command_executor.rs#L340-L421) · [Buildbarn 删除回退的提交](https://github.com/buildbarn/bb-remote-execution/commit/ca42a43) · [Buck2 issue #1477](https://github.com/facebook/buck2/issues/1477)
+
 ## Buck2 客户端
 
 **max 提供权威 AC/CAS 和唯一调度器。** Linux、Darwin 客户端都用本机端口 8980。mini 与 Mac 的读缓存、worker 和 SSH 隧道按 [边缘节点手册](EDGE.md) 安装。 [Buildbarn 本地块存储](https://github.com/buildbarn/bb-storage/blob/main/README.md)
 
-Linux 项目在已注册的 execution platform 中接入 `linux-worker-executor.bzl.example`，约束须匹配真实工具链和 runner 镜像。使用 `hardlinking` 实例，客户端上传输入、worker 写入结果。max 的 worker 停机但存储在线时，max 可用 `buck2-linux.buckconfig` 在本机执行，并把结果写入独立的 `linux-x86_64` 实例。离线应急用项目原生 execution platform，加 `--local-only --no-remote-cache`。 [Buck2 RE 配置](https://buck2.build/docs/users/remote_execution/) · [CommandExecutorConfig](https://buck2.build/docs/api/build/CommandExecutorConfig/) · [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/)
+先执行 `buck2 --version`，记录三台的官方版本。需要安装时从官方 2026-11-15 发布页下载对应平台的 `.zst`，x86_64 Linux 选 `buck2-x86_64-unknown-linux-gnu.zst`，M4 选 `buck2-aarch64-apple-darwin.zst`。使用 `zstd -d` 解压，将可执行文件命名为 `buck2` 放入 `~/.local/bin` 并设为 0755。 [官方发布资产](https://github.com/facebook/buck2/releases/tag/2026-11-15)
+
+Linux 项目在已注册的 execution platform 中接入 `linux-worker-executor.bzl.example`，约束须匹配真实工具链和 runner 镜像。使用 `hardlinking` 实例，客户端上传输入、worker 写入结果。max 的 worker 停机但存储在线时，max 本机构建也需上传时，用项目的本地 execution platform。在该工作树的 `.buckconfig.local` 合入 `buck2-linux.buckconfig` 的值，使 `instance_name` 临时为 `linux-x86_64`，确认项目本地规则允许上传，并运行 `buck2 kill` 后执行 `buck2 build --local-only 目标标签`。恢复农场时移除该工作树的本地覆盖，再 `buck2 kill`。离线应急用项目原生 execution platform，加 `--local-only --no-remote-cache`。 [Buck2 RE 配置](https://buck2.build/docs/users/remote_execution/) · [CommandExecutorConfig](https://buck2.build/docs/api/build/CommandExecutorConfig/) · [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/)
 
 Buck2 自带 Deferred Materialization，RE 产物在本地 action 需要时才拉。可合并 `buck2-deferred.buckconfig.example`，让 materializer 用 SQLite 持久化本地状态。普通 shell 对任意文件路径读取不会触发该机制。显式需要的目标先经 Buck2 构建/运行。开源 RE 后端的 TTL 刷新有限，冷 CAS 淘汰后可能需要重构；保持 completeness checking，并测试延迟拉取后再旋转冷块。 [Buck2 Deferred Materialization](https://buck2.build/docs/users/advanced/deferred_materialization/)
+
+### 装进 daemon 读取的配置
+
+`[buck2_re_client]` 由 daemon 启动时从磁盘配置读取。三台专用构建节点用同一份 `buck2-shared-worker.buckconfig`。先填 `macos_xcode`，同步到各节点，然后在 `z8-kit/buildbarn` 执行。已有其它项目用独立 RE 服务时，可改为把同样内容合并到此项目的 `.buckconfig.local`，并保留它原有配置。
+
+```bash
+mkdir -p "$HOME/.buckconfig.d"
+install -m 0644 buck2-shared-worker.buckconfig "$HOME/.buckconfig.d/80-z8-farm.buckconfig"
+# 切到实际项目目录后重建它的 daemon
+buck2 kill
+```
+
+[Buck2 daemon 读取无命令行覆盖的配置](https://github.com/facebook/buck2/blob/5b3b13d3eacefe325bf971369197e33c5f4b3968/app/buck2_server/src/daemon/state.rs#L467) · [Buck2 官方 RE 设置](https://buck2.build/docs/users/remote_execution/#re-configuration-in-buckconfig)
 
 ### 验证 Linux 缓存
 
@@ -70,9 +89,8 @@ I4 的覆盖脚本已验 dm-zoned 回收，I5 只走真实 Buck2 路径。在工
 在 Linux 工作树 A 和同一提交的干净工作树 B 各执行一次下列命令，替换项目目标标签。分别保存两次的 log，检查缓存查询、AC 命中和 worker 的实际执行记录。
 
 ```bash
-cfg=/opt/z8-kit/buildbarn/buck2-shared-worker.buckconfig
 target=//app:target
-buck2 build --remote-only --config-file "$cfg" "$target"
+buck2 build --remote-only "$target"
 buck2 log show > buck2-build-events.jsonl
 buck2 log what-ran --emit-cache-queries
 buck2 log what-materialized --sort-by-size
@@ -113,18 +131,21 @@ Buck2 没有已核实的全局 reflink 开关。需要独立发布件时，取 B
 ```bash
 cd /srv/work/jackywang/example
 target=//app:binary
-src=$(buck2 build -M all --show-full-simple-output "$target") || exit 1
-test -f "$src" || exit 1
-outdir=$(mktemp -d /srv/work/jackywang/.buck2-reflink.XXXXXX)
-cp --reflink=always --preserve=mode -- "$src" "$outdir/export"
-filefrag -sv "$src" "$outdir/export"
+(
+    set -e
+    src=$(buck2 build -M all --show-full-simple-output "$target")
+    test -f "$src"
+    outdir=$(mktemp -d /srv/work/jackywang/.buck2-reflink.XXXXXX)
+    cp --reflink=always --preserve=mode -- "$src" "$outdir/export"
+    filefrag -sv "$src" "$outdir/export"
+)
 ```
 
 ## Linux worker
 
 1. I5 先启用本机 CAS，再启用 Linux worker。
-2. `compose.worker.yaml` 加入 scheduler、runner、worker，worker 通过 Docker 内网向同一个 `cache:8980` 读写 CS/CMS/AC。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `sudo docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。服务预建 XFS 上的 `worker/build`、`worker/cache` 与 `runner-bin`，共用 `/run/z8-bb-runner` 上的 socket。runner 启动时清理自己的残留 socket，worker 等 socket 出现再启动。固定镜像的 worker、runner-installer 和 runner 都以 UID 0 启动。用隔离 checkout 验实际 RE、按需下载、worker 停启后 CAS 持续服务。启服务前配置 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。 [Compose v2.40.3 按服务监控](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/up.go#L177)
-3. max 首装 72 个活动 action、72 CPU 时间额度和 512 GiB 内存上限，无容器 swap。推理时余 80 个逻辑 CPU，给系统、存储和协调进程留 8 个逻辑 CPU 的时间预算。较高并发用于覆盖取输入和 I/O 等待。按 2–4 GiB/action 算，72 个约用 144–288 GiB。worker 等两路 kmem 上线后启动。512 GiB 是 DDR4 与 kmem 的 memcg 总上限，PMem 的 `ZONE_MOVABLE` 可承接多数匿名页及文件页缓存，页表和其他不可移动内核分配仍需 DDR4。约 520 GiB 的 P4800X 冷索引是稀疏 mmap 文件长度，读到的页按需驻留。I7 用每路 Normal 水位、PSI 和实际吞吐验固定配置。kmem 未能上线时，Z8 的存储可以独立提供服务，Linux 客户端按本地应急流程运行。工具链可随 runner 镜像或项目输入提供。改镜像时同步 worker 和 Buck2 的 digest。异构 Linux worker 使用一致的 CPU 目标基线，避免 `-march=native` 与 `-mtune=native`。 [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable)
+2. `compose.worker.yaml` 加入 scheduler、runner、worker，worker 通过 Docker 内网向同一个 `cache:8980` 读写 CS/CMS/AC。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `sudo docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。服务预建 XFS 上的 `worker/build`、`worker/cache` 与 `runner-bin`，共用 `/run/z8-bb-runner` 上的 socket。runner 启动时清理自己的残留 socket，worker 等 socket 出现再启动。固定镜像的 worker、runner-installer 和 runner 都以 UID 0 启动。用隔离 checkout 验实际 RE、按需下载、worker 停启后 CAS 持续服务。单独维护 Linux runner 时用同一 Compose 项目 `stop worker runner`，让 scheduler 继续服务；停止整套 worker 单元会连 scheduler 一起停，边缘读缓存的 CDC 参数只短期有效。启服务前配置 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。 [Compose v2.40.3 按服务监控](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/up.go#L177)
+3. max 首装 72 个活动 action、72 CPU 时间额度和 512 GiB 内存上限，无容器 swap。推理时余 80 个逻辑 CPU，给系统、存储和协调进程留 8 个逻辑 CPU 的时间预算。较高并发用于覆盖取输入和 I/O 等待。按 2–4 GiB/action 算，72 个约用 144–288 GiB。worker 等两路 kmem 上线后启动。512 GiB 是 DDR4 与 kmem 的 memcg 总上限，PMem 的 `ZONE_MOVABLE` 可承接多数匿名页及文件页缓存，页表和其他不可移动内核分配仍需 DDR4。约 520 GiB 的 D4800X 冷索引是稀疏 mmap 文件长度，读到的页按需驻留。I7 用每路 Normal 水位、PSI 和实际吞吐验固定配置。kmem 未能上线时，Z8 的存储可以独立提供服务，Linux 客户端按本地应急流程运行。工具链可随 runner 镜像或项目输入提供。改镜像时同步 worker 和 Buck2 的 digest。异构 Linux worker 使用一致的 CPU 目标基线，避免 `-march=native` 与 `-mtune=native`。 [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable)
 
 [上游 Docker Compose](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose) · [Buck2 Buildbarn 样例](https://github.com/facebook/buck2/tree/main/examples/remote_execution/buildbarn)
 
@@ -135,18 +156,21 @@ filefrag -sv "$src" "$outdir/export"
 适用于 I4 冷库持续写达不到目标或冷池故障时。停 tiered 服务，改用 P4618 上独立的 64 GiB CAS（1 GiB 索引）和同一 scheduler。I4 已启用的存储单元继续自动导入池、挂载 `/data/other`。按 [I5.1 软件与目录准备](../storage/README.md#i51-软件目录与单元准备) 安装 Docker 和复制配置。回退使用下面的新状态目录，跳过 I5 的 p9 挂载和 tiered 服务启动。完成 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。确认两路 kmem 已上线。使用新存储目录，Buck2 首轮会重新填充缓存。
 
 ```bash
-sudo systemctl disable --now z8-buildbarn-worker.service z8-buildbarn.service
-cd /opt/z8-kit/buildbarn
-export BB_DATA_DIR=/srv/buildbarn/cache-xfs
-sudo install -d -m 0750 "$BB_DATA_DIR"/{cs,cms,ac}/persistent_state
-sudo install -d -m 0750 "$BB_DATA_DIR"/{worker/build,worker/cache,runner-bin}
-sudo install -d -m 0750 /run/z8-bb-runner
-test "$(findmnt -n -T "$BB_DATA_DIR" -o FSTYPE)" = xfs || exit 1
-systemctl is-active --quiet z8-pmem-kmem.service || exit 1
-sudo env BB_DATA_DIR="$BB_DATA_DIR" docker compose -p z8-xfs \
-    -f compose.yaml -f compose.fallback-farm.yaml -f compose.worker.yaml \
-    -f compose.cpu-layout.yaml up -d
-ss -ltn 'sport = :8980'
+(
+    set -e
+    sudo systemctl disable --now z8-buildbarn-worker.service z8-buildbarn.service
+    cd /opt/z8-kit/buildbarn
+    BB_DATA_DIR=/srv/buildbarn/cache-xfs
+    sudo install -d -m 0750 "$BB_DATA_DIR"/{cs,cms,ac}/persistent_state
+    sudo install -d -m 0750 "$BB_DATA_DIR"/{worker/build,worker/cache,runner-bin}
+    sudo install -d -m 0750 /run/z8-bb-runner
+    test "$(findmnt -n -T "$BB_DATA_DIR" -o FSTYPE)" = xfs
+    systemctl is-active --quiet z8-pmem-kmem.service
+    sudo env BB_DATA_DIR="$BB_DATA_DIR" docker compose -p z8-xfs \
+        -f compose.yaml -f compose.fallback-farm.yaml -f compose.worker.yaml \
+        -f compose.cpu-layout.yaml up -d
+    ss -ltn 'sport = :8980'
+)
 ```
 
-使用同一个农场 buckconfig 验远程执行。该回退为手工恢复；重启后需重建 `/run/z8-bb-runner` 再执行。回到 tiered 前用同一组 Compose 文件、项目名和目录环境执行 `down`，再启两项原 systemd 服务。
+使用同一个农场 buckconfig 验远程执行。该回退为手工恢复；重启后需重建 `/run/z8-bb-runner` 再执行。回到 tiered 前用同一组 Compose 文件、项目名和 `BB_DATA_DIR=/srv/buildbarn/cache-xfs` 执行 `down`，再启两项原 systemd 服务。

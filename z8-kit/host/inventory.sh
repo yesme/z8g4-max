@@ -41,6 +41,6 @@ show zfs zpool status
 show zoned-kernel modinfo dm-zoned
 show boot efibootmgr -v
 printf '\n[Recent kernel errors]\n'
-journalctl -k -b --no-pager | grep -Ei 'Xid|AER|NVRM|mce:|EDAC|dm-zoned|nvme.*(reset|timeout)' | tail -n 100 || true
+journalctl -k -b --no-pager | grep -Ei 'Xid|AER|NVRM|mce:|EDAC|dm-zoned|nvme.*(reset|timeout)|ata[0-9].*(resetting link|link down|failed command)' | tail -n 100 || true
 printf '\n[DMA remapping]\n'
 journalctl -k -b --no-pager | grep -Ei 'DMAR|IOMMU|Default domain' || true

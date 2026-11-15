@@ -11,7 +11,7 @@ case "$action" in
 esac
 # shellcheck source=/dev/null
 source "$config/storage.env"
-: "${Z8_SPECIAL:?Set the P4800X special partition by-id}"
+: "${Z8_SPECIAL:?Set the D4800X special partition by-id}"
 : "${Z8_DEVICE_WAIT:=90}"
 [[ "$Z8_SPECIAL" =~ ^/dev/disk/by-id/nvme-[^/[:space:]]+-part8$ ]] || exit 2
 [[ "$Z8_DEVICE_WAIT" =~ ^[1-9][0-9]{0,2}$ ]] || exit 2
@@ -104,7 +104,7 @@ case "$action" in
             fi
             sleep 1
         done
-        physical_layout_ready || { echo 'Missing P4800X write cache partition (p1-p7) or special vdev (p8)' >&2; exit 1; }
+        physical_layout_ready || { echo 'Missing D4800X write cache partition (p1-p7) or special vdev (p8)' >&2; exit 1; }
         check_distinct_disks
         for i in "${!names[@]}"; do
             if dmsetup info "${names[i]}" >/dev/null 2>&1; then

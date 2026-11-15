@@ -1,6 +1,8 @@
 # Merge into the desktop user's Sunshine configuration.
 capture = x11
 encoder = nvenc
+hevc_mode = 1
+av1_mode = 1
 # Set to the connected P620 connector from Sunshine's startup log.
 # output_name = DP-0
 upnp = disabled

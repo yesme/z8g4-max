@@ -10,8 +10,8 @@
 | 2 | x16→x8/x8 直通板 | Gen3 x16，Bifurcation 选 x8/x8，两张 V100，各 x8 |
 | 3 | x16→x8/x8 直通板 | Gen3 x16，由第二颗 CPU 提供，Bifurcation 选 x8/x8，两张 V100，各 x8 |
 | 4 | Quadro P620 | 主显示设备，显示器/虚拟头接在这里 |
-| 5 | P4800X 1.5 TB AIC | Gen3 x4；核 NVMe 序列号、九分区和散热 |
-| 6 | 空，受 P4800X 阻挡 | 保持空槽 |
+| 5 | D4800X 1.5 TB U.2 + PCIe 转接卡与风扇 | 硬改为单口 Gen3 x4，槽 5 直连 CPU0；核实际路径、序列号和散热 |
+| 6 | 空，槽 5 转接卡和风扇占用相邻空间 | 保持空槽 |
 | 7 | AX210 转接卡 | x4 槽，Wi-Fi 实际 x1；蓝牙需 USB 线/接头 |
 
 主机验收阶段算力坞断电，四根 PCIe 线断开。主机通过后再逐卡接上、复核槽 2/3 各枚举两个 endpoint。记录 GPU UUID、BDF、`/sys/bus/pci/devices/<BDF>/numa_node` 和 `nvidia-smi topo -m`。用 CUDA H→D 传输时读当前宽度/速率。若此 BIOS 版本只显示 Auto 或其他分叉组合，记录选单原文和直通卡走线，按每槽两张都为 x8 验证。 [HP QuickSpecs](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf) · [Z8 G4 F10 实例，含 Slot Settings](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html)
@@ -34,7 +34,7 @@
 
 具体项目显示取决于 BIOS 版本和已装设备。以上区分 HP F10 真实项目与要在实机选择的值。 [HP Service Guide，F10 与 POST](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [HP Z8 G4 F10 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html)
 
-**从 T1 起固定 `1TB Memory Cap = Auto`。** 这是 HP 的平台兼容选项。HP QuickSpecs 分别列了基础档 CPU 的每路 1 TiB 容量上限，以及部分 AMD 显卡配置的整机 1 TiB 兼容限制。本机用 NVIDIA P620，铭牌容量每路 `96 GiB DDR4 + 768 GiB PMem = 864 GiB`。HP 的公开资料未给出 Z8 G4 上 Auto 的完整触发规则。T3 用 `ipmctl show -socket` 和 `ipmctl show -region` 核对 8269CY 的实际每路上限与两路 App Direct 映射。如果容量异常，先按 PMem 手册查 12 条枚举、每路容量和 goal，再定位原因。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [Z8 G4 的 Auto 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [ipmctl 每路容量字段](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket)
+**从 T1 起固定 `1TB Memory Cap = Auto`。** 这是 HP 的平台兼容选项。HP QuickSpecs 分别列了基础档 CPU 的每路 1 TiB 容量上限，以及部分 AMD 显卡配置的整机 1 TiB 兼容限制。本机用 NVIDIA P620，铭牌容量每路 `96 GiB DDR4 + 768 GiB PMem = 864 GiB`。HP 的公开资料未给出 Z8 G4 上 Auto 的完整触发规则。T3 用 `ipmctl show -socket` 和 `ipmctl show -region` 核对 8269CY 的实际每路上限与两路 App Direct 映射。如果容量异常，先按 PMem 手册查 12 条枚举、每路容量和 goal，再定位原因。只有两路模块枚举完整、goal 正确而实际映射疑似受整机 1 TiB 限制时，才用 F10 的 `Disable` 冷启对照，保存两次 socket 和 region 报告。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [Z8 G4 的 Auto 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [ipmctl 每路容量字段](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket)
 
 **PCIe 和 SATA 电源管理均从 T1 开启。** 这是 HP 手册列的默认值。ASPM 允许支持的 PCIe 链路在空闲时进入低功耗状态，实际档位可用 `sudo lspci -s <BDF> -vv` 看 `LnkCtl`。保持 Linux 的默认策略。SATA 开关允许总线及设备的电源管理，Linux 的实际链路策略从 `/sys/class/scsi_host/host*/link_power_management_policy` 读取。七块 HC620 保持常驻旋转，交错起转按下文 P11／PUIS 的条件处理。T4/T5 沿用现有链路和日志检查。若实机只在空闲转负载时可复现 PCIe AER、掉卡或 SATA 链路复位，再只针对出问题的总线处理。 [HP 服务手册，第 73 页](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [Linux 7.0 ASPM](https://github.com/torvalds/linux/blob/v7.0/drivers/pci/pcie/aspm.c#L228-L280) · [Linux 7.0 SATA 链路策略](https://docs.kernel.org/7.0/scsi/link_power_management_policy.html) · [HC620 电源模式规范](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf)
 
@@ -78,7 +78,7 @@ sudo journalctl -k -b --no-pager | grep -Ei 'DMAR|IOMMU|Default domain'
 
 ### 接坞后的 PCIe P2P
 
-先确认四卡的 NVLink 拓扑与实际选用的传输路径。若将运行 **裸机 GPU 间 PCIe P2P**，在这类数据传输前按 NVIDIA 指引关闭 Intel IOMMU。可在机旁用 GRUB 编辑当次启动项，按 `e` 后在 `linux` 行末追加 `intel_iommu=off`，按 `Ctrl-x` 或 `F10` 启动。BIOS 的 VT-x 和 VT-d 可继续启用。这个内核参数会关闭该次启动的 Intel DMA remapping。用 `/proc/cmdline` 和内核日志确认，再跑带结果校验的 CUDA P2P 和 NCCL，记录六对链路、数据正确性和带宽。普通重启恢复原内核参数。若 PCIe 路径仍异常，再按 GPU 所在桥检查 `ACSCtl`，一次只变一个设置。
+先按 [算力坞验收](INSTALL.md#算力坞验收)在正式默认的内核参数下确认六对 NVLink、NCCL 和数据正确性。只在定位 **裸机 GPU 间 PCIe P2P** 路径问题时，按 NVIDIA 指引额外做一次 Intel IOMMU 关闭的对照。可在机旁用 GRUB 编辑当次启动项，按 `e` 后在 `linux` 行末追加 `intel_iommu=off`，按 `Ctrl-x` 或 `F10` 启动。BIOS 的 VT-x 和 VT-d 可继续启用。这个内核参数会关闭该次启动的 Intel DMA remapping。用 `/proc/cmdline` 和内核日志确认，再单独跑有问题的两卡路径并记录结果。重启回默认参数，推理仍按默认参数的测试结果启用 peer。若 PCIe 路径仍异常，再按 GPU 所在桥检查 `ACSCtl`，一次只变一个设置。
 
 ```bash
 nvidia-smi topo -m
@@ -115,7 +115,7 @@ sudo journalctl -kb -o short-monotonic | grep -Ei 'ahci|ata[0-9]+:.*(link up|SAT
 
 ### 认盘以后，检查能否用于 dm-zoned
 
-HC620 把盘面划成许多区，大部分区要求从写入指针起顺序写。**ZAC** 是 SATA 盘报告这些区、执行相关操作的一套命令。这里要确认 Linux 经过实际的 AHCI 端口、数据线和盘架，能识别这条写入限制并读到盘区表。确认后交给 dm-zoned，让 ZFS 使用每对 HC620 + P4800X 生成的普通块设备。下列查询只读。 [Linux dm-zoned 说明](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html)
+HC620 把盘面划成许多区，大部分区要求从写入指针起顺序写。**ZAC** 是 SATA 盘报告这些区、执行相关操作的一套命令。这里要确认 Linux 经过实际的 AHCI 端口、数据线和盘架，能识别这条写入限制并读到盘区表。确认后交给 dm-zoned，让 ZFS 使用每对 HC620 + D4800X 生成的普通块设备。下列查询只读。 [Linux dm-zoned 说明](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html)
 
 1. 在上面的 `lsblk` 找到 HC620 的序列号和设备名。按本批 SATA 4Kn 14 TB 配置，七盘都应报告 `TRAN=sata`、`ZONED=host-managed`、`LOG-SEC=4096` 和 `PHY-SEC=4096`。后两项分别是系统寻址扇区和物理扇区的字节数。WD 的 14 TB SATA 4Kn 料号为 `HSH721414ALN6M0` 和 `HSH721414ALN6M4`。看到 `512 / 4096` 时先核盘身料号和订单。 [WD HC620 规格表](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/data-sheet-ultrastar-dc-hc620.pdf)
 2. 把下面的 `/dev/sdX` 换成该序列号对应的**整盘**，例如 `/dev/sdb`。第一条从盘头查两个区。第二条从标准 14 TB HC620 的第 525 个区开始查两个区。WD 手册给出盘头 524 个普通区、每区 256 MiB，所以第二条的偏移是 `524 × 256 MiB ÷ 512 B = 274726912`。这里的偏移单位由 blkzone 固定为 512 B，即使盘是 4Kn 也用这个数。

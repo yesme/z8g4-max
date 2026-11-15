@@ -1,6 +1,6 @@
 // Upgrade the kernel, NVIDIA and ZFS together in a maintenance window.
 Unattended-Upgrade::Package-Blacklist {
-    "^linux-(image-|headers-|modules-|generic|tools-|objects-|signatures-)";
+    "^linux-(image-|headers-|modules-|main-modules-|generic|tools-|objects-|signatures-)";
     "^(nvidia-|libnvidia-|xserver-xorg-video-nvidia-|libxnvctrl)";
     "^(zfs|libzfs|libzpool|libnvpair|libuutil)";
 };

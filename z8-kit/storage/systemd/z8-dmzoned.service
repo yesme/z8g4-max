@@ -1,5 +1,5 @@
 [Unit]
-Description=Assemble HC620 and P4800X dm-zoned mappings
+Description=Assemble HC620 and D4800X dm-zoned mappings
 After=local-fs.target systemd-udevd.service
 RequiresMountsFor=/etc/z8-storage /usr/local/sbin
 Conflicts=umount.target

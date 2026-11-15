@@ -8,7 +8,7 @@
 | inference | llama.cpp 首装、Xolotl 回退、1Cat 专项、SSE/并发/工具探针 |
 | harness | 按项目启动独立 tmux，OMP/Pi/DSH 直连 DeepSeek，本地 OMP 验机样例 |
 | buildbarn | Z8 的 RAIDZ1 冷库和调度器、mini 与 Mac 的边缘缓存、Linux/Darwin worker、Buck2 延迟物化和 XFS reflink |
-| storage | P4800X 九分区、七个 dm-zoned 映射、RAIDZ1 与 p9 冷索引依赖 |
+| storage | D4800X 九分区、七个 dm-zoned 映射、RAIDZ1 与 p9 冷索引依赖 |
 | remote | SSH tunnel、xrdp、Sunshine |
 | market-quote.csv | 当日采购报价登记 |
 
