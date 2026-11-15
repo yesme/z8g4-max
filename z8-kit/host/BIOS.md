@@ -22,19 +22,21 @@
 |---|---|
 | Advanced → Boot Options | USB Media Boot Enable，Fast Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 Off，手动按算力坞的上电顺序启动。UEFI Boot Order 先用 Samsung FIT 上的 Ubuntu 引导项，F9 可选 Memtest86+ 或救援 USB |
 | Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
-| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），PCIe MMIO Assignment Mode Auto，1TB Memory Cap 首次设 Auto，PCIe ACS 保持当前默认 |
+| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），PCIe MMIO Assignment Mode Auto，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 和 AX210 蓝牙接用的内部 USB 打开；sSATA 无连接可禁用，按板上实际丝印确认 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
 | Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8/x8`。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。`Intel VROC NVMe RAID = Disable`，NVMe 阵列由 Linux mdadm 管理 |
 | Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率 |
-| Advanced → Power Management Options | PCI Express Power Management（ASPM）和 SATA Power Management 设 Disabled，固定用于验机和部署。SATA Power Management 不负责交错起转 |
+| Advanced → Power Management Options | `PCI Express Power Management = Enable`，`SATA Power Management = Enable`。T1 一次设好，验机和正式运行沿用 |
 | Security → Security Configuration → System Security | Virtualization Technology (VTx) = Enable，Virtualization Technology for Directed I/O (VTd) = Enable。部分版本将这两项列在 Advanced → System Options |
 | Advanced → NVDIMM Management | 第一次混插只查 12 条模块、固件和当前状态，保留 `NVDIMM Configuration`，跳过 `Apply NVDIMM Configuration`。App Direct goal 在 Xubuntu 提交 |
 | Security → NVDIMM Security Freeze | 按 [T3 的 PMem 流程](PMEM.md#t3-配置-app-direct) 将 `Unfreeze NVDIMMs for this number of boot sequences` 暂设为 `5`，保存后从 F9 启动临时 Xubuntu |
 
 具体项目显示取决于 BIOS 版本和已装设备。以上区分 HP F10 真实项目与要在实机选择的值。 [HP Service Guide，F10 与 POST](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [HP Z8 G4 F10 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html)
 
-`1TB Memory Cap` 是 F10 的平台设置。CPU 每路上限另读 `ipmctl show -socket` 的 `MappedMemoryLimit`。HP 还列出部分 AMD 显卡的整机 1 TiB 兼容限制，本机槽 4 用 NVIDIA P620。T3 核两路 App Direct region，只有在发现平台层截断、菜单提供 `Disable` 时，才保留原 goal 和插条，单改该项冷启对照两路映射。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [PMem 每路容量上限](PMEM.md#每路容量上限)
+**从 T1 起固定 `1TB Memory Cap = Auto`。** 这是 HP 的平台兼容选项。HP QuickSpecs 分别列了基础档 CPU 的每路 1 TiB 容量上限，以及部分 AMD 显卡配置的整机 1 TiB 兼容限制。本机用 NVIDIA P620，铭牌容量每路 `96 GiB DDR4 + 768 GiB PMem = 864 GiB`。HP 的公开资料未给出 Z8 G4 上 Auto 的完整触发规则。T3 用 `ipmctl show -socket` 和 `ipmctl show -region` 核对 8269CY 的实际每路上限与两路 App Direct 映射。如果容量异常，先按 PMem 手册查 12 条枚举、每路容量和 goal，再定位原因。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [Z8 G4 的 Auto 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [ipmctl 每路容量字段](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket)
+
+**PCIe 和 SATA 电源管理均从 T1 开启。** 这是 HP 手册列的默认值。ASPM 允许支持的 PCIe 链路在空闲时进入低功耗状态，实际档位可用 `sudo lspci -s <BDF> -vv` 看 `LnkCtl`。保持 Linux 的默认策略。SATA 开关允许总线及设备的电源管理，Linux 的实际链路策略从 `/sys/class/scsi_host/host*/link_power_management_policy` 读取。七块 HC620 保持常驻旋转，交错起转按下文 P11／PUIS 的条件处理。T4/T5 沿用现有链路和日志检查。若实机只在空闲转负载时可复现 PCIe AER、掉卡或 SATA 链路复位，再只针对出问题的总线处理。 [HP 服务手册，第 73 页](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [Linux 7.0 ASPM](https://github.com/torvalds/linux/blob/v7.0/drivers/pci/pcie/aspm.c#L228-L280) · [Linux 7.0 SATA 链路策略](https://docs.kernel.org/7.0/scsi/link_power_management_policy.html) · [HC620 电源模式规范](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf)
 
 Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 用 Ventoy 的 UEFI 项启动 Memtest86+ 或 Xubuntu Live，验机时选 SanDisk 的 UEFI 引导项，正式安装后选 FIT 的 UEFI 引导项。装完后以 `test -d /sys/firmware/efi` 和 `LC_ALL=C mokutil --sb-state` 分别确认 UEFI 和 `SecureBoot disabled`。如果之后更新 BIOS 或重置设置，在第一次开机时重新核对这两项。 [HP 固件设置路径](https://support.hp.com/ee-en/document/ish_9642671-9641393-16) · [Ubuntu Secure Boot 文档](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/)
 

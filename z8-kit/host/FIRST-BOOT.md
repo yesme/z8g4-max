@@ -16,14 +16,14 @@
 ### T1 · CPU、F10 和 Wi-Fi
 
 1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P620、槽 7 装 AX210，接显示器和天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。
-2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。保存后重新确认 POST 和 DDR4 容量。 [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
+2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均开启，沿用到正式系统。保存后重新确认 POST 和 DDR4 容量。 [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
 3. 按 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu**。先用 AX210 核 Wi-Fi、DHCP、DNS 和 APT，再把 **SanDisk CZ430** 选作整盘安装目标。此时 FIT 先不接。按安装器提示拔下 Ventoy，从 SanDisk 冷启临时 Xubuntu，再确认能联网。 [Live 联网与 SanDisk 安装](BURN-IN.md#首次-live-wi-fi-与临时验机系统)
 4. 在临时系统安装微码和诊断工具，重启后确认两颗 CPU、两个 DDR4 NUMA 节点。先跑 30 分钟通用 CPU 压测，再跑 30 分钟 AVX-512 VNNI，保存 RAS、温度和满载频率。 [CPU 拷机命令](BURN-IN.md#cpu-拷机)
 
 ### T2 · 只测 DDR4
 
 1. 保持 T1 的硬件。F9 进 Ventoy，选 Memtest86+，完整地址范围、默认测试集、Rowhammer 关闭。第 1 pass 是快筛，累计 **4 个完整 pass**，保存零错误结果。
-2. F9 换回 SanDisk 上的临时系统，先看 DDR4 容量、ECC/EDAC 计数，再做 **144 GiB、4 小时**交错压测。比较前后 CE/UE 和 MCE。发现新增错误或掉条，留在 T2 定位。两轮通过后才加 PMem。 [T2 命令与结果判读](BURN-IN.md#t2-只测-ddr4)
+2. F9 换回 SanDisk 上的临时系统，先看 DDR4 容量、ECC/EDAC 计数，再做 **144 GiB、4 小时**交错压测。比较前后 CE/UE 和 MCE。发现新增错误或掉条，留在 T2 定位。两轮通过后才加 PMem。 [容量、温度监控及停测](BURN-IN.md#t2-只测-ddr4)
 
 ### T3 · 加 PMem，建并验证正式模型卷
 

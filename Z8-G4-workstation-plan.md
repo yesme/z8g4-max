@@ -17,7 +17,7 @@
 | 部分 | 配置 |
 |---|---|
 | 操作系统 | 从现有 Ventoy 的 Xubuntu 26.04.1 Desktop ISO 导入本地 YAML，直接安装桌面和 md RAID0。FIT 1 GiB ESP + 8 GiB `/boot`，P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
-| 主板与驱动 | 纯 UEFI，Secure Boot、ASPM、SATA 电源管理关，NUMA 和 HT 开，SNC 关，VT-x／VT-d 开。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
+| 主板与驱动 | 纯 UEFI，Secure Boot、SNC 关，NUMA、HT、ASPM、SATA 电源管理、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
 | 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，每路 6 核，HT 伙伴留空 |
 | 冷库 | P4800X p1–p7 各 96 GiB，七组 dm-zoned → RAIDZ1。p8 192 GiB，做 special 与内嵌 ZIL；p9 约 533 GiB，做冷索引 XFS。池开启 `autotrim`，冷库用 `zle`，普通数据用 `zstd-3` |
 | 构建 | max 冷 CS 取冷数据集的 `refreservation`，首装按空池可用量的 55% 向下取整（约 41 TiB）。P4618 热 CS 512 GiB。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 运行权威 AC/CAS 和唯一调度器。Linux 与 Darwin 在同一实例下用平台属性分流 |

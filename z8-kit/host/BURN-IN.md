@@ -103,17 +103,56 @@ sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
 
 1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 和 AX210 分别留在槽 4 和槽 7。
 2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
-3. 换回临时 Linux。先检查 `free -h`。若只见约 192 GiB、无其他重服务，用下列 144 GiB 负载持续 4 h。保存两个 socket 的温度、频率、EDAC 和内核日志。
+3. 回 SanDisk 上的临时 Xubuntu，按下面顺序核容量、开温度采样、跑 Linux 压测。日志都留在 `~/z8-burnin`。
+
+### 开跑前核容量和 NUMA
+
+192 GiB DDR4 的 75% 是 **144 GiB**。两路交错时预计每路用约 **72 GiB**，各路标称余下约 **24 GiB** 给固件保留、内核、桌面和测试额外开销。`stressapptest -M` 用 MiB，`144 × 1024 = 147456`。前面的 Memtest86+ 负责扫完整可测试地址范围，这一轮看 Linux 下持续读写时是否出现数据校验或硬件错误。 [stressapptest 源码](https://github.com/stressapptest/stressapptest/blob/master/src/sat.cc#L740-L754) · [MiB 单位定义](https://github.com/stressapptest/stressapptest/blob/master/src/sattypes.h) · [Memtest86+ 手册](https://www.memtest.org/readme)
+
+先装好本轮工具，再在系统安静时看可用量。
 
 ```bash
 sudo apt install stressapptest stress-ng rasdaemon fio ndctl daxctl \
     hdparm smartmontools lm-sensors sysstat
+free -h
+numactl --hardware
+```
+
+- `free -h` 看 `Mem:` 行的 `total` 和 `available`。`total` 应接近 192 GiB，`available` 应明显高于 144 GiB，好让测试缓冲和程序开销都落在 DDR4 里。若可用量已接近 144 GiB，先退出占内存的程序，必要时重启验机系统后复查。 [Ubuntu free 手册](https://manpages.ubuntu.com/manpages/resolute/man1/free.1.html)
+- `numactl --hardware` 应列出两个带 CPU 的 DDR4 节点。每路的 `node N size` 应接近 96 GiB，实际值会扣掉固件保留。再看 `node N free`，空闲的两路应各有接纳约 72 GiB 的空间。若只有一路 `free` 偏低，先排查该路已有的内存占用。`node free` 是空闲页，整机可回收缓存后的估算看 `free -h` 的 `available`。容量或节点数异常时先查 F10、插条和 NUMA。压测命令中的 `0,1` 用实测节点编号。 [Ubuntu numactl 手册](https://manpages.ubuntu.com/manpages/resolute/man8/numactl.8.html)
+
+### 散热、监控与停测
+
+- **风道。** Memtest86+ 和 Linux 压测都装好原厂内存风扇、内部风罩和侧板。确认内存风扇线已接好、风扇运转、进出风口通畅，HP 要求各通风面留约 10 cm。机箱风扇由 HP 固件按传感器自动调速。若确认风道正常后仍需要提高最低风量，F10 的 `Advanced → Built-In Device Options → Increase Idle Fan Speed (%)` 调的是最低转速，实际温控仍由固件负责。Memtest86+ 有温度显示时一并观察。发现风扇故障或固件热告警时，在 Memtest86+ 按 Esc 退出。 [HP Z8 G4 服务手册，第 3、4、6 章](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf)
+- **CPU。** 先用 `sensors` 记两颗 8269CY 各自 `coretemp` 的 `Package id`、当前温度和 `crit`（TjMax）。开跑后在监控终端看各路 `PkgTmp` 和总览行的 `CoreThr`，后者是本采样间隔新发生的热节流次数。 [Linux coretemp](https://docs.kernel.org/hwmon/coretemp.html) · [Ubuntu turbostat 手册](https://manpages.ubuntu.com/manpages/resolute/man8/turbostat.8.html)
+- **内存。** `sensors` 若列出 `jc42`，另开终端用 `watch -n 5 'sensors "jc42-*"'` 看可读到的 DIMM 温度及 `high`、`crit` 告警。若没有相关读数，记录实际可见的传感器，现场主要核内存风扇、风道和固件热告警。此时 DIMM 实温未知。 [Linux jc42](https://docs.kernel.org/hwmon/jc42.html)
+
+监控终端先采几轮空闲数据，再开负载。`turbostat` 沿用 T1 已装的内核工具。
+
+```bash
+cd "$HOME/z8-burnin"
+sudo modprobe coretemp
+sudo modprobe msr
+sensors | tee ddr4-sensors-before.log
+sudo turbostat --quiet --cpu package --interval 5 --header_iterations 1 \
+    --show Package,CPU,Busy%,Bzy_MHz,PkgTmp,CoreThr 2>&1 | tee ddr4-turbostat.log
+```
+
+从开跑开始盯温度，读数趋稳后定时查看。**任一路 `PkgTmp` 到 `crit − 5°C`、总览行出现 `CoreThr > 0`、DIMM 出现高温告警、风扇停转或系统报过热，立即到压测终端按 Ctrl+C。** `crit − 5°C` 是本次验机选用的人工停测线。停负载后保留采样到温度回落，保存日志和 BIOS Event Log。检查散热器安装、风扇和风道，复测前先归档这一轮日志，再用相同 144 GiB 配置重跑。 [Intel 硬件热保护与 Linux 计数](https://docs.kernel.org/admin-guide/thermal/intel_thermal_throttle.html)
+
+### 跑满 144 GiB、4 小时
+
+在另一个终端执行。压测退出后照常收集日志。
+
+```bash
+cd "$HOME/z8-burnin"
+set -o pipefail
 sudo systemctl enable --now rasdaemon
 sudo ras-mc-ctl --status
 sudo ras-mc-ctl --errors | tee ddr4-ras-before.log
 sudo ras-mc-ctl --error-count | tee ddr4-ecc-before.log
 sudo journalctl -kb -o short-monotonic > ddr4-kernel-before.log
-numactl --interleave=0,1 stressapptest -s 14400 -M 147456 -m 24 -W \
+numactl --interleave=0,1 stressapptest -s 14400 -M 147456 -m 24 -W 2>&1 \
     | tee ddr4-4h.log
 sudo ras-mc-ctl --errors | tee ddr4-ras-after.log
 sudo ras-mc-ctl --error-count | tee ddr4-ecc-after.log
@@ -121,7 +160,17 @@ sudo journalctl -kb -o short-monotonic > ddr4-kernel-after.log
 diff -u ddr4-ecc-before.log ddr4-ecc-after.log
 ```
 
-终端执行前开 `set -o pipefail`。要求 `Status: PASS`、无新增 CE/UE、MCE、掉条。两 DDR4 节点按实机替换 `0,1`。定位单路时用 `numactl --cpunodebind=N --membind=N` 逐路跑，每路试约 70 GiB（`-M 71680`）。排查后复跑两路交错测试。 [Memtest86+](https://www.memtest.org/readme) · [stressapptest](https://github.com/stressapptest/stressapptest)
+放行要求是完成 4 小时、`Status: PASS`，且无新增 CE/UE、MCE 或掉条。跑完再停止温度采样。若中途停测，记录停测原因及当时的温度和日志。
+
+### 70 GiB 只用于单路定位
+
+双路出现读写校验错误或新增内存相关的 CE、UE、MCE，要判断故障在哪一路时，再逐路跑 **70 GiB**（`-M 71680`）。掉条先恢复正常枚举，触发热告警先处理散热。单路定位沿用上面的监控，按实机把 `node=0` 改为待查节点，每次只跑一路。`-s 14400` 是最长运行时间，复现就可停。故障排除后，以双路 144 GiB 完整跑通作为 T2 放行依据。 [numactl 的绑核与绑内存](https://manpages.ubuntu.com/manpages/resolute/man8/numactl.8.html)
+
+```bash
+node=0
+numactl --cpunodebind="$node" --membind="$node" \
+    stressapptest -s 14400 -M 71680 -m 12 -W 2>&1 | tee "ddr4-node${node}.log"
+```
 
 ## T3. PMem 100，App Direct 的专用检查
 
