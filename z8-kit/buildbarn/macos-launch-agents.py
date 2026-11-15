@@ -15,7 +15,10 @@ def main():
     args = parser.parse_args()
     config = Path(__file__).resolve().parent
     binaries = args.bin_dir.resolve(strict=True)
-    site = json.loads((config / "edge-site.json").read_text(encoding="utf-8"))
+    try:
+        site = json.loads((config / "edge-site.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        parser.error(f"cannot read edge-site.json: {exc}")
     if not isinstance(site, dict):
         parser.error("edge-site.json must contain an object")
     cold_shards = site.get("coldShards")
@@ -28,14 +31,19 @@ def main():
             parser.error(f"set {field} to a non-empty string in edge-site.json")
     if not isinstance(site.get("caseInsensitive"), bool):
         parser.error("set caseInsensitive to true or false in edge-site.json")
+
     work = Path(site["work"])
     socket = Path(site["socket"])
     if not work.is_absolute() or socket.parent != work:
         parser.error("work must be absolute and socket must be directly below it")
-    if not Path(site["developerDir"]).is_dir():
-        parser.error("set xcode and an existing developerDir in edge-site.json")
-    if cold_shards is not None and (
-        not isinstance(cold_shards, list) or len(cold_shards) != 4 or len(set(cold_shards)) != 4
+    developer_dir = Path(site["developerDir"])
+    if not developer_dir.is_absolute() or not developer_dir.is_dir():
+        parser.error("set developerDir to an existing absolute directory in edge-site.json")
+    if "coldShards" in site and (
+        not isinstance(cold_shards, list)
+        or len(cold_shards) != 4
+        or any(not isinstance(path, str) or not path.strip() for path in cold_shards)
+        or len(set(cold_shards)) != 4
     ):
         parser.error("coldShards must contain four distinct mount paths")
     cold_paths = [Path(path) for path in (cold_shards if cold_shards is not None else [site["cold"]])]

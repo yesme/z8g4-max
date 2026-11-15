@@ -43,7 +43,25 @@ sudo --preserve-env=BB_EDGE_HOT,BB_EDGE_COLD,BB_EDGE_WORK,BB_DATA_DIR \
 
 ## Mac mini M4
 
-下载固定版本的三个 GitHub Actions 资产，分别解压，将文件放到 `$HOME/.local/libexec/z8-buildbarn`，命名为 `bb_storage`、`bb_worker`、`bb_runner`，设 0755。用 `file` 查 Mach-O arm64。若资产在部署时已过期，从对应 Git 提交构建 `//cmd/bb_storage`、`//cmd/bb_worker` 和 `//cmd/bb_runner`。 [bb-storage ca3d8b4](https://github.com/buildbarn/bb-storage/actions/runs/41419059475/artifacts/13130587121) · [bb-worker c9ba98c](https://github.com/buildbarn/bb-remote-execution/actions/runs/41423547182/artifacts/13131822142) · [bb-runner c9ba98c](https://github.com/buildbarn/bb-remote-execution/actions/runs/41423547182/artifacts/13132565093)
+下载固定版本的三个 GitHub Actions 制品，分别解压，将文件放到 `$HOME/.local/libexec/z8-buildbarn`，命名为 `bb_storage`、`bb_worker`、`bb_runner`，设 0755。用 `file` 查 Mach-O arm64。 [bb-storage ca3d8b4](https://github.com/buildbarn/bb-storage/actions/runs/41419059475/artifacts/13130587121) · [bb-worker c9ba98c](https://github.com/buildbarn/bb-remote-execution/actions/runs/41423547182/artifacts/13131822142) · [bb-runner c9ba98c](https://github.com/buildbarn/bb-remote-execution/actions/runs/41423547182/artifacts/13132565093)
+
+下载需登录 GitHub，Actions 制品默认保留 90 天。安装后在二进制目录下执行 `shasum -a 256 bb_storage bb_worker bb_runner > SHA256SUMS`，把三份二进制和校验文件同部署备份留存。制品过期时，在 Mac 上准备 Bazelisk（命令名 `bazel`），检出同一提交，沿用上游 CI 的 arm64 目标。 [制品保留期](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts) · [bb-storage 构建流程](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/.github/workflows/main.yaml#L405-L416) · [Worker 构建流程](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/.github/workflows/main.yaml#L659)
+
+```bash
+bin="$HOME/.local/libexec/z8-buildbarn"
+mkdir -p "$bin"
+git clone https://github.com/buildbarn/bb-storage.git
+git clone https://github.com/buildbarn/bb-remote-execution.git
+git -C bb-storage checkout --detach ca3d8b49a5
+git -C bb-remote-execution checkout --detach c9ba98cf52
+platform=@com_github_buildbarn_bb_storage//tools/platforms:darwin_arm64
+(cd bb-storage && bazel run --run_under cp --platforms="$platform" //cmd/bb_storage "$bin/bb_storage")
+(
+    cd bb-remote-execution
+    bazel run --run_under cp --platforms="$platform" //cmd/bb_worker "$bin/bb_worker" &&
+        bazel run --run_under cp --platforms="$platform" //cmd/bb_runner "$bin/bb_runner"
+)
+```
 
 以专用的普通账户安装 LaunchAgents。runner 原生执行农场提交的代码，该账户只需访问 Xcode 和农场数据目录。先停旧 Docker 缓存和手动隧道。该账户登录且 Mac 唤醒时提供 Darwin worker。重启后登录该账户，接电时在系统设置关闭显示器熄灭后的自动睡眠。将可重建的缓存卷或目录加入 Spotlight 搜索隐私和 Time Machine 排除列表。 [Mac 睡眠设置](https://support.apple.com/en-euro/guide/mac-help/mchle41a6ccd/mac) · [Spotlight 排除](https://support.apple.com/en-az/guide/mac-help/mchl1bb43b84/mac) · [Time Machine 排除](https://support.apple.com/en-am/guide/mac-help/mh14037/27/mac/27)
 

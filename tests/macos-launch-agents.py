@@ -28,9 +28,12 @@ with TemporaryDirectory() as directory:
     command = [sys.executable, str(root / script.name), str(binaries), str(output)]
     env = {**os.environ, "HOME": str(root), "USERPROFILE": str(root)}
 
-    for field in site:
+    for field in (*site, "coldShards"):
         invalid = site.copy()
-        del invalid[field]
+        if field == "coldShards":
+            invalid[field] = None
+        else:
+            del invalid[field]
         config.write_text(json.dumps(invalid), encoding="utf-8")
         result = subprocess.run(command, env=env, text=True, capture_output=True)
         assert result.returncode == 2 and field in result.stderr, result.stderr

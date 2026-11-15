@@ -17,7 +17,7 @@ df -h "$PMEM"
 
 ## llama.cpp v1.0.0 主服务
 
-在 `z8-kit` 根目录设置 `kit=$(pwd -P)`。正式系统从 `/srv/work/jackywang` 执行，T5 从临时 SSD 上的 `$HOME/z8-smoke` 执行。以下编译和下载命令在选定的工作目录运行。CUDA 容器用于编译，不需要访问 GPU。先取 CUDA runtime 库，两种引擎共享，R580 的设备驱动库由宿主提供。 [llama.cpp CUDA 构建配置](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/ggml/src/ggml-cuda/CMakeLists.txt)
+在 `z8-kit` 根目录设置 `kit=$(pwd -P)`。正式系统从 `/srv/work/jackywang` 执行，T5 用 SanDisk 上的临时系统，从 `$HOME/z8-smoke` 执行。以下编译和下载命令在选定的工作目录运行。CUDA 容器用于编译，不需要访问 GPU。先取 CUDA runtime 库，两种引擎共享，R580 的设备驱动库由宿主提供。 [llama.cpp CUDA 构建配置](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/ggml/src/ggml-cuda/CMakeLists.txt)
 
 ```bash
 sudo apt install libgomp1 libssl3t64 numactl

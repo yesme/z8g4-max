@@ -2,7 +2,7 @@
 
 ## T3 准备工具
 
-**验机和正式系统都用 Xubuntu 26.04.1 amd64。** 验机用装在独立 USB SSD 上的临时系统，重启后工具和日志还在。普通 Live 也能跑下面的安装命令，重启后需重新装工具。Live 镜像有 `dmsetup` 和 `jq`，缺 `ipmctl`、`ndctl`、`daxctl`、`fio`、`rasdaemon` 和 `stressapptest`。26.04 官方源提供后五个包；`ipmctl` 从 Canonical 的官方归档取三份同版 `.deb`，其余依赖由 26.04 APT 解析。软件源继续使用 26.04（`resolute`）。 [Xubuntu 26.04.1 官方 manifest](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Ubuntu ipmctl 包索引](https://packages.ubuntu.com/ipmctl) · [Canonical 官方归档](https://archive.ubuntu.com/ubuntu/pool/universe/i/ipmctl/)
+**验机和正式系统都用 Xubuntu 26.04.1 amd64。** 验机用装在 SanDisk U 盘上的临时系统，重启后工具和日志还在。普通 Live 也能跑下面的安装命令，重启后需重新装工具。Live 镜像有 `dmsetup` 和 `jq`，缺 `ipmctl`、`ndctl`、`daxctl`、`fio`、`rasdaemon` 和 `stressapptest`。26.04 官方源提供后五个包；`ipmctl` 从 Canonical 的官方归档取三份同版 `.deb`，其余依赖由 26.04 APT 解析。软件源继续使用 26.04（`resolute`）。 [Xubuntu 26.04.1 官方 manifest](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Ubuntu ipmctl 包索引](https://packages.ubuntu.com/ipmctl) · [Canonical 官方归档](https://archive.ubuntu.com/ubuntu/pool/universe/i/ipmctl/)
 
 ```bash
 sudo apt update
@@ -64,7 +64,7 @@ DDR4-only 测试通过后断电，把 12 条 PMem 插进空槽。第一次混插
 
 ### 2. 在 Xubuntu 26.04.1 记录现状并提交 goal
 
-从 F9 选已准备好的 Xubuntu 26.04.1 临时 SSD，打开终端。工具还没装时，先在该系统连 AX210 Wi-Fi 并执行 [T3 准备工具](#t3-准备工具)。运行下面的只读盘点，输出同时显示在终端并保存到 `~/z8-burnin/pmem-before.log`。
+从 F9 启动 SanDisk 上的临时 Xubuntu 26.04.1，打开终端。工具还没装时，先在该系统连 AX210 Wi-Fi 并执行 [T3 准备工具](#t3-准备工具)。运行下面的只读盘点，输出同时显示在终端并保存到 `~/z8-burnin/pmem-before.log`。
 
 ```bash
 mkdir -p "$HOME/z8-burnin"
@@ -93,7 +93,7 @@ sudo ipmctl create -goal MemoryMode=0 PersistentMemoryType=AppDirect
 sudo ipmctl show -goal
 ```
 
-`MemoryMode=0` 表示 PMem 的 0% 用作 Intel Memory Mode，DDR4 仍是主内存。`AppDirect` 请求让每路的六条 PMem 做硬件交错。`show -goal` 要看到 `Status: New`，即请求已提交、等 BIOS 执行。此时在终端运行 `sudo reboot`，从 F9 回同一个临时 SSD。启动期间 BIOS 应用 goal，无需到 F10 再点 Apply。 [ipmctl create -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/create-memory-allocation-goal) · [HP Linux 配置，第 11 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=11)
+`MemoryMode=0` 表示 PMem 的 0% 用作 Intel Memory Mode，DDR4 仍是主内存。`AppDirect` 请求让每路的六条 PMem 做硬件交错。`show -goal` 要看到 `Status: New`，即请求已提交、等 BIOS 执行。此时在终端运行 `sudo reboot`，从 F9 回 SanDisk 上的临时系统。启动期间 BIOS 应用 goal，无需到 F10 再点 Apply。 [ipmctl create -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/create-memory-allocation-goal) · [HP Linux 配置，第 11 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=11)
 
 ### 3. 重启回 Xubuntu，核对生效再切 namespace
 
@@ -107,7 +107,7 @@ sudo ipmctl show -goal
 } 2>&1 | tee "$HOME/z8-burnin/pmem-after.log"
 ```
 
-成功时同时满足两项。`show -goal` 无待处理请求，`show -region` 有两路状态健康的 App Direct 区域。每路装入标称 768 GiB，HP 给出的模块报告容量约少 2%，region 还受对齐影响。两边容量应相近，并与 `show -memoryresources` 的整机 App Direct 总量相符。若 goal 仍为 `New` 或显示 `Failed`，或只看到一边，先保存日志、检查 F10、DIMM、锁状态和固件，待修复后再切 namespace。把 `pmem-before.log` 和 `pmem-after.log` 一并留存。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15)
+成功时同时满足两项。`show -goal` 无待处理请求，`show -region` 有两路状态健康的 App Direct 区域。每路装入标称 768 GiB，HP 给出的模块报告容量约少 2%，region 还受对齐影响。两边容量应相近，并与 `show -memoryresources` 的整机 App Direct 总量相符。若 goal 仍为 `New` 或显示 `Failed`，或只看到一边，先保存日志、检查 F10、DIMM、锁状态和固件，待修复后再切 namespace。把 `pmem-before.log` 和 `pmem-after.log` 一并留存。接着从 F9 进 Ventoy，选 Memtest86+ 做混插后的一个完整 pass，再回到 SanDisk 上的临时系统，确认两路 region 仍在，继续切 namespace。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15)
 
 ```bash
 sudo ndctl list -Ruv
@@ -328,7 +328,14 @@ lsmem -o RANGE,SIZE,STATE,NODE,ZONES
 
 ## I4 在正式系统复用 PMem
 
-在 T3 把四个 namespace UUID 与两份填好的 env 文件存到独立介质。正式 Xubuntu 26.04.1 启动后用 `ndctl` 对照。BIOS 已应用的 goal、namespace 和已格式化的 DAX 模型卷跨系统保留。
+I4 在正式系统启动后插回 SanDisk。用 `lsblk -o NAME,PATH,MODEL,SERIAL,FSTYPE,MOUNTPOINTS` 定位 SanDisk 的 ext4 根分区，按下面命令只读挂载。从 `/mnt/z8-burnin-usb/home/<验机用户名>/z8-burnin` 取回 T3 的四个 namespace UUID 和两份 env，将 env 复制到正式系统的 `z8-kit` 根目录。复制后执行 `sudo umount /mnt/z8-burnin-usb`，再拔下 SanDisk。
+
+```bash
+sudo mkdir -p /mnt/z8-burnin-usb
+sudo mount -t ext4 -o ro,noload /dev/REPLACE_SANDISK_ROOT_PARTITION /mnt/z8-burnin-usb
+```
+
+`pmem-model.env` 按 socket 填两路 fsdax UUID，`pmem-kmem.env` 按 socket 填两路 devdax UUID，并沿用 T3 验证过的 `Z8_MEMMAP_ON_MEMORY` 与 `Z8_ENABLE_DEMOTION`。正式 Xubuntu 26.04.1 启动后用 `ndctl` 对照。BIOS 已应用的 goal、namespace 和已格式化的 DAX 模型卷跨系统保留。
 
 按保存的 UUID 启用正式条带和 kmem 服务。
 
@@ -352,7 +359,7 @@ sudo systemctl enable z8-pmem-kmem.service
 sudo systemctl enable z8-pmem-model.service
 ```
 
-在 `pmem-kmem.env` 中填两路 devdax namespace UUID，照抄 T3 验证过的 `Z8_MEMMAP_ON_MEMORY` 和 `Z8_ENABLE_DEMOTION`。重启后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem，`sysctl kernel.numa_balancing` 应为 `2`。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。
+完成上述安装后重启。回到正式系统后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem，`sysctl kernel.numa_balancing` 应为 `2`。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。
 
 ## 四卡 pinned DMA 验收
 

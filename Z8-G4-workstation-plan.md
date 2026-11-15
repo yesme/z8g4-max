@@ -4,7 +4,7 @@
 
 主机名 `jackywang-xubuntu-max`，登录用户 `jackywang`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。HC620 与 P4800X 组成可重建的冷 CAS 和归档池，冷索引放在 P4800X 的独立 XFS。模型从首装开始直接放在 App Direct。PMem 从 T3 起使用正式条带。
 
-将本仓库克隆或解压到目标 Linux 的普通用户目录。所有相对路径的操作默认从 `z8-kit` 根目录执行。先阅读本节和第 2–3 节，再打开相应的命令页。
+将本仓库克隆或解压到目标 Linux 的普通用户目录。所有相对路径的操作默认从 `z8-kit` 根目录执行。机旁操作从 [上机操作顺序](z8-kit/host/FIRST-BOOT.md) 开始。本页第 1 节供查看整条路线，第 2–3 节保存硬件与系统配置依据。
 
 - [F10 菜单、DIMM 位置、SATA 接线和起转](z8-kit/host/BIOS.md) · [安装器和系统盘配置](z8-kit/host/INSTALL.md)
 - [拷机命令、时长和错误判读](z8-kit/host/BURN-IN.md) · [App Direct、DAX、kmem 和 pinned DMA](z8-kit/host/PMEM.md)
@@ -16,7 +16,7 @@
 
 | 部分 | 配置 |
 |---|---|
-| 操作系统 | Ubuntu Server 26.04.1 安装 md RAID0，再装同版 `xubuntu-desktop`。FIT 1 GiB ESP + 8 GiB `/boot`，P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
+| 操作系统 | 从现有 Ventoy 的 Xubuntu 26.04.1 Desktop ISO 导入本地 YAML，直接安装桌面和 md RAID0。FIT 1 GiB ESP + 8 GiB `/boot`，P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
 | 主板与驱动 | 纯 UEFI，Secure Boot、ASPM、SATA 电源管理关，NUMA 和 HT 开，SNC 关，VT-x／VT-d 开。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
 | 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，每路 6 核，HT 伙伴留空 |
 | 冷库 | P4800X p1–p7 各 96 GiB，七组 dm-zoned → RAIDZ1。p8 192 GiB，做 special 与内嵌 ZIL；p9 约 533 GiB，做冷索引 XFS。池开启 `autotrim`，冷库用 `zle`，普通数据用 `zstd-3` |
@@ -30,15 +30,15 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 
 ### 第一阶段 · BIOS 设置和硬件测试
 
-顺序是 **CPU → DDR4 → PMem → 存储 → 算力坞**。准备 Memtest86+ U 盘和一套装在独立 USB SSD 的 Xubuntu 26.04.1 临时系统。T3 在同一系统用 Canonical 官方归档的三份 `.deb` 安装 `ipmctl`，用 26.04 软件源安装 `ndctl` 和 `daxctl`。测试日志和盘序列号留在独立介质。换件前关机并断交流电。 [PMem 工具准备](z8-kit/host/PMEM.md)
+顺序是 **CPU → DDR4 → PMem → 存储 → 算力坞**。从三星 Portable SSD T3 250 GB 上的 Ventoy 启动 Xubuntu 26.04.1 Desktop 和 Memtest86+。T1 先把 Xubuntu 装到可清空的 SanDisk Ultra Fit CZ430 128 GB，T1–T5 从该临时系统启动。T3 在同一系统用 Canonical 官方归档的三份 `.deb` 安装 `ipmctl`，用 26.04 软件源安装 `ndctl` 和 `daxctl`。测试日志和盘序列号保存在 SanDisk，I1 前拔下留存。换件前关机并断交流电。 [PMem 工具准备](z8-kit/host/PMEM.md)
 
 固件随验机阶段处理。T1 最小配置稳定 POST 后核 HP BIOS 与 ME，T3 在提交 App Direct goal 前逐条核 PMem，T4 在 SSD 裸盘压测前核固件，T5 记录每张 V100 的 VBIOS。三星 DDR4 和无源直通板直接做硬件测试。 [固件更新条件与命令](z8-kit/host/FIRMWARE.md)
 
 | 顺序 | 这一步接什么 | 做到什么再继续 |
 |---|---|---|
-| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P620、槽 7 AX210 和天线、显示器、Live U 盘与临时 USB SSD | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 用 AX210 先连 Wi-Fi，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-wi-fi-与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
-| **T2 · DDR4** | 沿用 T1 硬件，换用 Memtest86+ U 盘，再换回临时 Linux | 每路 96 GiB、共 192 GiB。Memtest86+ 默认测试集四个完整 pass，跳过 Rowhammer。再跑 Linux 144 GiB、4 小时，比较前后的 ECC 与 CPU 硬件事件。 [怎么读硬件错误](z8-kit/host/BURN-IN.md#怎么读硬件错误) |
-| **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。验混插 DDR4、DAX 持久性，测两路 kmem 的冷启动上线时间，再逐路确认 DDR4 到 PMem 慢节点的下沉。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [kmem 冷启计时](z8-kit/host/PMEM.md#t3-记录-kmem-冷启动时间) |
+| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P620、槽 7 AX210 和天线、显示器、Ventoy 与可清空的 SanDisk | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 用 AX210 先连 Wi-Fi，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-wi-fi-与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
+| **T2 · DDR4** | 沿用 T1 硬件，从 Ventoy 启动 Memtest86+，再回 SanDisk 上的临时 Linux | 每路 96 GiB、共 192 GiB。Memtest86+ 默认测试集四个完整 pass，跳过 Rowhammer。再跑 Linux 144 GiB、4 小时，比较前后的 ECC 与 CPU 硬件事件。 [怎么读硬件错误](z8-kit/host/BURN-IN.md#怎么读硬件错误) |
+| **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。复测混插 DDR4，再验 DAX 与裸 devdax。两路 devdax 转 kmem 后，逐路确认 DDR4 到慢节点的下沉并记录 kmem 冷启上线时间。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [kmem 冷启计时](z8-kit/host/PMEM.md#t3-记录-kmem-冷启动时间) |
 | **T4 · 存储** | 槽 1 加 P4618，确认 Gen3 x8 上行、两个 x4 下行和两个各约 3.2 TB 的 NVMe 端点，再加槽 5 的 P4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验 AX210 与七盘同跑。 [P4618 链路检查](z8-kit/host/BURN-IN.md#p4618-链路与双控制器) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
 | **T5 · 算力坞** | 临时 Linux 先装 NVIDIA 显卡驱动。主机硬件通过后断电，槽 2/3 装直通卡，接 V100 | 逐卡 → 每槽两卡 → 四卡，验 Gen3 x8、六对 NVLink P2P、NCCL、单卡/四卡拷机、pinned H→D。最后跑 1017 冒烟，再关机断开 V100，转正式安装。 [T5 推理冒烟](z8-kit/host/BURN-IN.md#t5-末的-1017-推理冒烟) |
 
@@ -46,7 +46,7 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 
 | 顺序 | 装什么与验证方式 |
 |---|---|
-| **I1 · 操作系统** | 断开 V100 与数据盘，直接用 Ubuntu Server 26.04.1 按 CIDATA 配置建 FIT 和 P4618 RAID0/XFS，再安装 `xubuntu-desktop`。核首启、Dracut 和救援。 [系统盘安装](z8-kit/host/INSTALL.md) |
+| **I1 · 操作系统** | 断开 V100 与数据盘，USB 只接三星 T3（Ventoy）和三星 FIT。从 Xubuntu Desktop Live 联网补 `mdadm`，导入 Ventoy 上的 `autoinstall.yaml`，复核序列号后重建 FIT 的 EFI、`/boot` 和 P4618 RAID0/XFS 根。核首启、Dracut 和 Ventoy 救援。 [系统盘安装](z8-kit/host/INSTALL.md) |
 | **I2 · 远程入口** | AX210 连 Wi-Fi，设开机自动连接和 DHCP 地址保留，再验 SSH 公钥、tmux 与 xrdp/Xfce。Sunshine 的 P620 硬件编码放 I3。 [远程入口](z8-kit/remote/README.md) |
 | **I3 · NVIDIA 显卡驱动与复接 V100** | V100 仍断开，在 Xubuntu 装 `nvidia-driver-580`。这是本方案为 P620 和 V100 选用的 NVIDIA Linux 显卡驱动。重启后用 P620 验桌面、Sunshine/NVENC 和 SSH，再关机接回 V100，核四卡枚举、NVLink 与快速 CUDA/NCCL。 [驱动安装和锁分支](z8-kit/host/INSTALL.md#安装并锁定-nvidia-显卡驱动) |
 | **I4 · 存储与 PMem** | 接回已慢扫的盘，首次划 P4800X 九分区，建七个 dm-zoned target 与 RAIDZ1，按 GUID 导入和挂载。跑持续写、ZFS scrub、两种缺盘冷启和恢复。按 T3 留下的 namespace UUID 恢复 DAX 模型卷和 kmem。 [存储](z8-kit/storage/README.md) · [PMem](z8-kit/host/PMEM.md) |
@@ -75,7 +75,7 @@ F10 首装使用 **纯 UEFI，Legacy/CSM 和 Secure Boot 都关闭**。Fast Boot
 
 **内网首装保留 VT-x、VT-d、默认 PCIe ACS、Intel ME 和 HP Sure Start 的固件恢复。** VT-x 给 KVM 等虚拟机提供 CPU 硬件加速，裸机 Buck2 和 1017 的性能继续按实测记录。关闭不用的 AMT、PXE、TXT 和 HP Sure Recover，保持设备级 DriveLock 未启用。新装 XFS 根若没有使用 TPM 解锁或密钥，可关闭 TPM State。接坞后先记录真实 NVLink 和 PCIe 拓扑，需使用裸机 PCIe P2P 时，按 NVIDIA 要求用 GRUB 单次关闭 Intel IOMMU 做该路径测试。 [F10 各项取值](z8-kit/host/BIOS.md#内网主机的安全与虚拟化设置) · [HP 服务手册](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [NVIDIA 多 GPU 指南](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/multi-gpu-systems.html#host-iommu-hardware-pci-access-control-services-and-vms)
 
-按 Esc → F10 后，在 `Advanced → Secure Boot Configuration → Configure Legacy Support and Secure Boot` 选择 **Legacy Support Disable and Secure Boot Disable**。保存后如出现 Boot Mode Change，输入屏幕确认码。保留 `UEFI Boot Order`，用 F9 选 Memtest86+、安装盘或 FIT 的 UEFI 启动项。在 `Boot Options` 把 `After Power Loss` 设为 Off，按算力坞接线记录手动上电。在 `Slot Settings` 保持槽 1 的 Bifurcation 为 Auto，槽 2/3 改为 x8/x8（若固件提供该项），槽 5/7 保持 Enable。保存后先从 P620 看一次 POST，再进入 Linux 核验。 [HP F10 设置](https://support.hp.com/ee-en/document/ish_9642671-9641393-16)
+按 Esc → F10 后，在 `Advanced → Secure Boot Configuration → Configure Legacy Support and Secure Boot` 选择 **Legacy Support Disable and Secure Boot Disable**。保存后如出现 Boot Mode Change，输入屏幕确认码。保留 `UEFI Boot Order`，用 F9 选 Ventoy UEFI 后在菜单选 Memtest86+ 或 Xubuntu Desktop，也可直接选 FIT 的 UEFI 引导项。在 `Boot Options` 把 `After Power Loss` 设为 Off，按算力坞接线记录手动上电。在 `Slot Settings` 保持槽 1 的 Bifurcation 为 Auto，槽 2/3 改为 x8/x8（若固件提供该项），槽 5/7 保持 Enable。保存后先从 P620 看一次 POST，再进入 Linux 核验。 [HP F10 设置](https://support.hp.com/ee-en/document/ish_9642671-9641393-16)
 
 ```bash
 test -d /sys/firmware/efi && echo 'UEFI boot'

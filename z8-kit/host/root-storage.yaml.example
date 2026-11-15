@@ -1,11 +1,14 @@
-#cloud-config
-# Save as user-data on the CIDATA volume. Include an empty meta-data file.
+# Import this as autoinstall.yaml in the Xubuntu Desktop installer.
 autoinstall:
   version: 1
   refresh-installer:
     update: false
+  source:
+    id: xubuntu-desktop
+  drivers:
+    install: false
   apt:
-    fallback: offline-install
+    fallback: abort
   identity:
     hostname: jackywang-xubuntu-max
     username: jackywang

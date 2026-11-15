@@ -217,7 +217,7 @@ special="${P4800X}-part8"
 
 ### 容量分配与余量
 
-空池创建后只读取一次 `available`。冷库 `refreservation` 取 55% 并向下取整到 TiB，预计 41 TiB。空的 `z8data/reserve` 在同一级扣住 10%，预计 7.5 TiB，通过 `refreservation` 调整。两项预留都按数据集记账。RAIDZ 的可用量按 128 KiB 记录换算；实际写入使用对应记录大小的校验与 padding，另有元数据和压缩影响。 [OpenZFS 空间换算](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2078)稀疏块文件开始只占已写入的空间，冷库的未使用份额仍受预留保护。冷库用量可超过预留，`other` 从共享剩余空间分配，约 35% 是规划值。空数据集的预留减少可分配预算，空闲区仍由 ZFS 管理，物理地址可以分散。 [OpenZFS 2.4.1 预留记账](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/dsl_dataset.c#L4598-L4623)
+空池创建后只读取一次 `available`。冷库 `refreservation` 取 55% 并向下取整到 TiB，预计 41 TiB。空的 `z8data/reserve` 在同一级扣住 10%，预计 7.5 TiB，通过 `refreservation` 调整。两项预留都按数据集记账。RAIDZ 的可用量按 128 KiB 记录换算；实际写入使用对应记录大小的校验与 padding，另有元数据和压缩影响。稀疏块文件开始只占已写入的空间，冷库的未使用份额仍受预留保护。冷库用量可超过预留，`other` 从共享剩余空间分配，约 35% 是规划值。空数据集的预留减少可分配预算，空闲区仍由 ZFS 管理，物理地址可以分散。 [OpenZFS 空间换算](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/vdev.c#L2078) · [OpenZFS 2.4.1 预留记账](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/dsl_dataset.c#L4598-L4623)
 
 10% 是容量取舍。Buildbarn 淘汰逻辑块时只回收文件内偏移，下一次覆盖才可能释放旧 ZFS 物理块。ZFS 按 TXG 分配，三个逻辑写入前沿无法界定磁盘上的碎片带宽度。分配器也会取用能容纳当前写入的空洞。dm-zoned 的 16 个预留顺序区可帮助搬迁，持续可回收量还取决于有效位、写指针和 discard。首次实际占用达到 80% 时，用 `zpool list -Hp -o capacity z8data`（按池物理用量）、`zpool iostat -vlyP z8data 1`、七组 `dmsetup status` 和 `/proc/spl/kstat/zfs/z8data/txgs` 看冷库写入和回收。持续回收恶化时优先增大余量预留，若容量已无法重新分配，再规划缩小并重建冷库。 [Buildbarn 逻辑块释放](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_block_allocator.go#L176-L187) · [OpenZFS 2.4.1 分配器](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/metaslab.c#L1874-L1956) · [Linux 7.0 搬迁目标选择](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L262-L316)
 
@@ -335,7 +335,7 @@ sudo zpool status -vP z8data
 
 保持 `autotrim=on`。只有冷库使用一段时间后空闲 cache 水位长期无法恢复、且日志支持旧块失效传播不足时，才在池健康、无 scrub/resilver、构建空闲时手动执行 `zpool trim -w -r 32M z8data /dev/mapper/hc620-{0..6}`。设备路径以 `zpool status -P` 为准，执行中看 `zpool status -t z8data`。按叶设备限速 32 MiB/s，全盘操作可能持续数日。本机不启用每月全量 TRIM。 [OpenZFS 手工 TRIM](https://openzfs.github.io/openzfs-docs/man/v2.4/8/zpool-trim.8.html)
 
-顺序覆盖未过线时，先用分钟日志区分 CPU 压缩、忙时回收和队列等待。若 HDD 路径仍达不到要求，CAS 回退到 P4618 的独立 XFS 目录，保留 ZFS 池供后续恢复。停用 `z8-buildbarn-worker.service` 和 `z8-buildbarn.service`，按 [Buildbarn 全 XFS 回退](../buildbarn/README.md#全-xfs-回退) 用新状态恢复同一农场入口。七个 mapper 已被 RAIDZ1 占用，故障回退直接用独立的 XFS 目录。
+本节的回退命令在完成 I5 的软件和分核准备后使用。顺序覆盖未过线时，先用分钟日志区分 CPU 压缩、忙时回收和队列等待。若 HDD 路径仍达不到要求，CAS 回退到 P4618 的独立 XFS 目录，保留 ZFS 池供后续恢复。停用 `z8-buildbarn-worker.service` 和 `z8-buildbarn.service`，按 [Buildbarn 全 XFS 回退](../buildbarn/README.md#全-xfs-回退) 用新状态恢复同一农场入口。七个 mapper 已被 RAIDZ1 占用，故障回退直接用独立的 XFS 目录。
 
 ### 同步写与 ZIL 验证
 
@@ -400,7 +400,11 @@ sudo journalctl -b -u z8-buildbarn -u z8-buildbarn-worker --no-pager
 
 ## 6. I5 交给 Buildbarn
 
-确认第 5 节通过、七盘已接回、池 ONLINE。I4 的两路 kmem 应已上线，worker 启动依赖 `z8-pmem-kmem.service`。I4 重启后先执行 `systemctl is-active z8-pmem-kmem.service`，结果应为 `active`。以下从 `z8-kit` 根执行，`/srv/buildbarn/tiered` 在 P4618 XFS 上。
+先完成软件与目录准备，再装分核，最后启动服务。主方案要求 I4 持续写和缺盘演练通过、七盘接回且池 ONLINE。两路 kmem 应已上线，先执行 `systemctl is-active z8-pmem-kmem.service`，结果应为 `active`。以下从 `z8-kit` 根执行，`/srv/buildbarn/tiered` 在 P4618 XFS 上。
+
+### I5.1 软件、目录与单元准备
+
+主方案与全 XFS 回退都先执行这个安装块。
 
 ```bash
 sudo apt install docker.io docker-compose-v2 jq
@@ -411,12 +415,17 @@ sudo install -m 0755 buildbarn/z8-buildbarn-check /usr/local/sbin/
 sudo cp -a buildbarn /opt/z8-kit/
 sudo install -m 0644 storage/systemd/{z8-buildbarn.service,z8-buildbarn-worker.service} \
     /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/z8-buildbarn{,-worker}.service
+```
+
+**主方案**继续执行下面的 p9 和 tiered 目录准备。采用全 XFS 回退的机器直接去 I5.2，回退的目录由回退手册创建。
+
+```bash
 sudo systemctl start srv-bbindex.mount &&
     findmnt -M /srv/bbindex -t xfs -o SOURCE,TARGET,FSTYPE &&
     sudo install -d -m 0755 /srv/bbindex/persistent_state
 sudo install -d -m 0755 /srv/buildbarn/tiered/{cs-hot,cms,ac}/persistent_state
-sudo systemctl daemon-reload
-sudo systemd-analyze verify /etc/systemd/system/z8-buildbarn{,-worker}.service
 findmnt -M /data/buildbarn -o SOURCE,TARGET,FSTYPE
 findmnt -T /srv/buildbarn/tiered -o SOURCE,TARGET,FSTYPE
 sudo docker compose --project-directory /opt/z8-kit/buildbarn \
@@ -427,7 +436,9 @@ sudo docker compose --project-directory /opt/z8-kit/buildbarn \
 
 首次启用存储前，I4 压测文件须已移除。`z8-buildbarn-check` 从 `z8data/buildbarn` 的整 TiB `refreservation` 读冷文件大小。索引按 p9 XFS 首次可用空间向下取整到 GiB，再减 8 GiB。几何记录写到 `/srv/bbindex/cold-layout.json`，连同农场配置备份。后续启动核对预留和已存在的两个文件长度，沿用记录的索引大小。
 
-先完成 [CPU 分核与 runner 归属](../host/CPU-PLACEMENT.md#生成并安装)，再启用下面两个服务。
+### I5.2 分核与启动
+
+执行 [CPU 分核与 runner 归属](../host/CPU-PLACEMENT.md#生成并安装) 的两部分。先安装 CPU slice，再验证 Compose 和安装 runner drop-in。完成后回这里启用下面两个服务。走全 XFS 回退时，安装 CPU slice 后直接按 [回退手册](../buildbarn/README.md#全-xfs-回退) 启动，回退的 Compose 命令已包含分核覆盖。
 
 ```bash
 sudo systemctl enable --now z8-buildbarn.service

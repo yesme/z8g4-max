@@ -132,7 +132,7 @@ filefrag -sv "$src" "$outdir/export"
 
 ## 全 XFS 回退
 
-适用于 I4 冷库持续写达不到目标或冷池故障时。停 tiered 服务，改用 P4618 上独立的 64 GiB CAS（1 GiB 索引）和同一 scheduler。I4 已启用的存储单元继续自动导入池、挂载 `/data/other`。按 [I5 准备过程](../storage/README.md#6-i5-交给-buildbarn) 安装 Docker 和复制配置。回退使用下面的新状态目录，跳过 I5 的 p9 挂载和 tiered 服务启动。完成 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。确认两路 kmem 已上线。使用新存储目录，Buck2 首轮会重新填充缓存。
+适用于 I4 冷库持续写达不到目标或冷池故障时。停 tiered 服务，改用 P4618 上独立的 64 GiB CAS（1 GiB 索引）和同一 scheduler。I4 已启用的存储单元继续自动导入池、挂载 `/data/other`。按 [I5.1 软件与目录准备](../storage/README.md#i51-软件目录与单元准备) 安装 Docker 和复制配置。回退使用下面的新状态目录，跳过 I5 的 p9 挂载和 tiered 服务启动。完成 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。确认两路 kmem 已上线。使用新存储目录，Buck2 首轮会重新填充缓存。
 
 ```bash
 sudo systemctl disable --now z8-buildbarn-worker.service z8-buildbarn.service

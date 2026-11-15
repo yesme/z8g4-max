@@ -1,6 +1,6 @@
 # Z8 G4 拷机与故障演练
 
-从空机开始按本页 T1–T5 验硬件，最后按 [正式安装顺序](INSTALL.md) 上线。把 Xubuntu 26.04.1 装到临时 USB SSD，以便重启后继续使用显卡驱动与诊断工具。测试日志写外部介质。T3 配 PMem 专用测试卷，T4 查裸盘，HC620 与 P4800X 的数据池在 I4 创建。
+按 [上机操作顺序](FIRST-BOOT.md) 确认每轮接线和启动介质，再回本页执行 T1–T5 命令。T1 把 Xubuntu 26.04.1 装到可清空的 SanDisk U 盘，以便重启后继续使用显卡驱动与诊断工具。测试日志保存在 SanDisk，I1 前拔下留存。T3 配 PMem 专用测试卷，T4 查裸盘，HC620 与 P4800X 的数据池在 I4 创建。
 
 T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞断电。T4 完成后关机接坞，T5 通过后关机断开 V100，再做正式安装。
 
@@ -10,7 +10,7 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 ### 首次 Live Wi-Fi 与临时验机系统
 
-用现有 Xubuntu 26.04.1 U 盘从 F9 选择 UEFI，进入 **Try Xubuntu**。已核 Live 的 `linux-modules-7.0.0-30-generic` 含 `iwlwifi`、`iwlmvm`、`btusb` 和 `btintel`，镜像也带 `linux-firmware-intel-wireless` 与 NetworkManager。AX210 插好后即可尝试联网。用 Xfce 面板的网络图标连接实际 LAN 的 Wi-Fi，或用终端 `nmcli --ask` 提示输入密码。先确认 AX210、`iwlwifi`、接口、地址与路由，再验证 APT。普通 Live 的网络配置和临时安装的软件随重启清空。Live 联网成功后，把同版 Xubuntu 安装到独立 USB SSD，拔下安装 U 盘，从临时 SSD 冷启，再连接同一 Wi-Fi，T1–T5 的工具和日志从此保留。 [官方 Live 包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Linux AX210 驱动](https://wireless.docs.kernel.org/en/latest/en/users/drivers/iwlwifi.html) · [nmcli 手册](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli.html)
+用 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu** 进入 Live。已核 Live 的 `linux-modules-7.0.0-30-generic` 含 `iwlwifi`、`iwlmvm`、`btusb` 和 `btintel`，镜像也带 `linux-firmware-intel-wireless` 与 NetworkManager。AX210 插好后即可尝试联网。用 Xfce 面板的网络图标连接实际 LAN 的 Wi-Fi，或用终端 `nmcli --ask` 提示输入密码。先确认 AX210、`iwlwifi`、接口、地址与路由，再验证 APT。普通 Live 的网络配置和临时安装的软件随重启清空。 [官方 Live 包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Linux AX210 驱动](https://wireless.docs.kernel.org/en/latest/en/users/drivers/iwlwifi.html) · [nmcli 手册](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli.html)
 
 ```bash
 lspci -nnk | grep -A3 -Ei 'Network controller|AX210'
@@ -27,16 +27,22 @@ sudo apt update
 
 如果扫不到 SSID，先核两根天线、F10 槽 7 和 `rfkill list`。软阻断时运行 `sudo rfkill unblock wifi`。PCIe 已识别但接口缺失时，看 `sudo journalctl -k -b --no-pager -g 'iwlwifi|firmware'`。如果日志确实报缺固件，用另一台联网机器从 26.04 官方源下载 `linux-firmware-intel-wireless` 的 `.deb`，经 USB 拷入，`sudo dpkg -i ./linux-firmware-intel-wireless_*.deb` 后在本机控制台运行 `sudo modprobe -r iwlmvm iwlwifi`，再运行 `sudo modprobe iwlwifi`。安装好的临时系统也可重启。能够连上 AP 但没有默认路由或 DNS 时，先处理 DHCP/DNS。`apt update` 若报告仓库访问失败，先解决该错误再安装工具。
 
+Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra Fit CZ430 128 GB**。此时 P4618 等存储还未安装，FIT 也先不接。先只插三星 Portable SSD T3 250 GB，从其 Ventoy 菜单启动，等进入 Live 再插 SanDisk。CZ430 的标称容量约为 119 GiB，供临时桌面系统、CUDA 构建工具和日志使用。 [SanDisk 型号规格](https://www.sandisk.com/products/usb-flash-drives/sandisk-ultra-fit-usb-3-1?sku=SDCZ430-128G-G46) · [Xubuntu 容量要求](https://xubuntu.org/download/#system-requirements)
+
+1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。Samsung FIT 也是 128 GB，所以不要按容量单独判断。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
+2. 安装后按提示拔 Ventoy，SanDisk 留在原 USB 口。从 F9 启动指向 SanDisk 的 UEFI 引导项。运行 `findmnt /`、`findmnt /boot/efi`，用 `lsblk` 验证两者都在 SanDisk。用 AX210 重连 Wi-Fi 并执行 `sudo apt update`。
+3. 用 `mkdir -p "$HOME/z8-burnin"` 建日志目录。后续保存验机输出的命令从这个目录运行，或显式给出目录路径。T2/T3 内存测试时才从 Ventoy 选 Memtest86+，其余各轮从 SanDisk 上的临时 Xubuntu 启动。
+
 ### CPU 拷机
 
-从临时 SSD 启动并确认联网后，准备 CPU 微码和压测工具。微码安装后先重启，再记录两个物理 socket、每路一个 DDR4 节点和当前微码版本。若 `numactl --hardware` 显示的拓扑不符，先回 F10 核对 NUMA 开、SNC 关，再确认两路 DDR4 枚举。
+从 SanDisk 上的临时系统启动并确认联网后，准备 CPU 微码和压测工具。微码安装后先重启，再记录两个物理 socket、每路一个 DDR4 节点和当前微码版本。若 `numactl --hardware` 显示的拓扑不符，先回 F10 核对 NUMA 开、SNC 关，再确认两路 DDR4 枚举。
 
 ```bash
 sudo apt update
 sudo apt install intel-microcode linux-firmware-intel-wireless stress-ng rasdaemon lm-sensors numactl
 ```
 
-重启临时 SSD 后运行下列检查。
+重启进 SanDisk 临时系统后运行下列检查。
 
 ```bash
 sudo systemctl enable --now rasdaemon
@@ -52,7 +58,7 @@ sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
 保留 `matrixprod` 作为通用负载，再单独跑 30 分钟 **AVX-512 VNNI**。Xubuntu 26.04 的 stress-ng 0.20.01 提供 `vpdpbusd512` intrinsic。8269CY 启动后应枚举 Linux 标志 `avx512f` 和 `avx512_vnni`。先跑 5 秒确认确有 bogo ops 且压力项通过，再跑双路全核。 [Ubuntu stress-ng VNNI 参数](https://manpages.ubuntu.com/manpages/resolute/man1/stress-ng.1.html) · [Cascade Lake AVX 频率实测](https://www.nas.nasa.gov/hecc/support/kb/cascade-lake-processors_579.html)
 
 ```bash
-# 从已挂载的外部日志盘目录运行。
+# 从 ~/z8-burnin 运行。
 sudo apt install linux-tools-common "linux-tools-$(uname -r)"
 sudo modprobe msr
 grep -m1 -w avx512f /proc/cpuinfo
@@ -91,12 +97,12 @@ sudo journalctl -k -b --no-pager | grep -Ei 'mce|EDAC|thermal|throttl'
 | MCE，Machine Check Exception | CPU 的硬件错误报告路径，可能涉及缓存、内存控制器、UPI 等。Linux 日志也会记录已纠正的 machine-check 事件。看到 `mce` 字样先区分驱动启动提示和实际事件，再看错误 bank、严重性和时间。 |
 | Rowhammer | 专测反复激活 DDR4 行是否让相邻行翻位。Memtest86+ 默认关闭这项，专项耗时随容量增长。常规拷机跳过，只有专门评估 DDR4 的行扰动时才单独打开。 |
 
-用 `sudo ras-mc-ctl --status` 看驱动状态，`sudo ras-mc-ctl --errors` 和 `sudo ras-mc-ctl --error-count` 分别看事件和系统导出的 CE/UE 计数。若计数未导出，把 EDAC 覆盖记为待确认，同时看 `journalctl -k -b` 和 F10 的 `Main → BIOS Event Log`。Memtest86+ 从自己的 U 盘启动，现场拍照保存那一轮的结果。 [Ubuntu ras-mc-ctl 手册](https://manpages.ubuntu.com/manpages/resolute/man8/ras-mc-ctl.8.html) · [Linux EDAC](https://docs.kernel.org/driver-api/edac.html) · [Linux machine check](https://docs.kernel.org/arch/x86/x86_64/machinecheck.html) · [Memtest86+ 测试说明](https://www.memtest.org/readme)
+用 `sudo ras-mc-ctl --status` 看驱动状态，`sudo ras-mc-ctl --errors` 和 `sudo ras-mc-ctl --error-count` 分别看事件和系统导出的 CE/UE 计数。若计数未导出，把 EDAC 覆盖记为待确认，同时看 `journalctl -k -b` 和 F10 的 `Main → BIOS Event Log`。Memtest86+ 从 Ventoy 菜单启动，现场拍照保存那一轮的结果。 [Ubuntu ras-mc-ctl 手册](https://manpages.ubuntu.com/manpages/resolute/man8/ras-mc-ctl.8.html) · [Linux EDAC](https://docs.kernel.org/driver-api/edac.html) · [Linux machine check](https://docs.kernel.org/arch/x86/x86_64/machinecheck.html) · [Memtest86+ 测试说明](https://www.memtest.org/readme)
 
 ## T2. 只测 DDR4
 
-1. DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 留在槽 4，其余板卡和硬盘继续等后续轮次。
-2. 用官方 Memtest86+ x86_64 UEFI USB，F9 选 UEFI USB。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
+1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 和 AX210 分别留在槽 4 和槽 7。
+2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
 3. 换回临时 Linux。先检查 `free -h`。若只见约 192 GiB、无其他重服务，用下列 144 GiB 负载持续 4 h。保存两个 socket 的温度、频率、EDAC 和内核日志。
 
 ```bash
@@ -119,7 +125,7 @@ diff -u ddr4-ecc-before.log ddr4-ecc-after.log
 
 ## T3. PMem 100，App Direct 的专用检查
 
-1. T2 通过后关机断电。DDR4 留在原位，往 CPU0 和 CPU1 各自的 DIMM 2/4/6/7/9/11 加 PMem。打开 [T3 的 App Direct 操作](PMEM.md#t3-配置-app-direct)，从第 1 步依次走到第 3 步。F10 负责查条和临时解冻。Xubuntu 终端先用 `ipmctl show` 保存旧状态，再用 **`sudo ipmctl create -goal MemoryMode=0 PersistentMemoryType=AppDirect`** 提交。重启时 BIOS 应用，回到 Xubuntu 才核两路 region 并用 `ndctl` 切 namespace。固件检查和实际执行命令都在该操作页。App Direct 生效后，复跑至少一个完整 Memtest86+ pass，确认混插后的 DDR4；PMem 持久区随后用专用测试。回到临时系统再做以下诊断。
+1. T2 通过后关机断电。DDR4 留在原位，往 CPU0 和 CPU1 各自的 DIMM 2/4/6/7/9/11 加 PMem。打开 [T3 的 App Direct 操作](PMEM.md#t3-配置-app-direct)，依次做 F10 查条与临时解冻、Linux 盘点和提交 App Direct goal、重启核对两路 region。再用 Memtest86+ 复测混插 DDR4 至少一个完整 pass。回 SanDisk 上的临时系统切 namespace，使用下面的诊断和写读校验验 PMem。
 
 ```bash
 sudo ipmctl show -units GiB -socket
@@ -146,11 +152,11 @@ sudo env PMEM_TEST_DAX=/dev/dax0.1 PMEM_TEST_SIZE=8G \
 # 改成两个实际设备、合适的容量，分别执行 devdax job。
 ```
 
-对 fsdax 做跨重启持久性检查。给测试文件计算 SHA-256 并存到独立日志盘，`sync`、干净关机后切 AC。重新启动临时系统后，填回两个 fsdax UUID，执行 `sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"` 挂载，再用 `sha256sum -c` 核已保存的清单。测试后检查 fio `error=0`、所有 hash 一致，ipmctl 介质/热日志无新增错误。通过后移除本次 `/srv/pmem-model/burnin.bin`，保留独立介质上的日志与校验值。 [fio PMDK 文件引擎](https://github.com/axboe/fio/blob/master/engines/libpmem.c) · [fio devdax 引擎](https://github.com/axboe/fio/blob/master/engines/dev-dax.c)
+对 fsdax 做跨重启持久性检查。给测试文件计算 SHA-256 并存到 SanDisk 上的 `~/z8-burnin`，`sync`、干净关机后切 AC。重新启动临时系统后，填回两个 fsdax UUID，执行 `sudo bash host/pmem-dax-stripe.sh mount "$FS0_UUID" "$FS1_UUID"` 挂载，再用 `sha256sum -c` 核已保存的清单。测试后检查 fio `error=0`、所有 hash 一致，ipmctl 介质/热日志无新增错误。通过后移除本次 `/srv/pmem-model/burnin.bin`，保留 SanDisk 上的日志与校验值。 [fio PMDK 文件引擎](https://github.com/axboe/fio/blob/master/engines/libpmem.c) · [fio devdax 引擎](https://github.com/axboe/fio/blob/master/engines/dev-dax.c)
 
 3. 通过后按 [PMem 手册](PMEM.md#剩余-pmem-转-kmem) 打开全局和每设备的 `memmap_on_memory`，再把两个 devdax 转成 kmem。用 `numactl -H` 确认实际慢节点，逐节点试 `numactl --membind=<slow-node> stressapptest -s 7200 -M 131072 -m 12 -W`。检查测试进程的 `numastat -p`。这轮确认慢内存可以直接分配、写入和回读。记录介质错误、温度、节流及各慢节点在线容量。
 
-4. 保存 [双路 NUMA 拓扑](PMEM.md#核对双路-numa-拓扑)，用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，两路都通过后启用正常页下沉并进入 T4。
+4. 保存 [双路 NUMA 拓扑](PMEM.md#核对双路-numa-拓扑)，用 [逐路下沉验证](PMEM.md#核实每路-ddr4-的冷页去向) 检查 DDR4 的冷页实际去哪一块 PMem，两路都通过后启用正常页下沉，再做 [kmem 冷启计时](PMEM.md#t3-记录-kmem-冷启动时间)。保存四个 UUID 和两份实填 env 后进入 T4。
 
 ## T4. 存储、网络硬件和无坞基线
 
@@ -200,7 +206,7 @@ sudo nvme id-ctrl -H "${ssds[2]}"
 hdds=(/dev/disk/by-id/ata-REPLACE_SATA{0..6})
 # 输出应为七个不同的 14 TB host-managed 整盘。
 lsblk -dn -o NAME,MODEL,SERIAL,SIZE,TYPE,ZONED "${hdds[@]}"
-# 把 logdir 指向已挂载的临时系统或外部日志盘。
+# 把 logdir 指向 SanDisk 临时系统的日志目录。
 logdir="$PWD/logs/hc620"
 mkdir -p "$logdir"
 for disk in "${hdds[@]}"; do
@@ -243,7 +249,7 @@ lsblk -e 7 -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN,ZONED
 
 ### T5 末的 1017 推理冒烟
 
-在 T5 开始时即可准备权重，约 232 GiB，Wi-Fi 下载时间单独安排。用临时 Xubuntu 的用户运行。编译和日志放临时 SSD，权重留在 T3 的正式模型卷。以下从 `z8-kit` 根目录执行；已挂载的卷也可用同一条 `mount` 命令核验。
+在 T5 开始时即可准备权重，约 232 GiB，Wi-Fi 下载时间单独安排。用临时 Xubuntu 的用户运行。编译和日志放 SanDisk 上的临时 Xubuntu，先用 `df -h / /var/lib` 核对剩余空间，再装 Docker 和下载 CUDA 构建镜像。模型权重直接写 T3 的正式模型卷。以下从 `z8-kit` 根目录执行；已挂载的卷也可用同一条 `mount` 命令核验。
 
 ```bash
 kit=$(realpath .)

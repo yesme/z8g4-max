@@ -2,20 +2,24 @@
 
 ## I1. 安装 Xubuntu 26.04.1
 
-### I1.1 用 Ubuntu Server 26.04.1 准备正式安装
+### I1.1 从现有 Ventoy 启动 Xubuntu Desktop
 
-Xubuntu Desktop Live 用于 T1–T5 验机和 I1 救援。正式系统用 Ubuntu Server 26.04.1 的 Subiquity 安装 RAID0/XFS，再安装同版 `xubuntu-desktop`。Server 支持 md RAID0，Desktop 安装器的 mdadm 问题 [#1210](https://github.com/canonical/ubuntu-desktop-provision/issues/1210) 仍开放。由 Curtin 一次创建阵列和三个文件系统。 [Subiquity 的 RAID 支持](https://canonical-subiquity.readthedocs-hosted.com/en/latest/howto/configure-storage.html#raid)
+I1 接两只 USB 设备。**三星 Portable SSD T3 250 GB（Ventoy）** 启动 `xubuntu-26.04.1-desktop-amd64.iso` 并存放安装 YAML，**三星 FIT 128 GB** 是引导盘的写入目标。T1–T5 的临时 Xubuntu 和验机记录留在 SanDisk CZ430 128 GB。按 [T5 交接步骤](FIRST-BOOT.md#2-t5-验算力坞) 保存记录并关机，拔下 SanDisk，再接 FIT。
 
-T5 通过后关机断电，断开 V100、七块 HC620 和 P4800X，拔掉临时系统盘。保留 DDR4、PMem、P620、P4618 和接好天线的 AX210。插入 Samsung FIT 目标盘、校验 SHA-256 后写好的 Server ISO U 盘，以及下节的 CIDATA 介质。用 F9 选 Server 介质的 UEFI 入口。 [Ubuntu Server 26.04.1 ISO](https://releases.ubuntu.com/26.04/)
+T5 通过后关机断电，断开 V100、七块 HC620 和 P4800X。保留 DDR4、PMem、P620、P4618 和接好天线的 AX210。用 F9 选 Ventoy 的 UEFI 入口，在菜单选现有 Xubuntu 26.04.1 Desktop ISO。ISO 的 SHA-256 可在 Windows 用 `Get-FileHash -Algorithm SHA256` 核对。 [Xubuntu 26.04.1 ISO 与 SHA256SUMS](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/)
+
+正式安装时，图形界面负责导入 YAML 和确认，Subiquity 把明确列出的磁盘动作交给 Curtin 创建阵列和文件系统。桌面安装器的 [#1210](https://github.com/canonical/ubuntu-desktop-provision/issues/1210) 涉及手动分区页找不到预建 md 阵列。I1 直接走自动安装，P4618 在这一阶段由安装器分区和组阵。 [桌面安装器导入配置](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#type-of-installation) · [Subiquity RAID 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/howto/configure-storage.html#raid)
 
 | 设备 | 布局 |
 |---|---|
-| Samsung FIT 128 GB | 1 GiB FAT32 ESP 挂 `/boot/efi`，8 GiB ext4 挂 `/boot` |
+| Samsung FIT 128 GB | 1 GiB FAT32 ESP 挂 `/boot/efi`，8 GiB ext4 挂 `/boot`，其余约 110 GiB 留作未分配空间。救援仍用 Ventoy 上的 Xubuntu Live |
 | P4618 两个 3.2 TB NVMe | 各取一个等大的成员分区，md RAID0、metadata 1.2、512 KiB chunk。XFS 挂 `/`，显式 `crc=1,reflink=1` 和 `su=512k,sw=2` |
+
+三星 FIT 128 GB 的 H2testw 实测为读取 **315 MB/s**、写入 **60 MB/s**（用户提供）。
 
 8 GiB ext4 供已验内核、新版试启项和生成 initramfs 时的临时文件使用。512 KiB 是 26.04 mdadm 的创建默认值，Curtin 创建阵列时沿用该值。 [mdadm 默认 chunk](https://manpages.ubuntu.com/manpages/resolute/man8/mdadm.8.html) · [Curtin mdadm 源码](https://github.com/canonical/curtin/blob/main/curtin/block/mdadm.py)
 
-**Dracut 负责生成 initramfs。** Ubuntu 从 25.10 开始切换默认生成器，Ubuntu Server 26.04.1 新装直接使用 Dracut。Canonical 采用它来统一早期启动的 systemd 工作方式，并复用上游的存储和网络启动模块。 [Ubuntu 26.04 发布说明](https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/#dracut) · [Canonical 的切换设计](https://discourse.ubuntu.com/t/spec-switch-to-dracut/54776)
+**Dracut 负责生成 initramfs。** Ubuntu 从 25.10 开始切换默认生成器，Xubuntu 26.04.1 Desktop 镜像包含 Dracut。Canonical 采用它来统一早期启动的 systemd 工作方式，并复用上游的存储和网络启动模块。 [Ubuntu 26.04 发布说明](https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/#dracut) · [Xubuntu 26.04.1 软件包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/xubuntu-26.04.1-desktop-amd64.manifest)
 
 本机开机时，固件启动 Samsung FIT ESP 上的 GRUB。GRUB 从 FIT 的 `/boot` 读取内核和 `initrd.img-*`，Linux 将后者解开到内存，作为临时根。这个临时环境用 NVMe 驱动看到 P4618 的两个成员，交给 `mdadm` 组装 RAID0，再挂载 XFS `/` 并切进正式系统。I1.4 用 `dracut` 更新这份镜像，用 `lsinitrd` 检查其中的组件。
 
@@ -33,31 +37,49 @@ for disk in "$FIT" "$A" "$B"; do
 done
 ```
 
-把 [安装配置](root-storage.yaml.example) 复制为 `user-data`。替换三个 `REPLACE_*_ID_SERIAL`，每项整串抄录且不含 `ID_SERIAL=` 前缀。填写密码哈希，可用 `openssl passwd -6` 交互生成。把 `user-data` 与空 `meta-data` 放到一个卷标为 `CIDATA` 的独立 FAT 卷根目录。这个配置会重建三个目标设备的分区表。安装脚本在写盘前停在 `early-commands` 等待设备核对。CIDATA 内含密码哈希，保存在本地介质。 [Canonical NoCloud 安装指南](https://canonical-subiquity.readthedocs-hosted.com/en/latest/tutorial/providing-autoinstall.html) · [Subiquity 按序列号匹配](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#disk-selection-extensions)
+在 Windows 打开三星 T3 上 Ventoy **存放 ISO 的大数据分区**，在根目录新建 `z8` 文件夹，把 [安装配置样例](root-storage.yaml.example) 复制为 `z8\autoinstall.yaml`。替换三个 `REPLACE_*_ID_SERIAL`，整串抄录且省略 `ID_SERIAL=` 前缀。用临时 Xubuntu 的 `openssl passwd -6` 交互生成密码哈希，将输出填入 `identity.password`。保存为无 BOM 的 UTF-8 文本，在 Windows 显示文件扩展名并确认文件名是 `autoinstall.yaml`。实填文件含密码哈希，保留在私有副本中。
 
-从 Server 介质进 Subiquity，切到安装器的另一控制台。核对本次启动的三个序列号、设备容量和 `/autoinstall.yaml` 里的 storage 匹配项，确认三块设备可清空后再运行 `sudo touch /run/z8-storage-confirmed`，然后回到安装器处理其确认提示。若配置未加载或序列号对不上，停在写盘前检查 CIDATA。基础系统可离线完成，从 FIT 启动后装桌面和远程入口。
+`CIDATA` 是 cloud-init 通过卷标自动寻找 NoCloud 配置时用的名字。此处由桌面安装器显式读取 YAML，Ventoy 的大分区可以保留原卷标和文件系统，现有 ISO 与 Memtest 工具继续从原菜单启动。 [Ventoy 的分区布局](https://www.ventoy.net/en/doc_disk_layout.html) · [NoCloud 卷标](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html#source-2-drive-with-labeled-filesystem)
 
-### I1.3 安装桌面
+### I1.3 在桌面安装器导入并确认写盘
 
-若安装阶段没连上 Wi-Fi，在本机控制台先给 AX210 配网络。缺 `wpasupplicant` 时用手机 USB 网络共享安装，或在 T1 已联网的临时系统准备 26.04 的包和依赖。用 `ip -br link` 确认接口名，把以下内容写到 `/etc/netplan/90-z8-wifi.yaml`。家庭 WPA2/WPA3 兼容模式使用预共享密钥。文件设 0600，执行 `sudo netplan try`，确认默认路由和 APT 可用后接受配置。 [Netplan 无线配置](https://netplan.readthedocs.io/en/latest/netplan-yaml/)
+1. 进 **Try Xubuntu**，从 Xfce 面板连 AX210 Wi-Fi。打开终端，更新 APT 列表并给当前 Live 会话补上 `mdadm`。安装器需要它创建 RAID0，目标系统也需要通过 APT 安装它以便下次开机组阵。样例选择标准 `xubuntu-desktop` 源，APT 找不到可用镜像时中止。 [镜像软件包清单](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/xubuntu-26.04.1-desktop-amd64.manifest) · [Curtin 的存储依赖](https://github.com/canonical/curtin/blob/main/curtin/block/deps.py) · [安装源和 APT 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#source)
 
-```yaml
-network:
-  version: 2
-  wifis:
-    REPLACE_WITH_AX210_INTERFACE:
-      renderer: networkd
-      dhcp4: true
-      access-points:
-        "REPLACE_WITH_SSID":
-          password: "REPLACE_WITH_PASSWORD"
-```
+   ```bash
+   sudo apt update && sudo apt install mdadm
+   command -v mdadm && command -v mkfs.xfs
+   lsblk -o NAME,PATH,SIZE,MODEL,FSTYPE,LABEL,MOUNTPOINTS
+   ```
 
-```bash
-sudo apt update
-sudo apt install xubuntu-desktop
-sudo reboot
-```
+2. 在 Thunar 打开 Ventoy 大数据分区，把 `z8/autoinstall.yaml` 复制到 Live 用户的家目录，便于文件选择器读取。若 Thunar 未列出该分区，先从上一步 `lsblk` 的 `MOUNTPOINTS` 查挂载路径，再从该路径复制。只有该分区尚未挂载时才执行以下命令，将占位符替换为从 `lsblk` 确认的 **Ventoy 大数据分区**路径。
+
+   ```bash
+   sudo mkdir -p /mnt/ventoy
+   sudo mount -o ro /dev/REPLACE_VENTOY_PARTITION /mnt/ventoy
+   install -m 0600 /mnt/ventoy/z8/autoinstall.yaml "$HOME/autoinstall.yaml"
+   ```
+
+3. 在桌面打开 **Install Xubuntu 26.04.1 LTS**。选择 **Type of installation → Automated with autoinstall file → Select file…**，选家目录里的 `autoinstall.yaml`，点 **Import**。安装器会把文件写入 Live 环境的 `/autoinstall.yaml` 并重启后端。样例的 `early-commands` 会在写盘前等待，导入页可能暂时一直转圈。此时 `Alt+Tab` 回到 Live 终端。 [桌面导入源码](https://github.com/canonical/ubuntu-desktop-provision/blob/ubuntu/26.04/apps/ubuntu_bootstrap/lib/services/autoinstall_service.dart) · [Subiquity 的 early-commands](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#early-commands)
+
+4. 再次按 T4 记录定位三个整盘 by-id，填入下列命令。`cmp` 显示 Live 安装器采用的是刚导入的文件，`awk` 只显示磁盘布局和序列号。
+
+   ```bash
+   lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN
+   FIT=/dev/disk/by-id/usb-REPLACE_FIT
+   A=/dev/disk/by-id/nvme-REPLACE_P4618_A
+   B=/dev/disk/by-id/nvme-REPLACE_P4618_B
+   for disk in "$FIT" "$A" "$B"; do
+       udevadm info --query=property --name="$disk" | grep '^ID_SERIAL='
+   done
+   sudo cmp -s "$HOME/autoinstall.yaml" /autoinstall.yaml && echo "Imported YAML matches"
+   sudo awk '/^  storage:/{show=1; print; next}
+       show && /^  [^[:space:]#]/{exit}
+       show' /autoinstall.yaml
+   ```
+
+5. 看到 `Imported YAML matches`，三个 `ID_SERIAL` 与 T4 一致，根卷用两个 P4618 端点且 ESP、`/boot` 都在 FIT，才运行 `sudo touch /run/z8-storage-confirmed`。回到图形界面，在 **Ready to install** 再确认后点 **Install**。这会重建 FIT 和两个 P4618 端点的分区表。若导入报错或身份不一致，停在这一步检查。 [按序列号匹配磁盘](https://canonical-subiquity.readthedocs-hosted.com/en/latest/reference/autoinstall-reference.html#disk-selection-extensions) · [桌面安装器的最终确认](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#ready-to-install)
+
+6. 安装完成后按提示拔下 **Ventoy**，FIT 留在原 USB 口。重启直接进入装好的 Xubuntu Desktop。必要时从 F9 选择指向 FIT 的 UEFI 引导项。用 Xfce 网络图标重新连 Wi-Fi，再执行 I1.4。
 
 ### I1.4 核验 FIT 引导并做救援验证
 
@@ -72,13 +94,14 @@ test -d /sys/firmware/efi && echo 'UEFI boot'
 LC_ALL=C mokutil --sb-state  # SecureBoot disabled
 sudo efibootmgr -v
 sudo mdadm --detail --scan
+sudo mdadm --detail "$(findmnt -n -o SOURCE /)"
 cat /proc/mdstat
 hostnamectl --static
 id jackywang
 sudo xfs_info /
 ```
 
-首启应看到主机名 `jackywang-xubuntu-max`、用户 `jackywang` 和根卷的 `reflink=1,sunit=128,swidth=256`（4 KiB XFS 块）。 [Ubuntu 26.04 mkfs.xfs](https://manpages.ubuntu.com/manpages/resolute/man8/mkfs.xfs.8.html)
+首启应看到主机名 `jackywang-xubuntu-max`、用户 `jackywang`，md 阵列为两个成员、RAID0、512 KiB chunk，根卷为 `reflink=1,sunit=128,swidth=256`（4 KiB XFS 块）。 [Ubuntu 26.04 mkfs.xfs](https://manpages.ubuntu.com/manpages/resolute/man8/mkfs.xfs.8.html)
 
 ### 首启后定稿挂载参数
 
@@ -95,9 +118,33 @@ sudo lsinitrd -m "/boot/initrd.img-$abi" | grep -w mdraid
 sudo lsinitrd "/boot/initrd.img-$abi" | grep -E '(^|/)(mdadm|raid0\.ko|xfs\.ko|nvme\.ko)'
 ```
 
-第一次验证后再关机冷启一次，确认固件仍选中 FIT、三个挂载点一致、两个 md 成员齐全。若首启落到 initramfs，先用独立救援盘执行下一段的组装检查。
+第一次验证后再关机冷启一次，确认固件仍选中 FIT、三个挂载点一致、两个 md 成员齐全。若首启落到 initramfs，从 Ventoy 启动 Xubuntu Live 并执行下一段的组装检查。正常冷启也做一次救援演练。
 
-留存 RAID、GPT、EFI、fstab、mdadm.conf、驱动和软件包清单。故障恢复时从独立 USB UEFI 启动，核对所有设备后组装目标 md，按原次序挂根、boot、ESP，bind-mount `/dev`、`/proc`、`/sys`、`/run` 后 chroot 检查。先验证救援能读根，再按是否损坏 GRUB/EFI 决定重装引导。阵列成员失效按根备份重建。将救援 USB 与常驻启动 USB 做物理区分。
+留存 RAID、GPT、EFI、fstab、`mdadm.conf`、驱动和软件包清单。救援演练从 Ventoy UEFI 启动同一份 Xubuntu Desktop ISO，选择 Try Xubuntu。根据安装记录核对两个 P4618 成员与 FIT 的现有 UUID。确认目标 md 未自动组装时，才用明确列出的两个成员只读组装。若 Live 缺少工具，先联网装 `mdadm` 和 `xfsprogs`。核对 `mdadm --detail` 后只读挂载根卷。已自动组装时复用该 md 设备。以下占位符来自 I1 实测记录，不能照抄设备名。
+
+```bash
+lsblk -f
+cat /proc/mdstat
+# 仅当目标阵列未自动组装时运行，替换两个成员分区的 by-id。
+A=/dev/disk/by-id/nvme-REPLACE_P4618_A-part1
+B=/dev/disk/by-id/nvme-REPLACE_P4618_B-part1
+sudo mdadm --assemble --readonly /dev/md/z8root "$A" "$B"
+```
+
+```bash
+# 已自动组装时把下面路径改为 /proc/mdstat 中的实际设备。
+ROOT_MD=/dev/md/z8root
+sudo mdadm --detail "$ROOT_MD"
+sudo install -d /mnt/z8root
+sudo mount -t xfs -o ro,norecovery "$ROOT_MD" /mnt/z8root
+findmnt -M /mnt/z8root
+sudo cat /mnt/z8root/etc/hostname
+sudo umount /mnt/z8root
+```
+
+读到 `jackywang-xubuntu-max` 后结束演练，回 FIT 启动。 [Ubuntu 26.04 mdadm](https://manpages.ubuntu.com/manpages/resolute/man8/mdadm.8.html) · [XFS 的 norecovery](https://manpages.ubuntu.com/manpages/resolute/man5/xfs.5.html#norecovery)
+
+实际维修时，按根、`/boot`、ESP 的顺序挂载，再 bind-mount `/dev`、`/proc`、`/sys`、`/run` 并 chroot 检查；只有实际引导文件损坏时才重装引导。阵列成员失效按根备份重建。
 
 用本机控制台确认 AX210 已连接 Wi-Fi，安装基础组件，然后按 [远程入口](../remote/README.md) 做 I2。先从另一台机器验 SSH 与 xrdp，之后才动显卡驱动。
 
@@ -123,7 +170,7 @@ findmnt -T /srv/buildbarn -o SOURCE,TARGET,FSTYPE
 
 ## 安装并锁定 NVIDIA 显卡驱动
 
-I3 开始时 V100 断开、P620 在槽 4。**R580 是 NVIDIA Linux 显卡驱动的 580.x 分支**，也是 NVIDIA 最后一条同时支持 V100（Volta）和 P620（Pascal）的驱动分支。这台机安装 Ubuntu 的专有驱动包 `nvidia-driver-580`，并接受该分支的补丁更新。2026 年 11 月 13 日核对的 APT 组合为 `580.178.04-0ubuntu0.26.04.1` 和 `linux-modules-nvidia-580-generic 7.0.0-43.43`。第三方 CUDA 构建留在独立用户空间，目标 `sm_70` 用 CUDA 12.x。 [NVIDIA 驱动支持矩阵](https://docs.nvidia.com/datacenter/tesla/drivers/cuda-toolkit-driver-and-architecture-matrix.html) · [580.x 支持的 GPU](https://download.nvidia.com/XFree86/Linux-x86_64/580.159.03/README/supportedchips.html) · [Ubuntu 驱动包](https://packages.ubuntu.com/resolute-updates/nvidia-driver-580) · [Ubuntu 驱动安装](https://ubuntu.com/server/docs/how-to/graphics/install-nvidia-drivers/)
+T5 在临时系统执行本节的 APT 和重启核验，完成后回拷机手册接坞。I3 在正式系统重新执行本节，再做下面的 Sunshine 和复接验证。两次开始时都只有槽 4 的 P620。**R580 是 NVIDIA Linux 显卡驱动的 580.x 分支**，也是 NVIDIA 最后一条同时支持 V100（Volta）和 P620（Pascal）的驱动分支。这台机安装 Ubuntu 的专有驱动包 `nvidia-driver-580`，并接受该分支的补丁更新。2026 年 11 月 13 日核对的 APT 组合为 `580.178.04-0ubuntu0.26.04.1` 和 `linux-modules-nvidia-580-generic 7.0.0-43.43`。第三方 CUDA 构建留在独立用户空间，目标 `sm_70` 用 CUDA 12.x。 [NVIDIA 驱动支持矩阵](https://docs.nvidia.com/datacenter/tesla/drivers/cuda-toolkit-driver-and-architecture-matrix.html) · [580.x 支持的 GPU](https://download.nvidia.com/XFree86/Linux-x86_64/580.159.03/README/supportedchips.html) · [Ubuntu 驱动包](https://packages.ubuntu.com/resolute-updates/nvidia-driver-580) · [Ubuntu 驱动安装](https://ubuntu.com/server/docs/how-to/graphics/install-nvidia-drivers/)
 
 ```bash
 sudo install -m 0644 host/z8-nvidia-580.pref.example /etc/apt/preferences.d/z8-nvidia-580
@@ -138,7 +185,7 @@ sudo apt-get -s install linux-modules-nvidia-580-generic nvidia-driver-580
 从解压的 kit 根运行。核 R580 candidate 是实际驱动、安装模拟使用专有 R580 和配套 generic 模块。然后执行 `sudo apt install linux-modules-nvidia-580-generic nvidia-driver-580`。如模块元包拉入更新的 generic 内核，让本次重启进入该内核。系统依旧保持 UEFI，Secure Boot 已在 BIOS 关闭。 [Ubuntu generic R580 模块包](https://packages.ubuntu.com/resolute/linux-modules-nvidia-580-generic) · [APT 优先级](https://manpages.ubuntu.com/manpages/resolute/man5/apt_preferences.5.html)
 
 ```bash
-# 重启后在正式系统执行。
+# 重启后在当前测试系统或正式系统执行。
 uname -r
 modinfo -F version nvidia
 modinfo -F license nvidia
@@ -147,11 +194,11 @@ nvidia-smi --query-gpu=name,pci.bus_id,driver_version --format=csv
 sudo journalctl -k -b -g 'NVRM|Xid'
 ```
 
-确认 P620 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与快速 CUDA/NCCL，并在 Moonlight 串流时再核一次捕获的显示接口和 P620 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
+在 T5 核 P620 与 R580 后，返回 [算力坞测试](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机)。下文用于 I3 正式系统。确认 P620 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与快速 CUDA/NCCL，并在 Moonlight 串流时再核一次捕获的显示接口和 P620 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
 
 ## 固定 GA 轨道并试启新内核
 
-两套测试系统分别记录实际 ABI。临时 Xubuntu 在 T1 安装微码和当前 GA 更新后记录 `uname -r`，后续测试一直从该项启动。正式安装的 ISO、APT 和 R580 预编译模块若带来不同 ABI，在 I3 复跑 CUDA/NCCL，在 I4 复验 ZFS 与 dm-zoned。冻结从各自跑通所需组件后开始，等 I7 通过解除正式系统的 hold。临时系统的 hold 无法跨到新装系统。 [Ubuntu 内核轨道](https://documentation.ubuntu.com/kernel/reference/hwe-kernels/) · [Ubuntu 自动安全更新](https://documentation.ubuntu.com/security/security-updates/#automatic-security-updates)
+验机和正式系统分别记录实际 ABI。临时 Xubuntu 在 T1 安装微码和当前 GA 更新后记录 `uname -r`，后续测试一直从该项启动。正式安装的 ISO、APT 和 R580 预编译模块若带来不同 ABI，在 I3 复跑 CUDA/NCCL，在 I4 复验 ZFS 与 dm-zoned。冻结从各自跑通所需组件后开始，等 I7 通过解除正式系统的 hold。临时系统的 hold 无法跨到新装系统。 [Ubuntu 内核轨道](https://documentation.ubuntu.com/kernel/reference/hwe-kernels/) · [Ubuntu 自动安全更新](https://documentation.ubuntu.com/security/security-updates/#automatic-security-updates)
 
 ```bash
 sudo install -m 0644 host/z8-no-hwe.pref.example /etc/apt/preferences.d/z8-no-hwe

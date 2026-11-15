@@ -16,6 +16,7 @@ Host z8-ports
 Host z8-build
     HostName REPLACE_WITH_Z8_LAN_OR_VPN_IP
     User jackywang
+    ConnectTimeout 10
     ServerAliveInterval 30
     ServerAliveCountMax 3
     ExitOnForwardFailure yes

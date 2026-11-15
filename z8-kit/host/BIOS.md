@@ -36,7 +36,7 @@
 
 `1TB Memory Cap` 是 F10 的平台设置。CPU 每路上限另读 `ipmctl show -socket` 的 `MappedMemoryLimit`。HP 还列出部分 AMD 显卡的整机 1 TiB 兼容限制，本机槽 4 用 NVIDIA P620。T3 核两路 App Direct region，只有在发现平台层截断、菜单提供 `Disable` 时，才保留原 goal 和插条，单改该项冷启对照两路映射。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [PMem 每路容量上限](PMEM.md#每路容量上限)
 
-Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 选择带 UEFI 标记的 Memtest86+、安装盘和 FIT 引导项。装完后以 `test -d /sys/firmware/efi` 和 `LC_ALL=C mokutil --sb-state` 分别确认 UEFI 和 `SecureBoot disabled`。如果之后更新 BIOS 或重置设置，在第一次开机时重新核对这两项。 [HP 固件设置路径](https://support.hp.com/ee-en/document/ish_9642671-9641393-16) · [Ubuntu Secure Boot 文档](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/)
+Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 用 Ventoy 的 UEFI 项启动 Memtest86+ 或 Xubuntu Live，验机时选 SanDisk 的 UEFI 引导项，正式安装后选 FIT 的 UEFI 引导项。装完后以 `test -d /sys/firmware/efi` 和 `LC_ALL=C mokutil --sb-state` 分别确认 UEFI 和 `SecureBoot disabled`。如果之后更新 BIOS 或重置设置，在第一次开机时重新核对这两项。 [HP 固件设置路径](https://support.hp.com/ee-en/document/ish_9642671-9641393-16) · [Ubuntu Secure Boot 文档](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/)
 
 槽 1 留给 P4618，整机不装 Thunderbolt 3 扩展卡。P4618 卡上的交换芯片负责把单条 x8 上行分给两个 x4 控制器。若主机把槽 1 拆成 x4/x4，交换芯片的单条上行最多只能按 x4 协商，即使两块 NVMe 仍能枚举，共享上行带宽也会减半。GE 维修手册的 BIOS 2.47、2.68 实例里，Slot 1 有 `Bifurcation`，Slot 5/7 没有，`Intel VROC NVMe RAID` 列在 `Personality Slot CPU0` 下。 [HP 白皮书，第 7 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=7) · [GE BIOS 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [Broadcom PEX 8718 拓扑](https://docs.broadcom.com/doc/12351848)
 
@@ -96,7 +96,7 @@ CPU0、CPU1 各有一套编号 1–12 的 DIMM 槽。先在主板上找 `CPU0-DI
 | 第一轮只装 DDR4 | 1、3、5、8、10、12 各插一条 16 GiB，合计 96 GiB | 1、3、5、8、10、12 各插一条 16 GiB，合计 96 GiB |
 | DDR4-only 两轮测试通过后加 PMem | 2、4、6、7、9、11 各加一条 128 GiB PMem | 2、4、6、7、9、11 各加一条 128 GiB PMem |
 
-T1 用独立 USB SSD 上的 Xubuntu 26.04.1 短跑双路 CPU。T2 用 F9 从 Memtest86+ U 盘启动，通过后换回临时系统完成 4 小时 DDR4 压测。随后关机断电，**DDR4 原位不动，直接把 PMem 插进空槽**。两边各六条 DDR4 加六条 PMem，共 24 条。第一次混插启动先看 F10 是否认全，再在 [Xubuntu 26.04.1 提交 App Direct goal](PMEM.md)。装每条时记位置和序列号，便于定位 DIMM 错误。 [HP QuickSpecs，第 22 页双路 192 GB](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=22) · [HP Optane 白皮书，第 22 页 24 条混插](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=22)
+T1 用 SanDisk 上的临时 Xubuntu 26.04.1 短跑双路 CPU。T2 从 F9 进 Ventoy 菜单启动 Memtest86+，通过后换回临时系统完成 4 小时 DDR4 压测。随后关机断电，**DDR4 原位不动，直接把 PMem 插进空槽**。两边各六条 DDR4 加六条 PMem，共 24 条。第一次混插启动先看 F10 是否认全，再在 [Xubuntu 26.04.1 提交 App Direct goal](PMEM.md)。装每条时记位置和序列号，便于定位 DIMM 错误。 [HP QuickSpecs，第 22 页双路 192 GB](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=22) · [HP Optane 白皮书，第 22 页 24 条混插](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=22)
 
 ## SATA0–7、硬盘识别和起转
 

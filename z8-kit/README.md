@@ -1,6 +1,6 @@
 # Z8 G4 配套部署文件
 
-从装机计划的顺序执行。目标主机是 `jackywang-xubuntu-max`，登录用户 `jackywang`。以下命令在目标 Linux 上运行，配置中的设备名按实机填写。每次保存 kernel、驱动、引擎 Git SHA、模型 revision 和运行参数。
+机旁操作从 [上机操作顺序](host/FIRST-BOOT.md) 开始。目标主机是 `jackywang-xubuntu-max`，登录用户 `jackywang`。以下命令在目标 Linux 上运行，配置中的设备名按实机填写。每次保存 kernel、驱动、引擎 Git SHA、模型 revision 和运行参数。
 
 | 目录 | 用途 |
 |---|---|
