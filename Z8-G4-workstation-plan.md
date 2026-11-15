@@ -97,9 +97,9 @@ HP 的公开 F10 手册未确认 Z8 G4 能让硬盘分批起转，供电按七�
 
 ### 引导与 P4618
 
-- I1 用 [Server 安装配置](z8-kit/host/root-storage.yaml.example) 一次创建 FIT 和 P4618 的布局。用硬件 `ID_SERIAL` 固定三块设备，写入前在安装器控制台确认。FIT 上的 GRUB 读入内核与 Dracut 初始化镜像，后者组装 P4618 根阵列。 [安装命令](z8-kit/host/INSTALL.md)
+- I1 从三星 T3 的 Ventoy 启动 Xubuntu Desktop，在图形安装器导入填好的 `autoinstall.yaml`。回 Live 终端核对 FIT 和两个 P4618 端点的 `ID_SERIAL`，执行 `sudo touch /run/z8-storage-confirmed` 放行，再回图形界面确认安装。FIT 上的 GRUB 读入内核与 Dracut 初始化镜像，后者组装 P4618 根阵列。 [安装命令](z8-kit/host/INSTALL.md)
 
-- `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/jackywang` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS、CAS 索引和热读缓存落 P4618。单独在 `/srv/pmem-model` 挂 PMem XFS DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在安装配置里显式设 `crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
+- `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/jackywang` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS 和热 CS（块文件与索引）落 P4618。冷 CS 索引在 P4800X p9。单独在 `/srv/pmem-model` 挂 PMem XFS DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在安装配置里显式设 `crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
 - 首启为根 XFS 写 `noatime,nodiscard`，md 实测透出 discard 时用周期 TRIM。FIT 的 `/boot`、ESP 用 `noatime`，从周期 TRIM 排除。PMem 模型 XFS 用 `dax=always,noatime,nodiscard`。两个 ZFS 单元按依赖链以 `rw` 挂载，压缩、atime 和同步写策略保存在 dataset 属性。 [全机挂载参数及核对命令](z8-kit/host/MOUNTS.md) · [fstab 样例](z8-kit/host/fstab-boot.example)
 
 ### HC620 与 P4800X
@@ -132,7 +132,7 @@ findmnt -M /data/buildbarn -o SOURCE,TARGET,FSTYPE
 ss -ltn 'sport = :8980'
 ```
 
-停机换盘从 service 链发起停止，等 Docker 退出、两个 mount 卸载和 zpool export 完成才拆 mapper。断电演练时先模拟单 HC620 缺席，重启看六个 mapper 和池的 DEGRADED 状态，再接回原盘原分区配对并等 resilver。整张 P4800X 缺席的冷启，预期启动链止于 dm-zoned，`/data/buildbarn` 无挂载且 8980 无监听，从 SSH 查看日志。永久换单盘按旧 vdev GUID 替换并更新对应 by-id。P4800X 永久故障后重建冷 CAS 时，同时换一套 P4618 的 Buildbarn 状态目录。 [停止与恢复命令](z8-kit/storage/README.md)
+停机换盘从 service 链发起停止，等 Buildbarn 退出、三个挂载点卸载和 `zpool export` 完成才拆 mapper。断电演练时先模拟单 HC620 缺席，重启看六个 mapper 和池的 DEGRADED 状态，再接回原盘原分区配对并等 resilver。整张 P4800X 缺席的冷启，预期启动链止于 dm-zoned，`/data/buildbarn` 无挂载且 8980 无监听，从 SSH 查看日志。永久换单盘按旧 vdev GUID 替换并更新对应 by-id。P4800X 整卡永久故障后，按 I4 重建池和 p9，再重建冷 CS 与 CMS，保留 P4618 上的热 CS 和 AC。mini 和 Mac 重接前清各自的 CMS 读缓存。 [停止与恢复命令](z8-kit/storage/README.md#缺盘停机恢复)
 
 ## 4. DeepSeek-V4.1-Flash-1017
 
@@ -218,6 +218,6 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 4. **I4–I5 正式存储和服务。** 建池后用同一 512 GiB 文件跑三遍顺序覆盖，在测试文件仍在池中时 scrub。做单 HC620、整卡 P4800X 缺席演练及恢复。挂载通过后上线 Z8 Buildbarn，再验 mini 与 Mac 的边缘读缓存和两平台远程执行。验证 SSH、Sunshine 与 xrdp。
 5. **I7 整机。** 8 小时内轮流发 Buck2 冷读、热读和新上传，同时运行指向本机 1017 的探针或 OMP 本地 profile，并使用 SSH 和 RDP。保存启动期和混合负载的 kernel、RAS、NVMe/SMART、ZFS、NUMA 与 TTFT 记录。 [逐条命令与结果判读](z8-kit/host/BURN-IN.md)
 
-在仓库根目录安装 `jq`、`shellcheck` 和 `python3` 后运行 `bash tests/run.sh`，GitHub Actions 在 push 和 PR 上运行同一入口。模拟覆盖七盘齐全、缺一盘、缺两盘、p8 缺席、拒绝拆除已导入池的映射、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。测试只用临时目录和替身命令。
+在有 `systemctl` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖七盘齐全、缺一盘、缺两盘、p8 缺席、拒绝拆除已导入池的映射、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
 
 此前部署包已在 Ubuntu 26.04 用户空间用占位可执行文件检查 systemd 依赖，也核过官方 Live 包清单、Ubuntu 7.0.0-43 amd64 相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、整机安装、BIOS、PMem 上线时间、数据池和推理吞吐均需在目标 Z8 上确认。
