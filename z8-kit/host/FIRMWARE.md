@@ -13,16 +13,29 @@
 
 先读 12 条的 Active 和 Staged 版本、模块标签及健康状态。HP 对 Z8 G4 给出 **BIOS 2.35 与 PMem 01.02.00.5417 或更新**的最低组合。若 12 条同版、达到最低版本、可管理且诊断正常，直接进入 App Direct 测试。若低于最低版、同批混版，或厂商公告明确修复当前故障，再按标签上的 OEM 和料号找适用包。Intel 建议同机版本一致。查到 Dell PowerEdge、HPE Gen10、Lenovo ThinkSystem 均发布过 `01.02.00.5446`，这些公告各自限定支持系统或模块，手头 Z8 与 DIMM 标签仍需核对。未找到匹配包时，低于 HP 最低版的模块优先换成达到基线的同批料号，已达到基线的混版模块先跑 FW 诊断并记录结果。 [HP Optane 白皮书，第 6 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=6) · [Intel PMem 启动指南](https://cdrdv2-public.intel.com/841964/Intel_Optane_Persistent_Memory_Start_Up_Guide.pdf) · [Intel 固件获取与更新](https://www.intel.com/content/www/us/en/support/articles/000032996/technologies/memory-and-storage.html) · [HPE 固件适用范围](https://support.hpe.com/connect/s/softwaredetails?collectionId=MTX-5618354fdcd14e80&language=en_CA)
 
-**本机到货实拍。** 11 条 `NMA1XBD128GQS`，后补一条 `NMA1XXD128GQS`，都是带样品标识的 Intel 料号，没有整机厂商的标签。固件为 9 条 `01.02.00.5310`、2 条 `5355`、1 条 `5386`，都低于 5417 且混版。按下面的顺序处理。
+**本机到货实拍。** 11 条 `NMA1XBD128GQS`，后补一条 `NMA1XXD128GQS`。固件为 9 条 `01.02.00.5310`、2 条 `5355`、1 条 `5386`，都低于 5417 且混版。Intel 的说明是：`GQS` 为量产前样品，`GPS` 为量产品，两者兼容，建议同机所有模块用同一固件版本；整机厂商一般不为 `GQS` 提供保修。 [Intel 社区的答复](https://community.intel.com/t5/Intel-Optane-Persistent-Memory/Mixing-part-number/m-p/1313545)
 
-1. **不为固件卡住 T3。** 这批模块在到货版本下已能启动并映射，混版可以运行。
-2. **有条件地统一到 `01.02.00.5446`。** 这是能查到的 100 系列最后一版。时机是 T3 提交 goal 之前，此时模块里没有数据。Intel 自己的固件包在需要 NDA 的门户里，由整机厂商各自发布。HP 的 Optane 白皮书说明 Z6/Z8 G4 的模块固件以 SoftPaq 发布、从 UEFI Shell U 盘更新，先在 HP 的 Z8 G4 支持页找；找不到再看其他厂商公开的同版本包。这些包面向各家自己的机型，用在样品料号上没有任何一方背书，所以以 `-examine` 的结果为准：它只校验镜像与模块是否匹配，不写入。
-3. **先试一条。** `-examine` 通过就先刷这一条，完全断电再开机，确认 `ActiveFWVersion` 和健康状态，再逐条刷其余。两种料号各自先过一次 `-examine`。任何一条被拒，就全部保留到货版本，把 FW 诊断结果和 T3 的写读校验记入基线。
-4. **写入偏慢时加 `-lpmb`。** 上游说明建议用 2.x 的 `ipmctl` 给 100 系列写固件时加这个选项，本机的 3.x 同样处理。`ipmctl` 本身在本机不可用时见 [PMem 手册的已知问题](PMEM.md#2-在-xubuntu-26041-记录现状并提交-goal)，此时不升级。
+**固件包。** HP 为 Z6 G4 和 Z8 G4 发布了两个 SoftPaq，都在 HP 的公开下载站，下载后用 HP 公布的校验值核对。二进制不放进本仓库。
 
-能查到的 100 系列版本都在 `01.02.00` 分支，末四位越大越新：5355、5360、5367、5375（2019-07）、5395（2019-12）、5417、5435（2020-04）、5444、5446（2021-07，最后一版）。本机的 5310 和 5386 没有查到公开发布记录。
+| SoftPaq | 内容 | SHA-256 |
+|---|---|---|
+| [SP113620](https://ftp.hp.com/pub/softpaq/sp113501-114000/sp113620.html) | 模块固件 `1.2.0.5446` Rev.A，2021-05-04。解出 `fw_ekvb0_1.2.0.5446_rel.bin` 和 `Readme.txt` | `4ceb08b58866c6d59e4c7c31885335d339ae7fe5ecc55622e95634877b92083d` |
+| [SP113618](https://ftp.hp.com/pub/softpaq/sp113501-114000/sp113618.html) | 管理工具 `01.00.00.3515`，含 UEFI Shell 用的 `ipmctl.efi` 和 Windows 安装包 | `83239232ed855589b24f3a05f77c562c1a3358b7a42a5db759485575756b9f9b` |
 
-[Intel 固件获取与更新](https://www.intel.com/content/www/us/en/support/articles/000032996/memory-and-storage/intel-optane-persistent-memory.html) · [HPE 的版本记录](https://support.hpe.com/hpsc/swd/public/detail?swItemId=MTX-72236c502db445d98e3aa406bc) · [Dell 的 100 系列固件包](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=498kf) · [ipmctl 上游说明](https://github.com/intel/ipmctl#workarounds)
+SP113620 的说明没有列 BIOS 前置条件；白皮书的最低组合是 BIOS 2.35。只有走 Windows、Linux 或 UEFI Shell 时才需要 SP113618，F10 方式只要固件文件。 [HP 安全公告 HPSBHF03738](https://support.hp.com/us-en/document/ish_4396586-4396613-16/hpsbhf03738)
+
+**做法。** 时机是 T3 插回模块之后、提交 goal 之前，此时模块里没有数据。
+
+1. **不为固件卡住 T3。** 这批模块在到货版本下已能启动并映射。量产固件能否写进样品条没有任何一方背书，被拒就保留到货版本，把 FW 诊断结果和 T3 的写读校验记入基线。
+2. **先只插一条试。** 把 `fw_ekvb0_1.2.0.5446_rel.bin` 拷到 FAT32 U 盘。只插一条 PMem 开机，进 F10 的 `Advanced → NVDIMM Management → Update Firmware on NVDIMMs`，选 U 盘和固件文件。界面会显示固件已暂存及写入的版本，再按提示断电重启。回到 NVDIMM 列表确认版本变为 `01.02.00.5446`。两种料号各试一条。
+3. **再插齐其余模块，同样操作一次。** F10 方式对当前插着的全部模块一起暂存。固件在断电重启后才生效；启动新固件失败时模块回退到原版本。
+4. **需要逐条控制或先做只读校验时用 `ipmctl`。** `load -source 文件 -examine -dimm` 只校验镜像与模块是否匹配，不写入；加 `-dimm ID` 可只写一条。Linux 的 3.x 写 100 系列偏慢时加 `-lpmb`。Linux 的 `ipmctl` 在本机不可用时，用 SP113618 的 `ipmctl.efi` 从 UEFI Shell U 盘执行同样的命令。
+
+镜像文件名里的 `ekvb0` 是它面向的控制器版本。某条模块拒收时记下提示原文，HP 的包里没有别的镜像可换。
+
+能查到的 100 系列版本都在 `01.02.00` 分支，末四位越大越新：5355、5360、5367、5375（2019-07）、5395（2019-12）、5417、5435（2020-04）、5444、5446（最后一版）。本机的 5310 和 5386 没有查到公开发布记录。
+
+[HP Optane 白皮书的 F10、UEFI Shell 和 Linux 步骤](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=8) · [Intel 固件获取与更新](https://www.intel.com/content/www/us/en/support/articles/000032996/memory-and-storage/intel-optane-persistent-memory.html) · [ipmctl 上游说明](https://github.com/intel/ipmctl#workarounds)
 
 ```bash
 sudo ipmctl show -dimm

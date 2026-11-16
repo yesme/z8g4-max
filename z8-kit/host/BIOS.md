@@ -70,7 +70,7 @@ PMem 的料号、原配置和插回时的注意事项见 [PMem 的到货状态](
 | Advanced → Power Management Options | `PCI Express Power Management = Disable`，`SATA Power Management = Disable`。T1 一次设好，验机和正式运行沿用。Intel Speed Select Disabled、Hardware P-States Enable、`OS Controls EPB`、Idle Power Savings Extended 保持到货值 |
 | Advanced → Built-In Device Options | Embedded LAN Controller (AMT) 与 Intel X722 Embedded LAN Port 保持勾选。两项 Idle Fan Speed 增量到货为 0；T4 的 NVMe 温度偏高时调高 `Increase PCIe Idle Fan Speed(%)` 再测 |
 | Security → Security Configuration → System Security | Virtualization Technology (VTx) = Enable，Virtualization Technology for Directed I/O (VTd) = Enable。部分版本将这两项列在 Advanced → System Options |
-| Advanced → NVDIMM Management | 第一次混插只查 12 条模块、固件和当前状态，保留 `NVDIMM Configuration`，跳过 `Apply NVDIMM Configuration`。App Direct goal 在 Xubuntu 提交 |
+| Advanced → NVDIMM Management | 第一次混插只查 12 条模块、固件和当前状态。同一页的 `Update Firmware on NVDIMMs` 按 [固件手册](FIRMWARE.md#t3-pmem-100) 使用。保留 `NVDIMM Configuration`，跳过 `Apply NVDIMM Configuration`。App Direct goal 在 Xubuntu 提交 |
 | Security → NVDIMM Security Freeze | 按 [T3 的 PMem 流程](PMEM.md#t3-配置-app-direct) 将 `Unfreeze NVDIMMs for this number of boot sequences` 暂设为 `5`，保存后从 F9 启动临时 Xubuntu |
 
 具体项目显示取决于 BIOS 版本和已装设备。以上区分 HP F10 真实项目与要在实机选择的值。 [HP Service Guide，F10 与 POST](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [HP Z8 G4 F10 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html)
