@@ -38,6 +38,19 @@ jq -e '
           and .oldBlocks == 22 and .currentBlocks == 65 and .newBlocks == 3
           and .blocksOnBlockDevice.spareBlocks == 3))))
 ' "$tmp/config/tiered-cache.rendered.json" >/dev/null
+# Same-host services use the cache socket; clients and edge tunnels keep TCP.
+socket=/run/bb-cache/cache.sock
+for config in tiered-cache fallback-farm; do
+    jq -e --arg socket "$socket" '.grpcServers == [{authenticationPolicy:{allow:{}},
+        listenAddresses:[":8980"], listenPaths:[$socket]}]' "$tmp/config/$config.rendered.json" >/dev/null
+done
+jq -e '.grpcServers[0] | has("listenPaths") | not' "$tmp/config/cache.rendered.json" >/dev/null
+jq -e --arg address "unix://$socket" '[.. | objects | select(has("grpc")) | .grpc.client.address] | length == 3 and all(. == $address)' \
+    "$tmp/config/shared-worker.rendered.json" >/dev/null
+jq -e --arg address "unix://$socket" '[.. | objects | select(has("grpc")) | .grpc.client.address] | length == 2 and all(. == $address)' \
+    "$tmp/config/shared-scheduler.rendered.json" >/dev/null
+jq -e '[.. | objects | select(has("grpc")) | .grpc.client.address] | all(. == "127.0.0.1:8980")' \
+    "$tmp/config/edge-worker.rendered.json" >/dev/null
 jq '.active |= map(select(startswith("sata1-") | not))' "$tmp/cold-layout.json" > "$tmp/degraded.json"
 mv "$tmp/degraded.json" "$tmp/cold-layout.json"
 jsonnet "$tmp/config/tiered-cache.jsonnet" | jq -e '

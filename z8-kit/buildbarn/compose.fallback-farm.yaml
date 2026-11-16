@@ -1,3 +1,9 @@
 services:
   cache:
     command: ["/config/fallback-farm.jsonnet"]
+    volumes:
+      - type: bind
+        source: /run/z8-bb-cache
+        target: /run/bb-cache
+        bind:
+          create_host_path: false

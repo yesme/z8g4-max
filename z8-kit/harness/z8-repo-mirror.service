@@ -1,0 +1,7 @@
+[Unit]
+Description=Mirror committed work to /data/other
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/z8-repo-mirror
+Nice=10

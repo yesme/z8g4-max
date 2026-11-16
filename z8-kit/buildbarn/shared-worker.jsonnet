@@ -1,4 +1,5 @@
-local storage = { grpc: { client: { address: 'cache:8980' } } };
+// Same-host traffic uses the cache's UNIX socket; TCP 8980 stays for clients and edge tunnels.
+local storage = { grpc: { client: { address: 'unix:///run/bb-cache/cache.sock' } } };
 local digest = 'dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b';
 
 {

@@ -140,12 +140,22 @@ target=//app:binary
 ## Linux worker
 
 1. I5 先启用本机 CAS，再启用 Linux worker。
-2. `compose.worker.yaml` 加入 scheduler、runner、worker，worker 通过 Docker 内网向同一个 `cache:8980` 读写 CS/CMS/AC。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `sudo docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。服务预建 XFS 上的 `worker/build`、`worker/cache` 与 `runner-bin`，共用 `/run/z8-bb-runner` 上的 socket。runner 启动时清理自己的残留 socket，worker 等 socket 出现再启动。固定镜像的 worker、runner-installer 和 runner 都以 UID 0 启动。用隔离 checkout 验实际 RE、按需下载、worker 停启后 CAS 持续服务。单独维护 Linux runner 时用同一 Compose 项目 `stop worker runner`，让 scheduler 继续服务；停止整套 worker 单元会连 scheduler 一起停，边缘读缓存的 CDC 参数只短期有效。启服务前配置 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。 [Compose v2.40.3 按服务监控](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/up.go#L177)
-3. max 首装 88 个活动 action、88 CPU 时间额度和 512 GiB 内存上限，无容器 swap。默认推理时余 96 个逻辑 CPU，给系统、存储和协调进程留 8 个逻辑 CPU 的时间预算。较高并发用于覆盖取输入和 I/O 等待。按 2–4 GiB/action 算，88 个约用 176–352 GiB。I5 用一个代表项目核对吞吐和实际内存，作为固定档依据。worker 等两路 kmem 上线后启动。512 GiB 是 DDR4 与 kmem 的 memcg 总上限，PMem 的 `ZONE_MOVABLE` 可承接多数匿名页及文件页缓存，页表和其他不可移动内核分配仍需 DDR4。D4800X 上 848 GiB 裸索引通过 mmap 按需读入页缓存，页缓存可回收。I7 用每路 Normal 水位、PSI 和实际吞吐验固定配置。kmem 未能上线时，Z8 的存储可以独立提供服务，Linux 客户端按本地应急流程运行。工具链可随 runner 镜像或项目输入提供。改镜像时同步 worker 和 Buck2 的 digest。异构 Linux worker 使用一致的 CPU 目标基线，避免 `-march=native` 与 `-mtune=native`。 [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable)
+2. `compose.worker.yaml` 加入 scheduler、runner、worker，cache 保留 TCP 8980 给 Buck2 客户端和边缘隧道，同时监听 `/run/bb-cache/cache.sock`。`z8-buildbarn.service` 维护宿主目录 `/run/z8-bb-cache`，scheduler 和 worker 只读挂入该目录，经这个 UNIX socket 读写 CS/CMS/AC，绕开 veth 和 netfilter。scheduler 的 8982 仍只在 Docker 内网。runner 的 `/tmp` 是计入其内存上限的 32 GiB tmpfs，硬编码写 `/tmp` 的工具不再落到 overlay2。Linux 使用 `buck2-shared-worker.buckconfig` 与既有 `linux-worker-executor.bzl.example`。在 `/opt/z8-kit/buildbarn` 执行 `sudo docker compose -p z8-tiered -f compose.tiered.yaml -f compose.worker.yaml config`，再 `sudo systemctl enable --now z8-buildbarn-worker.service`。服务预建 XFS 上的 `worker/build`、`worker/cache` 与 `runner-bin`，共用 `/run/z8-bb-runner` 上的 socket。runner 启动时清理自己的残留 socket，worker 等 socket 出现再启动。固定镜像的 worker、runner-installer 和 runner 都以 UID 0 启动。用隔离 checkout 验实际 RE、按需下载、worker 停启后 CAS 持续服务。单独维护 Linux runner 时用同一 Compose 项目 `stop worker runner`，让 scheduler 继续服务；停止整套 worker 单元会连 scheduler 一起停，边缘读缓存的 CDC 参数只短期有效。启服务前配置 [构建侧 cgroup](../host/CPU-PLACEMENT.md#生成并安装)。 [Compose v2.40.3 按服务监控](https://github.com/docker/compose/blob/v2.40.3/pkg/compose/up.go#L177)
+3. max 首装 88 个活动 action 和 512 GiB 内存上限，无容器 swap，不设 CPU 时间配额。默认推理时余 96 个逻辑 CPU，runner 由 cpuset 和 slice 权重约束。较高并发用于覆盖取输入和 I/O 等待。按 2–4 GiB/action 算，88 个约用 176–352 GiB。I5 用一个代表项目核对吞吐和实际内存，作为固定档依据。worker 等两路 kmem 上线后启动。512 GiB 是 DDR4 与 kmem 的 memcg 总上限，PMem 的 `ZONE_MOVABLE` 可承接多数匿名页及文件页缓存，页表和其他不可移动内核分配仍需 DDR4。D4800X 上 848 GiB 裸索引通过 mmap 按需读入页缓存，页缓存可回收。I7 用每路 Normal 水位、PSI 和实际吞吐验固定配置。kmem 未能上线时，Z8 的存储可以独立提供服务，Linux 客户端按本地应急流程运行。工具链可随 runner 镜像或项目输入提供。改镜像时同步 worker 和 Buck2 的 digest。异构 Linux worker 使用一致的 CPU 目标基线，避免 `-march=native` 与 `-mtune=native`。 [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable)
 
 [上游 Docker Compose](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose) · [Buck2 Buildbarn 样例](https://github.com/facebook/buck2/tree/main/examples/remote_execution/buildbarn)
 
 [mini 与 Mac 的上线命令](EDGE.md)
+
+## I5 基线之后再评估的项
+
+先按上面的配置取一次真实构建的基线（吞吐、每路 `Normal` 水位、`i5-cold-watermark`），下列各项逐个对照，无改善就不留。
+
+- **热 CS 索引迁到 `/srv/pmem-model`。** 26 GiB 的 `cs-hot/key_location_map` 放到 XFS DAX 后不占页缓存，66 B 更新也不再回写整个 4 KiB NAND 页。bb-storage 读走 mmap、写走 `pwrite`；Linux 7.0 的 XFS 对 DAX 写和缓冲写都取独占 `XFS_IOLOCK_EXCL`，迁移不新增锁竞争。模型卷是跨两路的条带，任一成员失效整卷重建，所以 AC 的索引留在 P4618：CS 索引丢了只需回填，AC 索引丢了全部动作要重跑。迁移时把 `cs-hot` 的块、索引和 checkpoint 作为一套退役，并同步改启动守卫里的路径与字节数检查。 [bb-storage 读写路径](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/memory_mapped_block_device_unix.go) · [XFS DAX 写](https://github.com/torvalds/linux/blob/v7.0/fs/xfs/xfs_file.c#L950-L1010)
+- **THP `always`。** DAX 的 2 MiB 映射不看这个开关，缺页路径对 DAX VMA 直接放行，按 [PMem 手册](../host/PMEM.md#模型卷)的 `dax_pmd_fault_done` 核实即可。`always` 只影响匿名页，可能给编译器带来 TLB 收益，也可能让 Go、Node 进程变大，按构建吞吐和内存两项决定。 [Linux 7.0 THP 判定](https://github.com/torvalds/linux/blob/v7.0/mm/huge_memory.c#L103-L133)
+- **cache 的内存上限。** 容器进程在 Docker 自己的 cgroup，写在 `z8-buildbarn.service` 上的 `MemoryHigh` 管不到它，要用 Compose 的 `mem_limit`。页缓存可下沉到 kmem，每缓存 1 GiB 约占 4 MiB 不可移动的 `xa_node` 和页表；上限压得过低会让冷索引和热块反复换入。只在 `Normal` 水位确有压力时设一个 100 GiB 量级的护栏。
+- **冷数据片的预读保持默认。** 分块下限 256 KiB，缩小预读会把一次冷读拆成许多小请求；HDD 上寻道占主导，顺带多读的部分近乎免费，页缓存可回收。索引切片仍为 0。
+- **D4800X 写缓存保持每盘 24 GiB。** 有缓存设备时新写入一律先落 Optane，再整区拷到顺序区。Buildbarn 按块整段覆写，旧顺序区整区失效后直接释放，每字节只写 Optane 一次、HDD 一次。缓存大小只决定一次突发能吸收多少，稳态吞吐等于回收速率。24 个写头占 24 个区，92 个可用区留有余量；`i5-cold-watermark` 的最小空闲区数长期高于 30% 就不必调整。 [dm-zoned 映射分配](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-metadata.c#L2041-L2076) · [回收分支](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L362-L418)
 
 ## 全 XFS 回退
 
@@ -159,7 +169,7 @@ target=//app:binary
     BB_DATA_DIR=/srv/buildbarn/cache-xfs
     sudo install -d -m 0750 "$BB_DATA_DIR"/{cs,cms,ac}/persistent_state
     sudo install -d -m 0750 "$BB_DATA_DIR"/{worker/build,worker/cache,runner-bin}
-    sudo install -d -m 0750 /run/z8-bb-runner
+    sudo install -d -m 0750 /run/z8-bb-runner /run/z8-bb-cache
     test "$(findmnt -n -T "$BB_DATA_DIR" -o FSTYPE)" = xfs
     systemctl is-active --quiet z8-pmem-kmem.service
     sudo env BB_DATA_DIR="$BB_DATA_DIR" docker compose -p z8-xfs \
@@ -169,4 +179,4 @@ target=//app:binary
 )
 ```
 
-使用同一个农场 buckconfig 验远程执行。该回退为手工恢复；重启后需重建 `/run/z8-bb-runner` 再执行。回到 tiered 前用同一组 Compose 文件、项目名和 `BB_DATA_DIR=/srv/buildbarn/cache-xfs` 执行 `down`，再启两项原 systemd 服务。
+使用同一个农场 buckconfig 验远程执行。该回退为手工恢复；重启后需重建 `/run/z8-bb-runner` 和 `/run/z8-bb-cache` 再执行。回到 tiered 前用同一组 Compose 文件、项目名和 `BB_DATA_DIR=/srv/buildbarn/cache-xfs` 执行 `down`，再启两项原 systemd 服务。

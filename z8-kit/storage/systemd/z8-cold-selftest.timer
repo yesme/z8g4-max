@@ -1,5 +1,5 @@
 [Unit]
-Description=Monthly media scan of the Z8 cold CAS
+Description=Monthly SMART extended self-test of the Z8 cold CAS disks
 
 [Timer]
 OnCalendar=*-*-08 02:00:00

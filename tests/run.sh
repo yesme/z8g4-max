@@ -8,6 +8,7 @@ bash tests/partition-optane.sh
 bash tests/buildbarn-layout.sh
 python3 -B tests/cold-layout.py
 python3 -B tests/cold-scan.py
+python3 -B tests/cold-health.py
 python3 -B tests/cold-cas-smoke.py --help >/dev/null
 bash tests/buildbarn-jsonnet.sh
 bash tests/pmem.sh
@@ -17,3 +18,4 @@ python3 -B tests/inference-probe.py
 python3 -B tests/macos-launch-agents.py
 python3 -B tests/run-step.py
 python3 -B tests/recovery-backup.py
+bash tests/repo-mirror.sh

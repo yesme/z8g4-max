@@ -106,8 +106,8 @@ HP 的公开 F10 手册未确认 Z8 G4 能让硬盘分批起转，供电按七�
 
 七块 HC620 保留 Linux 7.0 默认 I/O 调度器。每盘盘头的 524 个 conventional 区照常由 dm-zoned 管理。槽 5 的 D4800X 承接随机写缓冲，普通区有条件可作后台回收目的地。T4 确认 SATA 4Kn、`host-managed` 和 256 MiB 区。I4 通过 SATA by-id 和同卡 GPT 标签识别配对。`dmzadm --format` 只用于首次或明确重建，冷盘 `--seq=96`，ZFS 盘 `--seq=320`，两组 mapper 接受 52,080–52,156 个完整 chunk，冷盘上固定切 52,080 个。 [分区和首次初始化](z8-kit/storage/README.md#2-建-gpt-与初始化-dm-zoned)
 
-- **冷 CAS**。SATA0–3 位于机箱原生盘位，单盘八片，每片约 1.59 TiB。D4800X p1–p4 各 24 GiB，p5 的 848 GiB 裸索引也切 32 个。分片使用稳定的 dm-linear 名称。冷盘临时缺席时按 24 个分片运行，其余冷盘和 ZFS 可继续服务。更换盘只重建该盘的八份索引及 checkpoint。月度扫描从逻辑分片定位读错误。
-- **普通数据**。SATA4–6 位于三盘笼，分别配 D4800X p6–p8 的 80 GiB 缓存，组成三盘 RAIDZ1。p9 取尾部约 213.26 GiB 作 special，预计有 2 GiB 内嵌 ZIL。`z8data/other` 使用 `recordsize=1M,special_small_blocks=16K,compression=zstd-3`，`z8data/reserve` 预留初始可用量的 10%。保留 `autotrim=on`、每月 scrub、ARC 2–8 GiB。单 special 所在整卡损坏时从独立备份恢复。 [建池与属性](z8-kit/storage/README.md#3-建-zfs-池与-legacy-mount-数据集)
+- **冷 CAS**。SATA0–3 位于机箱原生盘位，单盘八片，每片约 1.59 TiB。D4800X p1–p4 各 24 GiB，p5 的 848 GiB 裸索引也切 32 个。分片使用稳定的 dm-linear 名称。冷盘临时缺席时按 24 个分片运行，其余冷盘和 ZFS 可继续服务。更换盘只重建该盘的八份索引及 checkpoint。每月 SMART 扩展自检加每日取证，有介质错误证据的盘才做逻辑扫描。
+- **普通数据**。SATA4–6 位于三盘笼，分别配 D4800X p6–p8 的 80 GiB 缓存，组成三盘 RAIDZ1。p9 取尾部约 213.26 GiB 作 special，预计有 2 GiB 内嵌 ZIL。`z8data/other` 使用 `recordsize=1M,special_small_blocks=16K,compression=zstd-3`，`z8data/reserve` 预留初始可用量的 10%。保留 `autotrim=on`、每月 scrub、ARC 1–4 GiB。单 special 所在整卡损坏时从独立备份恢复。 [建池与属性](z8-kit/storage/README.md#3-建-zfs-池与-legacy-mount-数据集)
 
 ### 首次部署与以后每次启动
 
@@ -172,7 +172,7 @@ I6 放行看近满上下文时每卡至少余 2 GiB、20 次连续工具往返�
 
 Buildbarn `readCaching` 将首次冷读回填 P4618，重复读直接走热层。上传由 Buildbarn 写冷 CS，D4800X 先吸收下层写入。冷块轮转由 Buildbarn 管，ZFS 回收由 `autotrim` 通知 mapper。 [Buildbarn readCaching 实现](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
-I5 默认启用 max 的 Linux worker，首装 88 并发、88 CPU 时间额度、512 GiB runner 上限，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
+I5 默认启用 max 的 Linux worker，首装 88 并发、512 GiB runner 上限，CPU 由 cpuset 和 slice 权重约束，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。本机 worker 与 scheduler 经 UNIX socket 访问 cache，各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
 
 Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 状态独立。P4618 XFS 支持 reflink，本地已有的产物在同一文件系统内可以共享区段。需要共享区段时，对已物化的产物用 `cp --reflink=always` 显式导出，再用 `filefrag -sv` 确认。跨树复用构建结果走 Buildbarn，同一 blob 各次 RPC 下载分别写入各自工作树。 [Git 与 reflink 操作](z8-kit/buildbarn/README.md#git-worktree-与-xfs-reflink) · [Buck2 CAS 下载实现](https://github.com/facebook/buck2/blob/main/app/buck2_execute_impl/src/materializers/deferred/io_handler.rs#L199)
 

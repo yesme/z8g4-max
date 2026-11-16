@@ -76,7 +76,7 @@
 
 ### I5 · Buildbarn 与 Buck2
 
-先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装默认每路 2 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。按 [I5.3](../storage/README.md#i53-损坏对象24-分片降级和定时扫描) 演练坏对象与 24 分片、启用月扫、记录首次全量构建的四盘水位。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#5-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
+先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装默认每路 2 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。按 [I5.3](../storage/README.md#i53-损坏对象24-分片降级和定时扫描) 演练坏对象与 24 分片、启用冷盘自检与取证定时器、记录首次全量构建的四盘水位。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#5-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
 
 ### I6 · 正式推理和 CLI
 

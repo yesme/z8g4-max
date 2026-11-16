@@ -10,6 +10,12 @@ services:
       - "127.0.0.1:8983:8983"
     volumes:
       - .:/config:ro
+      - type: bind
+        source: /run/z8-bb-cache
+        target: /run/bb-cache
+        read_only: true
+        bind:
+          create_host_path: false
   runner-installer:
     image: ghcr.io/buildbarn/bb-runner-installer:20261102T094740Z-c9ba98c@sha256:3242e966d6de8a8d514db34e9e741b08f242200f23ad6094295915906acc26d5
     volumes:
@@ -18,7 +24,6 @@ services:
     image: ghcr.io/catthehacker/ubuntu:act-22.04@sha256:dd7654ffb01d5b7b54b23b9ce928a1f7f2d08c7b3d7e320b6574b55d7ccde78b
     command: ["sh", "-ceu", "rm -f /run/bb-runner/runner.sock; exec /bb/bb_runner /config/shared-runner.jsonnet"]
     network_mode: none
-    cpus: 88
     mem_limit: 512g
     memswap_limit: 512g
     volumes:
@@ -30,6 +35,8 @@ services:
         target: /run/bb-runner
         bind:
           create_host_path: false
+    tmpfs:
+      - /tmp:exec,mode=1777,size=32g
     depends_on:
       runner-installer:
         condition: service_completed_successfully
@@ -47,6 +54,12 @@ services:
       - type: bind
         source: /run/z8-bb-runner
         target: /run/bb-runner
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /run/z8-bb-cache
+        target: /run/bb-cache
+        read_only: true
         bind:
           create_host_path: false
     depends_on:

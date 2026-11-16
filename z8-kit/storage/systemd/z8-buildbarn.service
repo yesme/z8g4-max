@@ -9,6 +9,9 @@ RequiresMountsFor=/opt/z8-kit /srv/buildbarn
 Type=simple
 WorkingDirectory=/opt/z8-kit/buildbarn
 Environment=BB_DATA_DIR=/srv/buildbarn/tiered
+RuntimeDirectory=z8-bb-cache
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 ExecStartPre=/usr/local/sbin/z8-buildbarn-check --prepare
 ExecStart=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml -f /run/z8-cold/compose.json up --force-recreate --abort-on-container-exit cache
 ExecStop=/usr/bin/docker compose -p z8-tiered -f compose.tiered.yaml stop --timeout 30 cache

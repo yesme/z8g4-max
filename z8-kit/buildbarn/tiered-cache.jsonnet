@@ -5,6 +5,7 @@ local MiB = 1024 * 1024;
 local chunking = { minChunkSizeBytes: 256 * 1024, horizonSizeBytes: 2 * MiB };
 
 base + {
+  grpcServers: [base.grpcServers[0] { listenPaths: ['/run/bb-cache/cache.sock'] }],
   global: {
     diagnosticsHttpServer: {
       httpServers: [{ listenAddresses: [':9980'], authenticationPolicy: { allow: {} } }],
