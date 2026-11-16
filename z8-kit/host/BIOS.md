@@ -1,6 +1,6 @@
 # Z8 G4 槽位与 F10 配置
 
-首轮装双 8269CY、散热和内存风道、12 条 DDR4、槽 4 的 P620，网络优先接板载 RJ-45。没有网线时安装槽 7 的 AX210 并接两根天线。接显示器后按 Esc → F10。T1/T2 从独立介质启动，P4618 到 T4 才装。本机到货时多数部件已装好，先看下一节。拍下 `Main → System Information` 的板号和初始设置。按 [固件更新](FIRMWARE.md) 核 BIOS 与 ME，再按本页配置。AX210 过渡期间槽 7 保持 `Enable`。需要蓝牙时接内部 USB 线。
+首轮装双 8269CY、散热和内存风道、12 条 DDR4、槽 4 的 P1000，网络优先接板载 RJ-45。没有网线时安装槽 7 的 AX210 并接两根天线。接显示器后按 Esc → F10。T1/T2 从独立介质启动，P4618 到 T4 才装。本机到货时多数部件已装好，先看下一节。拍下 `Main → System Information` 的板号和初始设置。按 [固件更新](FIRMWARE.md) 核 BIOS 与 ME，再按本页配置。AX210 过渡期间槽 7 保持 `Enable`。需要蓝牙时接内部 USB 线。
 
 ## 到货状态与首次 F10 实拍
 
@@ -28,7 +28,7 @@
 |---|---|
 | 1 | Enable，Gen3 (8Gbps)，Bifurcation Auto。启动项列表里有两个型号为 `7361454_ICRPC5ED2ORA6.4T` 的端点 |
 | 2、3 | Enable，Bifurcation 已是 `x8x8`。未接坞，显示 Gen1 |
-| 4 | Enable，Bifurcation Auto，显示 Gen1。T1 进 Linux 后用 `sudo lspci -vv` 看 P620 的 `LnkCap` 与 `LnkSta` 再判断 |
+| 4 | Enable，Bifurcation Auto，显示 Gen1。T1 进 Linux 后用 `sudo lspci -vv` 看 P1000 的 `LnkCap` 与 `LnkSta` 再判断 |
 | 5 | Enable，Gen3 (8Gbps)。启动项列表里的型号以 `INTEL SSDPD21K015TA` 开头，与 D4800X 1.5 TB 相符 |
 | 6 | Disable，与空槽一致 |
 | 7 | Enable，Gen2 (5Gbps)，AX210 |
@@ -53,7 +53,7 @@ PMem 的料号、原配置和插回时的注意事项见 [PMem 的到货状态](
 | 1 | P4618 | `Bifurcation = Auto`，双 CPU 且未装 Thunderbolt 3 卡时为 Gen3 x8。预期卡上交换芯片为一个 x8 上行口、两个 x4 下行口，连接两个各约 3.2 TB 的 Intel NVMe。按 [T4 的 PCIe 链路检查](BURN-IN.md#p4618-链路与双控制器) 验收 |
 | 2 | x16→x8/x8 直通板 | Gen3 x16，Bifurcation 选 x8/x8，两张 V100，各 x8 |
 | 3 | x16→x8/x8 直通板 | Gen3 x16，由第二颗 CPU 提供，Bifurcation 选 x8/x8，两张 V100，各 x8 |
-| 4 | Quadro P620 | 主显示设备，显示器/虚拟头接在这里 |
+| 4 | Quadro P1000 | 主显示设备，显示器/虚拟头接在这里 |
 | 5 | D4800X 1.5 TB U.2 + PCIe 转接卡与风扇 | 硬改为单口 Gen3 x4，槽 5 直连 CPU0；核实际路径、序列号和散热 |
 | 6 | 空，槽 5 转接卡和风扇占用相邻空间 | 保持空槽 |
 | 7 | AX210 转接卡（无线过渡） | x4 槽，Wi-Fi 实际 x1；蓝牙需 USB 线/接头。有线验收后关机拔卡，槽位空出 |
@@ -68,8 +68,8 @@ PMem 的料号、原配置和插回时的注意事项见 [PMem 的到货状态](
 | Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
 | Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），sSATA Controller Disable，PCIE MMIO Assignment Mode `64 Bit`，PCIe Training Reset Disable，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 打开，AX210 需要蓝牙时打开对应内部 USB；拔卡后可拔该内部 USB 线。本机另列 sSATA0、sSATA1 两个口，均未使用，随 sSATA Controller 一起停用。Thunderbolt 两项保持默认，整机不装 Thunderbolt 卡 |
-| Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
-| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable：P620、V100 和两块 NVMe 都不用可调整 BAR，V100 的 16 GiB 显存 BAR 是固定大小，靠 `PCIE MMIO Assignment Mode = 64 Bit` 分配 4G 以上的地址；T5 的内核日志若报 BAR 分配失败再回来看这两项。各槽 `Option ROM Download` 保持 Enable：槽 4 的 P620 靠卡上的固件在开机阶段出画面，关掉后 POST 和 F10 会黑屏；其余槽关掉没有收益。T5 接坞后若 POST 明显变慢或卡住，只把槽 2/3 改成 Disable 作对照，Linux 驱动不依赖固件执行这段 ROM。Slot 6 与两个 Personality Slot 保持 Disable |
+| Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P1000 |
+| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable：P1000、V100 和两块 NVMe 都不用可调整 BAR，V100 的 16 GiB 显存 BAR 是固定大小，靠 `PCIE MMIO Assignment Mode = 64 Bit` 分配 4G 以上的地址；T5 的内核日志若报 BAR 分配失败再回来看这两项。各槽 `Option ROM Download` 保持 Enable：槽 4 的 P1000 靠卡上的固件在开机阶段出画面，关掉后 POST 和 F10 会黑屏；其余槽关掉没有收益。T5 接坞后若 POST 明显变慢或卡住，只把槽 2/3 改成 Disable 作对照，Linux 驱动不依赖固件执行这段 ROM。Slot 6 与两个 Personality Slot 保持 Disable |
 | Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率。本机 NUMA 项已勾选并灰显。Isoc Mode Disable、Workload Configuration Balanced、Performance Control Performance Mode 保持到货值 |
 | Advanced → Power Management Options | `PCI Express Power Management = Disable`，`SATA Power Management = Disable`。T1 一次设好，验机和正式运行沿用。Intel Speed Select Disabled、Hardware P-States Enable、`OS Controls EPB`、Idle Power Savings Extended 保持到货值 |
 | Advanced → Built-In Device Options | Embedded LAN Controller (AMT) 与 Intel X722 Embedded LAN Port 保持勾选。两项 Idle Fan Speed 增量到货为 0；T4 的 NVMe 温度偏高时调高 `Increase PCIe Idle Fan Speed(%)` 再测 |
@@ -79,7 +79,7 @@ PMem 的料号、原配置和插回时的注意事项见 [PMem 的到货状态](
 
 具体项目显示取决于 BIOS 版本和已装设备。以上区分 HP F10 真实项目与要在实机选择的值。 [HP Service Guide，F10 与 POST](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [HP Z8 G4 F10 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html)
 
-**从 T1 起固定 `1TB Memory Cap = Auto`。** 这是 HP 的平台兼容选项。HP QuickSpecs 分别列了基础档 CPU 的每路 1 TiB 容量上限，以及部分 AMD 显卡配置的整机 1 TiB 兼容限制。本机用 NVIDIA P620，铭牌容量每路 `96 GiB DDR4 + 768 GiB PMem = 864 GiB`。HP 的公开资料未给出 Z8 G4 上 Auto 的完整触发规则。T3 用 `ipmctl show -socket` 和 `ipmctl show -region` 核对 8269CY 的实际每路上限与两路 App Direct 映射。如果容量异常，先按 PMem 手册查 12 条枚举、每路容量和 goal，再定位原因。只有两路模块枚举完整、goal 正确而实际映射疑似受整机 1 TiB 限制时，才用 F10 的 `Disable` 冷启对照，保存两次 socket 和 region 报告。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [Z8 G4 的 Auto 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [ipmctl 每路容量字段](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket)
+**从 T1 起固定 `1TB Memory Cap = Auto`。** 这是 HP 的平台兼容选项。HP QuickSpecs 分别列了基础档 CPU 的每路 1 TiB 容量上限，以及部分 AMD 显卡配置的整机 1 TiB 兼容限制。本机用 NVIDIA P1000，铭牌容量每路 `96 GiB DDR4 + 768 GiB PMem = 864 GiB`。HP 的公开资料未给出 Z8 G4 上 Auto 的完整触发规则。T3 用 `ipmctl show -socket` 和 `ipmctl show -region` 核对 8269CY 的实际每路上限与两路 App Direct 映射。如果容量异常，先按 PMem 手册查 12 条枚举、每路容量和 goal，再定位原因。只有两路模块枚举完整、goal 正确而实际映射疑似受整机 1 TiB 限制时，才用 F10 的 `Disable` 冷启对照，保存两次 socket 和 region 报告。 [HP Z8 G4 QuickSpecs，第 15 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=15) · [Z8 G4 的 Auto 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [ipmctl 每路容量字段](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket)
 
 **PCIe 和 SATA 电源管理均从 T1 设为 `Disable`。** 外接算力坞的 PCIe 线缆和七盘阵列优先保证链路稳定，验机和正式运行都用同一设置。`sudo lspci -s <BDF> -vv` 的 `LnkCtl` 记录实际 ASPM 状态；`cat /sys/class/scsi_host/host*/link_power_management_policy` 记录 Linux 实际 SATA 链路策略。若仍出现低功耗策略，定位对应控制器和 Linux 策略来源。七块 HC620 保持常驻旋转，交错起转按下文 P11／PUIS 处理。T4/T5 和 I7 原有的负载及错误检查照常执行。 [HP 服务手册，第 73 页](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [Linux 7.0 ASPM](https://github.com/torvalds/linux/blob/v7.0/drivers/pci/pcie/aspm.c#L228-L280) · [Linux 7.0 SATA 链路策略](https://docs.kernel.org/7.0/scsi/link_power_management_policy.html) · [HC620 电源模式规范](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf)
 

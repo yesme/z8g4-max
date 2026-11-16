@@ -66,6 +66,6 @@ sudo ipmctl start -diagnostic FW
 - **七块 HC620 SATA 4Kn HM-SMR**。用 `smartctl -i` 逐盘记录完整型号、固件和序列号，同时抄标签 OEM P/N。按原固件验 ZAC 与慢扫。只有对应 OEM 明确覆盖完整料号和当前版本、且公告涉及实际故障或兼容性时才更新；更新后先验一块，重查 4Kn、zone 类型和完整长自检。不同 OEM 的版本字符串可以不同。 [WD HC620 SATA OEM 规范](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/product-manual-ultrastar-dc-hc620-sata-spec.pdf)
 - **Samsung FIT 和 SATA7 光驱**。T4 确认光驱枚举，临时插入 FIT 记录型号和 `ID_SERIAL` 后拔下。FIT 的 UEFI 引导及冷启在 [I1.4 装完系统后](INSTALL.md#i14-核验-fit-引导并做救援验证)检查。若厂商工具对实物完整型号列出相关更新，再单独处理。 [Samsung FIT 支持](https://semiconductor.samsung.com/consumer-storage/magician/)
 
-## T5. P620 与四块 V100
+## T5. P1000 与四块 V100
 
-用 `nvidia-smi --query-gpu=uuid,name,pci.bus_id,vbios_version --format=csv` 和 `nvidia-smi -q` 记录 VBIOS、板卡标识和可读的 InfoROM。P620 先核 UEFI 显示和 NVENC，V100 逐卡核板型、PCIe、NVLink、ECC 和负载。保留到货 VBIOS，只有板卡或算力坞供应商的公告明确覆盖实际板号、PCI 子系统 ID、卡型及相应故障时再考虑刷写。四卡版本不同先核板号和实际拓扑。被动 x8/x8 直通板、线缆和纯水冷部件通过链路及温控测试。若算力坞有独立可编程控制器，按供应商的具体型号查。 [NVIDIA SMI 字段说明](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
+用 `nvidia-smi --query-gpu=uuid,name,pci.bus_id,vbios_version --format=csv` 和 `nvidia-smi -q` 记录 VBIOS、板卡标识和可读的 InfoROM。P1000 先核 UEFI 显示和 NVENC，V100 逐卡核板型、PCIe、NVLink、ECC 和负载。保留到货 VBIOS，只有板卡或算力坞供应商的公告明确覆盖实际板号、PCI 子系统 ID、卡型及相应故障时再考虑刷写。四卡版本不同先核板号和实际拓扑。被动 x8/x8 直通板、线缆和纯水冷部件通过链路及温控测试。若算力坞有独立可编程控制器，按供应商的具体型号查。 [NVIDIA SMI 字段说明](https://docs.nvidia.com/deploy/nvidia-smi/index.html)

@@ -6,7 +6,7 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 ## T1. CPU、BIOS 与联网
 
-装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P620。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。到货已装的 P4618 和 D4800X 留在原位，PMem 已拔出，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
+装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P1000。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。到货已装的 P4618 和 D4800X 留在原位，PMem 已拔出，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
 
 ### HP 自带诊断
 
@@ -94,7 +94,7 @@ bash host/run-step.sh t1-avx
 
 ## T2. 只测 DDR4
 
-1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 留在槽 4，无线过渡时 AX210 留在槽 7。
+1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P1000 留在槽 4，无线过渡时 AX210 留在槽 7。
 2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。I1 装好正式 FIT 后，日后复测可从 [FIT 的 GRUB 菜单](FIT-RECOVERY.md#i1-备好本机救援入口)选 Memtest86+。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
 3. 回 SanDisk 上的临时 Xubuntu，按下面顺序核容量、开温度采样、跑 Linux 压测。日志都留在 `~/z8-burnin`。
 
@@ -257,7 +257,7 @@ bash host/run-step.sh t4-hdd-start "${hdds[@]}"
 
 ### 主机基线
 
-七盘运行时复查当前网络。走有线时记录板载网口驱动和协商速率；仍用 AX210 过渡时复查 Wi-Fi，使用蓝牙时也查蓝牙控制器，并保存 `iwlwifi` 日志。确认重启可联网。主机保持独立，保存硬件、内核、RAS、SMART 与 SATA 对应表。P620 为唯一显卡。
+七盘运行时复查当前网络。走有线时记录板载网口驱动和协商速率；仍用 AX210 过渡时复查 Wi-Fi，使用蓝牙时也查蓝牙控制器，并保存 `iwlwifi` 日志。确认重启可联网。主机保持独立，保存硬件、内核、RAS、SMART 与 SATA 对应表。P1000 为唯一显卡。
 
 ```bash
 bash host/run-step.sh t4-inventory
@@ -267,7 +267,7 @@ bash host/run-step.sh t4-inventory
 
 ## T5. 算力坞 V100 与 PCIe 拷机
 
-- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
+- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P1000。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
 - 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。然后做 1017 冒烟。
 
 ### T5 末的 1017 推理冒烟

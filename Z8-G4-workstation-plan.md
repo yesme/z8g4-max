@@ -18,12 +18,12 @@
 | 部分 | 配置 |
 |---|---|
 | 操作系统 | 从现有 Ventoy 的 Xubuntu 26.04.1 Desktop ISO 导入本地 YAML，直接安装桌面和 md RAID0。FIT 1 GiB ESP、8 GiB `/boot`、24 GiB `Z8TOOLS`、8 GiB `Z8RECOVERY`，其余约 78 GiB 留空。P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
-| 主板与驱动 | 纯 UEFI，Secure Boot、SNC、ASPM 和 SATA 电源管理关，NUMA、HT、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
+| 主板与驱动 | 纯 UEFI，Secure Boot、SNC、ASPM 和 SATA 电源管理关，NUMA、HT、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P1000 显示，四张 V100 计算 |
 | 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，默认每路 2 核，运行时 HT 伙伴留空，停服后全部归还 |
 | 存储 | SATA0–3 各用 24 GiB 写缓存，裸冷 CS 共 32 片、约 50.9 TiB；p5 是 848 GiB 裸索引。SATA4–6 各用 80 GiB 写缓存，组成约 25 TiB RAIDZ1；p9 约 213 GiB special，承载元数据、小块与 ZIL |
 | 构建 | max 热 CS 1,638 GiB 在 P4618，其 26 GiB 索引在 PMem 模型卷；冷分片 checkpoint 在 P4618。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 提供权威 AC/CAS 和唯一调度器，Linux 与 Darwin 由平台属性分流 |
 | 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、8 GiB GPU 专家缓存，按显存与工具闭环结果降档 |
-| 远程 | 板载有线为主，AX210 Wi-Fi 过渡，DHCP 保留、SSH/tmux，独立图形用 xrdp/Xfce，控制本机桌面用 P620 的 X11/NVENC + Sunshine/Moonlight |
+| 远程 | 板载有线为主，AX210 Wi-Fi 过渡，DHCP 保留、SSH/tmux，独立图形用 xrdp/Xfce，控制本机桌面用 P1000 的 X11/NVENC + Sunshine/Moonlight |
 
 T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确认 1017 能在四卡加载并完成工具往返。I1 确认 FIT 冷启动可找到 RAID0，I4 确认裸冷库覆写、ZFS 同步写和两组缺盘行为，I5 确认 Buck2 缓存与物化，I6–I7 确认推理显存、工具闭环和实际混合负载。只有未通过的项目进入对应排查或回退。
 
@@ -37,7 +37,7 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 
 | 顺序 | 这一步接什么 | 做到什么再继续 |
 |---|---|---|
-| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P620、显示器、网线（无线过渡时加槽 7 AX210 和天线）、Ventoy 与可清空的 SanDisk | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 先接板载有线，缺网线时用 AX210，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-联网与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
+| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P1000、显示器、网线（无线过渡时加槽 7 AX210 和天线）、Ventoy 与可清空的 SanDisk | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 先接板载有线，缺网线时用 AX210，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-联网与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
 | **T2 · DDR4** | 沿用 T1 硬件，从 Ventoy 启动 Memtest86+，再回 SanDisk 上的临时 Linux | 每路 96 GiB、共 192 GiB。Memtest86+ 默认测试集四个完整 pass，跳过 Rowhammer。再跑 Linux 144 GiB、4 小时，比较前后的 ECC 与 CPU 硬件事件。 [怎么读硬件错误](z8-kit/host/BURN-IN.md#怎么读硬件错误) |
 | **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。复测混插 DDR4，再验 DAX 与裸 devdax。两路 devdax 转 kmem 后，逐路确认 DDR4 到慢节点的下沉并记录 kmem 冷启上线时间。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [kmem 冷启计时](z8-kit/host/PMEM.md#t3-记录-kmem-冷启动时间) |
 | **T4 · 存储** | 槽 1 加 P4618，确认 Gen3 x8 上行、两个 x4 下行和两个各约 3.2 TB 的 NVMe 端点，再加槽 5 的 D4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验当前网络与七盘同跑。 [P4618 链路检查](z8-kit/host/BURN-IN.md#p4618-链路与双控制器) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
@@ -48,8 +48,8 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 | 顺序 | 装什么与验证方式 |
 |---|---|
 | **I1 · 操作系统** | 断开 V100 与数据盘，USB 只接三星 T3（Ventoy）和三星 FIT。从 Xubuntu Desktop Live 联网补 `mdadm`，导入 Ventoy 上的 `autoinstall.yaml`，复核序列号后重建 FIT 的 EFI、`/boot` 和 P4618 RAID0/XFS 根。核首启、Dracut、FIT 的 GRUB 救援菜单与元信息备份。 [FIT 救援方案](z8-kit/host/FIT-RECOVERY.md) [系统盘安装](z8-kit/host/INSTALL.md) |
-| **I2 · 远程入口** | 板载有线优先，缺网线时用 AX210。设开机自动联网和 DHCP 地址保留，再验 SSH 公钥、tmux 与 xrdp/Xfce。Sunshine 的 P620 硬件编码放 I3。 [远程入口](z8-kit/remote/README.md) |
-| **I3 · NVIDIA 显卡驱动与复接 V100** | V100 仍断开，在 Xubuntu 装 `nvidia-driver-580`。这是本方案为 P620 和 V100 选用的 NVIDIA Linux 显卡驱动。重启后用 P620 验桌面、Sunshine/NVENC 和 SSH，再关机接回 V100，核四卡枚举、NVLink 与快速 CUDA/NCCL。 [驱动安装和锁分支](z8-kit/host/INSTALL.md#安装并锁定-nvidia-显卡驱动) |
+| **I2 · 远程入口** | 板载有线优先，缺网线时用 AX210。设开机自动联网和 DHCP 地址保留，再验 SSH 公钥、tmux 与 xrdp/Xfce。Sunshine 的 P1000 硬件编码放 I3。 [远程入口](z8-kit/remote/README.md) |
+| **I3 · NVIDIA 显卡驱动与复接 V100** | V100 仍断开，在 Xubuntu 装 `nvidia-driver-580`。这是本方案为 P1000 和 V100 选用的 NVIDIA Linux 显卡驱动。重启后用 P1000 验桌面、Sunshine/NVENC 和 SSH，再关机接回 V100，核四卡枚举、NVLink 与快速 CUDA/NCCL。 [驱动安装和锁分支](z8-kit/host/INSTALL.md#安装并锁定-nvidia-显卡驱动) |
 | **I4 · 存储与 PMem** | 接回已慢扫的盘，首次划 D4800X 九分区，建七个 dm-zoned target、32 个冷分片和三盘 RAIDZ1。跑冷库覆写、ZFS scrub、三种缺盘冷启和恢复。按 T3 留下的 namespace UUID 恢复 DAX 模型卷和 kmem。 [存储](z8-kit/storage/README.md) · [PMem](z8-kit/host/PMEM.md) |
 | **I5 · Buildbarn 与 Buck2** | max 按每路预留 2 核安装 CPU slice 和 88 并发 runner 配置，依次启动 AC/CAS、调度器和 Linux worker。接入 mini 及 Mac 的边缘存储与 worker，验证一次 Linux/Darwin 跨平台构建、单测及按需物化。 [CPU 分核安装](z8-kit/host/CPU-PLACEMENT.md#生成并安装) · [Buildbarn](z8-kit/buildbarn/README.md) |
 | **I6 · 推理与 harness** | 用 llama.cpp v1.0.0、四张 V100 和一套 PMem 上的 1017 权重，验 128K 单槽目标、工具闭环和实际 harness，再保存参数并启动推理服务。OMP、Pi、DSH 可用已有密钥直连 DeepSeek 官方 API。各 CLI 验证账号、模型和工作树。 [推理](z8-kit/inference/README.md) · [服务配置](z8-kit/host/CPU-PLACEMENT.md#启停本地模型) · [CLI](z8-kit/harness/README.md) |
@@ -66,7 +66,7 @@ DIMM 上的 **PMem100** 在 T3 验，测试时提交的 goal 和 namespace 供�
 | 1 | P4618，`Bifurcation = Auto`，双 CPU 且不装 Thunderbolt 3 卡时为 Gen3 x8 |
 | 2 | x16→x8/x8 直通卡，接两张 V100 |
 | 3 | x16→x8/x8 直通卡，接两张 V100 |
-| 4 | P620，主显示 |
+| 4 | P1000，主显示 |
 | 5 | D4800X，Gen3 x4 |
 | 6 | 空，被槽 5 的转接卡和风扇挡住 |
 | 7 | AX210 过渡，蓝牙经内部 USB。有线确认后拔卡，槽位空出 |
@@ -76,7 +76,7 @@ F10 首装使用 **纯 UEFI，Legacy/CSM 和 Secure Boot 都关闭**。Fast Boot
 
 **内网首装保留 VT-x、VT-d、默认 PCIe ACS、Intel ME 和 HP Sure Start 的固件恢复。** VT-x 给 KVM 等虚拟机提供 CPU 硬件加速，裸机 Buck2 和 1017 的性能继续按实测记录。关闭不用的 AMT、PXE、TXT 和 HP Sure Recover，保持设备级 DriveLock 未启用。新装 XFS 根若没有使用 TPM 解锁或密钥，可关闭 TPM State。接坞后先记录真实 NVLink 和 PCIe 拓扑，需使用裸机 PCIe P2P 时，按 NVIDIA 要求用 GRUB 单次关闭 Intel IOMMU 做该路径测试。 [F10 各项取值](z8-kit/host/BIOS.md#内网主机的安全与虚拟化设置) · [HP 服务手册](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [NVIDIA 多 GPU 指南](https://docs.nvidia.com/cuda/cuda-programming-guide/03-advanced/multi-gpu-systems.html#host-iommu-hardware-pci-access-control-services-and-vms)
 
-按 Esc → F10 后，在 `Advanced → Secure Boot Configuration → Configure Legacy Support and Secure Boot` 选择 **Legacy Support Disable and Secure Boot Disable**。保存后如出现 Boot Mode Change，输入屏幕确认码。保留 `UEFI Boot Order`，用 F9 选 Ventoy UEFI 后在菜单选 Memtest86+ 或 Xubuntu Desktop，验机从 SanDisk 启动，I1 装好正式系统后才选 FIT 的 UEFI 引导项。在 `Boot Options` 把 `After Power Loss` 设为 `Power Off`，按算力坞接线记录手动上电。在 `Slot Settings` 保持槽 1 的 Bifurcation 为 Auto，槽 2/3 改为 x8/x8（若固件提供该项），槽 5/7 保持 Enable。保存后先从 P620 看一次 POST，再进入 Linux 核验。 [HP F10 设置](https://support.hp.com/ee-en/document/ish_9642671-9641393-16)
+按 Esc → F10 后，在 `Advanced → Secure Boot Configuration → Configure Legacy Support and Secure Boot` 选择 **Legacy Support Disable and Secure Boot Disable**。保存后如出现 Boot Mode Change，输入屏幕确认码。保留 `UEFI Boot Order`，用 F9 选 Ventoy UEFI 后在菜单选 Memtest86+ 或 Xubuntu Desktop，验机从 SanDisk 启动，I1 装好正式系统后才选 FIT 的 UEFI 引导项。在 `Boot Options` 把 `After Power Loss` 设为 `Power Off`，按算力坞接线记录手动上电。在 `Slot Settings` 保持槽 1 的 Bifurcation 为 Auto，槽 2/3 改为 x8/x8（若固件提供该项），槽 5/7 保持 Enable。保存后先从 P1000 看一次 POST，再进入 Linux 核验。 [HP F10 设置](https://support.hp.com/ee-en/document/ish_9642671-9641393-16)
 
 ```bash
 test -d /sys/firmware/efi && echo 'UEFI boot'
@@ -189,10 +189,10 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 | 入口 | 用途 | 初始设置 |
 |---|---|---|
 | SSH + tmux | CLI、文件管理、维护 | 首装优先用板载有线，缺网线时用 AX210。客户端合并 SSH 样例后，`ssh jackywang-xubuntu-max` 以 `jackywang` 登录。公钥先双会话验证，按需用 SSH 隧道访问 RDP 与推理 |
-| Sunshine + Moonlight | 控制 P620 上的本机 XFCE/X11 显示会话 | 接真实或兼容虚拟屏，固定 1080p60 H.264、P620 NVENC 和 X11 捕获。验证登录用户权限、音频、鼠标键盘、重启后可连接；只在私有网络开放所需端口 |
+| Sunshine + Moonlight | 控制 P1000 上的本机 XFCE/X11 显示会话 | 接真实或兼容虚拟屏，固定 1080p60 H.264、P1000 NVENC 和 X11 捕获。验证登录用户权限、音频、鼠标键盘、重启后可连接；只在私有网络开放所需端口 |
 | xrdp + xorgxrdp + XFCE | 独立图形登录 | 以 `jackywang` 登录 Xorg，`~/.xsession` 通过 `dbus-run-session` 启动 Xfce。分别在本机控制台已登录和未登录时验证。默认监听 loopback，通过 SSH tunnel 连接 |
 
-[P620 图形规格](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/v2/NVIDIA%20Professional%20Graphics%20Line%20Card.pdf) · [Sunshine 配置](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html) · [xrdp 官方仓库](https://github.com/neutrinolabs/xrdp) · [Ubuntu xorgxrdp](https://packages.ubuntu.com/en/resolute/xorgxrdp)
+[P1000 图形规格](https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/productspage/quadro/quadro-desktop/v2/NVIDIA%20Professional%20Graphics%20Line%20Card.pdf) · [Sunshine 配置](https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html) · [xrdp 官方仓库](https://github.com/neutrinolabs/xrdp) · [Ubuntu xorgxrdp](https://packages.ubuntu.com/en/resolute/xorgxrdp)
 
 ## 8. 采购报价
 
