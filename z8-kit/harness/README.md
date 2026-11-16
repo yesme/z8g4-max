@@ -17,22 +17,6 @@ tmux list-sessions
 
 每个 CLI 首次单独启动，先走原生登录，选模型后执行只读项目任务确认权限。需要长期保留时用 `Ctrl-b d`，重连后用同一个 CLI 和 worktree 参数接回。不同人的凭证用不同 Unix 用户及文件权限。
 
-## 每小时把已提交的工作镜像到 `/data/other`
-
-活跃工作树在 P4618 的 RAID0 上，任一端点损坏就丢失未推送的提交。`repo-mirror.sh` 把 `/srv/work/$USER` 下每个主仓库的全部分支和标签强制推到 `/data/other/git-mirror/$USER/<仓库>.git`，各 worktree 的分支随主仓库一起带走。`/data/other` 未挂载为 ZFS 时脚本直接失败，不会把副本写回 P4618。镜像不删分支；未提交的改动不在其中，agent 的阶段成果先提交到任务分支。GitHub 仍是机器外的那一份。
-
-```bash
-install -Dm0755 "$kit/harness/repo-mirror.sh" "$HOME/.local/bin/z8-repo-mirror"
-install -Dm0644 -t "$HOME/.config/systemd/user" "$kit"/harness/z8-repo-mirror.{service,timer}
-sudo install -d -o "$USER" -g "$USER" -m 0750 "/data/other/git-mirror/$USER"
-sudo loginctl enable-linger "$USER"
-systemctl --user daemon-reload
-systemctl --user enable --now z8-repo-mirror.timer
-systemctl --user start z8-repo-mirror.service
-journalctl --user -u z8-repo-mirror.service -n 20 --no-pager
-git -C "/data/other/git-mirror/$USER/example.git" branch -v
-```
-
 ## ZCode 终端版
 
 先看 [官方 release](https://github.com/zai-org/ZCode/releases) 是否提供对应 Linux CLI 分发包。若需要从源构建，按官方仓库版本和 `mise.toml` 配置 Node 与 pnpm，安装该 checkout 的 workspace 依赖，运行 `pnpm build:zcode`。按构建输出与 README 解包，先以 `node /path/to/extracted/bin/zcode.mjs --help` 验入口，再用官方分发安装方式或在自己的 `~/.local/bin` 建启动器。启动后测试 TUI 登录和 GLM 模型选择。 [官方构建与分发步骤](https://github.com/zai-org/ZCode/blob/main/README.en.md)

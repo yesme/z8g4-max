@@ -18,4 +18,3 @@ python3 -B tests/inference-probe.py
 python3 -B tests/macos-launch-agents.py
 python3 -B tests/run-step.py
 python3 -B tests/recovery-backup.py
-bash tests/repo-mirror.sh
