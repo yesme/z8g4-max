@@ -22,7 +22,7 @@
 ### T1 · CPU、F10 和联网
 
 1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P620 并接显示器。板载网口优先接网线；需无线过渡时在槽 7 装 AX210 并接天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。本机到货时 PMem、P4618、D4800X 和 AX210 已装好：PMem 已全部拔出，T3 再插回；其余留在原位，P4618 和 D4800X 在 T4 前不写入。 [到货状态](BIOS.md#到货状态与首次-f10-实拍)
-2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均设为 `Disable`，沿用到正式系统。到货值里要改四项：关 Fast Boot、关 PXE、关 SATA 的 RAID Mode、停用整个 sSATA Controller。保存后重新确认 POST 和 DDR4 容量。 [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
+2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均设为 `Disable`，沿用到正式系统。到货值里要改四项：关 Fast Boot、关 PXE、关 SATA 的 RAID Mode、停用整个 sSATA Controller。保存后重新确认 POST 和 DDR4 容量。装系统前可先按 F2 用 HP 自带诊断跑 Processor、System Board 和 Memory Quick Check。 [HP 自带诊断](BURN-IN.md#hp-自带诊断) [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
 3. 按 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu**。用板载有线或 AX210 过渡联网，核 DHCP、DNS 和 APT，按[挂载步骤](INSTALL.md#挂载-ventoy-与保存-live-日志)试读同一块 Ventoy 数据分区，再把 **SanDisk CZ430** 选作整盘安装目标。此时 FIT 先不接。按安装器提示拔下 Ventoy，从 SanDisk 冷启临时 Xubuntu，再确认能联网。 [Live 联网与 SanDisk 安装](BURN-IN.md#首次-live-联网与临时验机系统)
 4. 在临时系统安装微码和诊断工具，重启后确认两颗 CPU、两个 DDR4 NUMA 节点。先跑 30 分钟通用 CPU 压测，再跑 30 分钟 AVX-512 VNNI，保存 RAS、温度和满载频率。 [CPU 拷机命令](BURN-IN.md#cpu-拷机)
 

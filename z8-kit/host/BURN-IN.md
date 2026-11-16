@@ -8,6 +8,20 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P620。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。到货已装的 P4618 和 D4800X 留在原位，PMem 已拔出，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
 
+### HP 自带诊断
+
+开机按 Esc 再按 F2，或在 F10 的 `Main → System Diagnostics` 进入 HP PC Hardware Diagnostics UEFI。它不依赖任何系统盘，BIOS 按 U 盘、硬盘、BIOS 内置的顺序找这个工具；本机没有另装时运行的是内置的 `2.3.8.0 - BIOS`，菜单为 Processor、Memory Test、Storage Tests、System Board Test 和 Keyboard Test。它用来做装系统前的快筛和日后开不了机时的排查，不替代下面的拷机。
+
+| 阶段 | 用哪项 | 说明 |
+|---|---|---|
+| T1 | Processor、System Board Test | 各几分钟。通过时记下 PASS ID，失败时记下 24 位 Failure ID |
+| T2 | Memory Test 的 Quick Check | 192 GiB 约一小时，放在 Memtest86+ 之前先筛一遍。四个完整 pass 的 Memtest86+ 和 144 GiB 的 Linux 压测照做 |
+| T4 | Storage Tests 的快速项 | 先看它列出了哪些盘，只做 SMART 类的快速检查。七块 14 TB 盘的全盘读由并行的 SMART 长自检完成，不用它的完整测试 |
+
+它不显示温度、频率和 ECC 可纠正错误计数，也没有 GPU 计算、PMem 和 dm-zoned 的测试，这些仍看 Linux 下的日志。需要完整版时，在 Windows 电脑上运行 HP 的 SoftPaq sp167305（版本 10.8.4.0），选择装到 U 盘；安装程序会把 U 盘分区改名为 `HP_TOOLS`，所以用一只单独的 U 盘，不要用 Ventoy、SanDisk 或 FIT。 [HP 维修手册的诊断章节](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [sp167305 说明](https://ftp.hp.com/pub/softpaq/sp167001-167500/sp167305.html)
+
+进了 Linux 以后，可以试 `sudo modprobe hp-wmi-sensors` 再运行 `sensors`。HP 商用机经 WMI 报告的风扇转速和板上温度由这个驱动接入 hwmon，本机是否有数据以实测为准。 [Linux 7.0 hp-wmi-sensors](https://docs.kernel.org/7.0/hwmon/hp-wmi-sensors.html)
+
 ### 首次 Live 联网与临时验机系统
 
 用 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu** 进入 Live。有线默认由 NetworkManager 通过 DHCP 联网，先用 `nmcli device status` 确认插线的接口。HP 规格列板载 I219-LM 与 X722 1GbE，Linux 分别识别为 `e1000e` 和 `i40e`。若配置了选配网络模块，按实际型号和协商速率记录。 [HP 板载网络规格](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=77)
