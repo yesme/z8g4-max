@@ -23,7 +23,7 @@ PMem 和 DDR4 只差几倍，所以直通划算。Optane SSD 一次随机读约 
 | Buildbarn 冷索引，848 GiB | D4800X p5 裸分区 | 页缓存，预读为 0，可下沉 |
 | Buildbarn 冷数据 | SATA0–3 dm-zoned | 页缓存；读命中后回填热层，停留时间短 |
 | 工作树、`buck-out`、Git 对象 | P4618 XFS | 文件数据走页缓存；inode 和目录项在 DDR4 |
-| worker 输入缓存和构建目录 | P4618 XFS | 同上 |
+| worker 输入缓存和构建目录 | P4618 XFS | 同上；短命的输出在回写前就被删除，多数不落盘 |
 | runner 的 `/tmp` | tmpfs | 可移动页，可下沉 |
 | Buck2、agent、编译进程的匿名内存 | — | DDR4，冷页下沉 |
 | `/data/other` | SATA4–6 RAIDZ1 加 D4800X special | ZFS ARC，只在 DDR4，上限 4 GiB |
@@ -79,6 +79,6 @@ SATA0–3 与 SATA4–6 分开的是盘体、线束和盘笼。两组的 dm-zone
 
 以下各项先取 I5、I7 的基线再对照，无改善就不保留。 [逐项说明](../buildbarn/README.md#i5-基线之后再评估的项)
 
-- worker 的输入缓存和构建目录改放 tmpfs，并把页优先分配到两个 kmem 节点。
+- worker 的输入缓存和构建目录是否改放 tmpfs。预期收益只有硬链接和删除的日志开销，代价是 128 GiB 可丢弃的页缓存变成不可回收的内存；准备输入的耗时占比超过 10% 才做对照。
 - THP `always`、cache 容器的内存上限。
 - 冷索引的大小与位置。

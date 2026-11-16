@@ -187,7 +187,7 @@ target=//app:binary
 先按上面的配置取一次真实构建的基线（吞吐、每路 `Normal` 水位、`i5-cold-watermark`），下列各项逐个对照，无改善就不留。
 
 - **热 CS 索引的两种位置。** 默认在 PMem DAX。先按[放回 P4618 的步骤](#热-cs-索引的位置)取一轮基线，再切到 PMem，比较两路 `Normal` 水位、`pgdemote_*` 与 `pgpromote_*` 计数和构建吞吐。
-- **worker 目录放 tmpfs。** 输入缓存和构建目录是临时数据，重启后可从热 CS 重新拉取。tmpfs 没有日志，搭输入目录时的硬链接和删除变成纯内存操作，也不再回写 P4618；挂载时可用内存策略把页优先放到两个 kmem 节点。代价是这部分内存不能被丢弃，要设大小上限并计入 runner 的 512 GiB。两个目录必须在同一个文件系统上才能硬链接。
+- **worker 目录保持在 P4618 XFS，tmpfs 暂不采用。** bb-worker 启动时清空输入缓存，不做 fsync，输入从缓存目录硬链接进构建目录。XFS 延迟分配，构建目录里的输出通常在约 30 秒的回写期限前就上传并删除，不会落到 NAND；真正写盘的只有输入缓存（每个文件一次）和长时间动作的中间文件。换成 tmpfs 只省下硬链接和删除的日志开销，按每次约 10 µs 降到 1–2 µs 估，一个 2,000 个输入的编译动作省十几毫秒。代价是 128 GiB 输入缓存从可丢弃的页缓存变成不可回收的内存，空间用尽时动作直接失败，硬链接还要占 tmpfs 的 inode 配额。判断门槛：输入已在缓存时，按 `ExecutedActionMetadata` 的 `input_fetch_*` 与整个动作的时间戳算准备输入的占比，低于 5% 不再考虑，高于 10% 才做对照。那时用默认内存策略，不把页指定到 kmem 节点，头文件和工具链这类反复读的输入应留在 DDR4；也同时评估 bb-worker 的虚拟构建目录。 [启动时清空缓存](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/cmd/bb_worker/main.go#L300-L306) · [硬链接取输入](https://github.com/buildbarn/bb-remote-execution/blob/c9ba98cf52/pkg/cas/hardlinking_file_fetcher.go#L157-L170)
 - **THP `always`。** DAX 的 2 MiB 映射不看这个开关，缺页路径对 DAX VMA 直接放行，按 [PMem 手册](../host/PMEM.md#模型卷)的 `dax_pmd_fault_done` 核实即可。`always` 只影响匿名页，可能给编译器带来 TLB 收益，也可能让 Go、Node 进程变大，按构建吞吐和内存两项决定。 [Linux 7.0 THP 判定](https://github.com/torvalds/linux/blob/v7.0/mm/huge_memory.c#L103-L133)
 - **cache 的内存上限。** 容器进程在 Docker 自己的 cgroup，写在 `z8-buildbarn.service` 上的 `MemoryHigh` 管不到它，要用 Compose 的 `mem_limit`。页缓存可下沉到 kmem，每缓存 1 GiB 约占 4 MiB 不可移动的 `xa_node` 和页表；上限压得过低会让冷索引和热块反复换入。只在 `Normal` 水位确有压力时设一个 100 GiB 量级的护栏。
 - **冷数据片的预读保持默认。** 分块下限 256 KiB，缩小预读会把一次冷读拆成许多小请求；HDD 上寻道占主导，顺带多读的部分近乎免费，页缓存可回收。索引切片仍为 0。
