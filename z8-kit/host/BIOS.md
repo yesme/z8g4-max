@@ -4,7 +4,7 @@
 
 ## 到货状态与首次 F10 实拍
 
-2026-11 首次开机进 F10 拍到的状态。这台机到货时已装好双 CPU、DDR4、12 条 PMem、槽 1 的 P4618、槽 5 的 D4800X 和槽 7 的 AX210。本页和验机手册按阶段加装的步骤仍适用：已装的部件留在原位，跳过"装"的动作，验收照做，P4618 和 D4800X 在 T4 前不写入。照片里有盘序列号，仓库公开，照片和序列号留在本机记录。
+2026-11 首次开机进 F10 拍到的状态。这台机到货时已装好双 CPU、DDR4、12 条 PMem、槽 1 的 P4618、槽 5 的 D4800X 和槽 7 的 AX210。12 条 PMem 已全部拔出，T1、T2 只测 DDR4，T3 再插回。P4618、D4800X 和 AX210 留在原位，跳过"装"的动作，验收照做，P4618 和 D4800X 在 T4 前不写入。照片里有盘序列号，仓库公开，照片和序列号留在本机记录。
 
 **四项与首装值不同，T1 先改。**
 
@@ -13,7 +13,7 @@
 | Advanced → Boot Options | Fast Boot 已勾选 | 取消 |
 | Advanced → Boot Options | Network (PXE) Boot 已勾选 | 取消 |
 | Advanced → System Options | SATA Controller RAID Mode 已勾选 | 取消，走 AHCI |
-| Advanced → System Options | sSATA Controller RAID Mode 已勾选 | 取消 |
+| Advanced → System Options | sSATA Controller 及其 RAID Mode 已勾选 | 取消 sSATA Controller，两个 sSATA 口都未使用 |
 
 **拍到的其余项已符合首装值。**
 
@@ -38,9 +38,9 @@
 
 **没拍到、T1 仍要核对的项。** `Main → System Information` 的 BIOS 与 ME 版本和内存总量、Secure Boot Configuration、VTx 与 VTd、Remote Management Options 的 AMT、TPM、主显示槽位，以及 System Options 第二页。
 
-**`Reset Factory Defaults on Battery Loss` 到货为 `Apply Default Settings`。** 二手机的纽扣电池寿命未知。电池失效后 F10 回到出厂默认，上面四项和槽 2/3 的 `x8x8` 都会丢。T1 配好后用 `Main → Replicated Setup` 再导出一次设置，条件允许时换一颗新的 CR2032。
+**`Reset Factory Defaults on Battery Loss` 到货为 `Apply Default Settings`。** 二手机的纽扣电池寿命未知。电池失效后 F10 回到出厂默认，上面四项和槽 2/3 的 `x8x8` 都会丢，sSATA 也会重新启用。T1 配好后用 `Main → Replicated Setup` 再导出一次设置，条件允许时换一颗新的 CR2032。
 
-PMem 的到货状态和对验机顺序的影响见 [到货时 PMem 已装好](#到货时-pmem-已装好)。
+PMem 的料号、原配置和插回时的注意事项见 [PMem 的到货状态](#pmem-的到货状态)。
 
 ## 板上槽位
 
@@ -62,8 +62,8 @@ PMem 的到货状态和对验机顺序的影响见 [到货时 PMem 已装好](#�
 |---|---|
 | Advanced → Boot Options | USB Storage Boot Enable，Fast Boot Disable，Network (PXE) Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 `Power Off`，手动按算力坞的上电顺序启动。验机时用 F9 选 Ventoy 或已装好的 SanDisk。I1 装好正式系统后，UEFI Boot Order 再以 Samsung FIT 上的 Ubuntu 引导项为首选 |
 | Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
-| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode 与 sSATA Controller RAID Mode 均 Disable（AHCI），PCIe MMIO Assignment Mode Auto，PCIe Training Reset Disable，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
-| Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 打开，AX210 需要蓝牙时打开对应内部 USB；拔卡后可拔该内部 USB 线。本机另列 sSATA0、sSATA1 两个口，无连接时保持默认或禁用，按板上实际丝印确认。Thunderbolt 两项保持默认，整机不装 Thunderbolt 卡 |
+| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），sSATA Controller Disable，PCIe MMIO Assignment Mode Auto，PCIe Training Reset Disable，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
+| Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 打开，AX210 需要蓝牙时打开对应内部 USB；拔卡后可拔该内部 USB 线。本机另列 sSATA0、sSATA1 两个口，均未使用，随 sSATA Controller 一起停用。Thunderbolt 两项保持默认，整机不装 Thunderbolt 卡 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
 | Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable，Slot 6 与两个 Personality Slot 保持 Disable |
 | Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率。本机 NUMA 项已勾选并灰显。Isoc Mode Disable、Workload Configuration Balanced、Performance Control Performance Mode 保持到货值 |
@@ -141,30 +141,15 @@ CPU0、CPU1 各有一套编号 1–12 的 DIMM 槽。先在主板上找 `CPU0-DI
 
 T1 用 SanDisk 上的临时 Xubuntu 26.04.1 短跑双路 CPU。T2 从 F9 进 Ventoy 菜单启动 Memtest86+，通过后换回临时系统完成 4 小时 DDR4 压测。随后关机断电，**DDR4 原位不动，直接把 PMem 插进空槽**。两边各六条 DDR4 加六条 PMem，共 24 条。第一次混插启动先看 F10 是否认全，再在 [Xubuntu 26.04.1 提交 App Direct goal](PMEM.md)。装每条时记位置和序列号，便于定位 DIMM 错误。 [HP QuickSpecs，第 22 页双路 192 GB](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=22) · [HP Optane 白皮书，第 22 页 24 条混插](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=22)
 
-### 到货时 PMem 已装好
+### PMem 的到货状态
 
-F10 的 NVDIMM 列表列出 12 条，位置是两路各 DIMM 2/4/6/7/9/11，每条 Capacity 126 GB，与上表一致。当前状态有三点和空白模块不同。
+到货时 12 条 PMem 已插在两路各 DIMM 2/4/6/7/9/11，F10 列表每条 Capacity 126 GB。现已全部拔出，T1、T2 按上表只装 DDR4，T3 再插回。
 
-- **整机是 Memory Mode。** 11 条的 Volatile Size 为 126 GB、Persistent Size 为 0。系统把 PMem 当主内存，DDR4 是它的缓存，操作系统看到的内存远大于 192 GiB，T2 的 DDR4 测试无法照原样做。
-- **CPU1-DIMM4 没有参与当前配置。** 它的 Volatile 和 Persistent 都是 0，固件版本也和其余模块不同。可能只是后补的条没有重做配置，也可能是模块本身有问题，要在 Linux 用 `ipmctl` 判断。
-- **固件混版。** 9 条 `01.02.00.5310`，CPU0-DIMM11 与 CPU1-DIMM7 为 `5355`，CPU1-DIMM4 为 `5386`，都低于 [固件手册](FIRMWARE.md#t3-pmem-100) 引用的 HP 最低版本。
+- **料号。** 11 条是 `NMA1XBD128GQS`，后补的一条是 `NMA1XXD128GQS`。两种都是 100 系列的 128 GB 模块，尾缀 `QS` 是样品标识，零售量产料号是 `NMA1XXD128GPS`。
+- **原配置是 Memory Mode。** 原有 11 条的 Volatile Size 为 126 GB、Persistent Size 为 0，系统把 PMem 当主内存、DDR4 当缓存。后补的那条到货时在 CPU1-DIMM4，两项都是 0，尚未配置。
+- **固件混版。** 9 条 `01.02.00.5310`，2 条 `5355`，后补的一条 `5386`。是否统一见 [固件手册](FIRMWARE.md#t3-pmem-100)。
 
-PMem 留在槽里，按下面的顺序走。12 条来回插拔的风险高于就地转换，最终配置本来就是混插。
-
-1. T1 照常做 F10、Live 联网、SanDisk 临时系统和 CPU 拷机。这时 `free -h` 显示的是 PMem 容量，属预期。
-2. T1 末在临时系统装 [PMem 工具](PMEM.md#t3-准备工具)并保存盘点，先看 CPU1-DIMM4。十二条都应健康、可管理、未锁定。CPU1-DIMM4 若不健康、被锁定或不可管理，先找卖家处理，再决定是否按一路六条、一路五条继续。
-
-   ```bash
-   sudo ipmctl show -dimm
-   sudo ipmctl show -a -dimm | tee "$HOME/z8-burnin/pmem-dimm-all.log"
-   sudo ipmctl show -memoryresources
-   ```
-
-3. 按 [固件手册](FIRMWARE.md#t3-pmem-100) 决定是否统一固件，再按 [PMem 手册](PMEM.md#1-在-f10-查条并临时解冻) 解冻、提交 App Direct goal 并重启。内存总量会变，POST 按 `Prompt on Memory Size Change` 提示确认。回到临时系统后 `free -h` 应约 192 GiB，`ipmctl show -region` 有两路 region。
-4. 之后才做 T2。PMem 已在槽里，T2 的四个 Memtest86+ pass 同时是混插后的 DDR4 复测，T3 不必再补那一个 pass。T2 报错时，再拔掉 PMem 做 DDR4-only 对照。
-5. T3 从核对 region、切 namespace 接着做。
-
-也可以沿用原方案，先拔下 12 条 PMem 做完 T1、T2 再插回。
+T3 插回时每路仍用 DIMM 2/4/6/7/9/11，哪条插哪个槽不限，记下每个槽的序列号。模块带着原来的配置，首次混插开机有两种可能：固件照旧把它们映射成主内存，`free -h` 显示 PMem 容量，POST 按 `Prompt on Memory Size Change` 提示确认；或者因位置变化显示未配置。两种情况都直接进临时系统盘点并提交 App Direct goal。goal 生效、系统内存回到约 192 GiB 之后，再跑混插后的 Memtest86+。
 
 ## SATA0–7、硬盘识别和起转
 

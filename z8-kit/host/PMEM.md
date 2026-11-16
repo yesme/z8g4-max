@@ -55,7 +55,7 @@ HP 对 Z8 G4 的 App Direct 混插按每颗 CPU 下的 **DDR4 + PMem DIMM 总容
 
 ### 1. 在 F10 查条并临时解冻
 
-DDR4-only 测试通过后断电，把 12 条 PMem 插进空槽。第一次混插 POST 时按 F10。到货已装时从 [到货时 PMem 已装好](BIOS.md#到货时-pmem-已装好) 进入本节。这个流程由 Xubuntu 的 `ipmctl` 提交 App Direct goal，F10 这次做以下两步。
+DDR4-only 测试通过后断电，把 12 条 PMem 插进空槽。第一次混插 POST 时按 F10。本机这批模块的料号和原配置见 [PMem 的到货状态](BIOS.md#pmem-的到货状态)。这个流程由 Xubuntu 的 `ipmctl` 提交 App Direct goal，F10 这次做以下两步。
 
 1. 进 `Advanced → NVDIMM Management`，核两路各六条及其固件、当前状态。`NVDIMM Configuration` 保持原值，跳过 `Apply NVDIMM Configuration`。该菜单的 `Volatile Memory` 对应 Intel Memory Mode，`Persistent Memory with BTT` 对应扇区模式。本机需要后续在 Linux 划 `fsdax` 和 `devdax`。
 2. 进 `Security → NVDIMM Security Freeze`，把 `Unfreeze NVDIMMs for this number of boot sequences` 暂设为 **`5`**。按 F10 保存退出。这个开关给 `ipmctl` 配置留出五次启动的窗口。二手模块若处于 `Locked`，还需原解锁方式。
@@ -83,6 +83,8 @@ sudo modprobe nfit
 ```
 
 若 F10 识别 12 条而 `show -dimm` 识别不全，用 `sudo journalctl -k -b -g 'NFIT|nvdimm|pmem|dax'` 查固件表和内核枚举，再核 F10 解冻状态。仍不齐时先记录实际 DIMM 和 ACPI NFIT 错误，处理后在同版临时系统重新检查。
+
+`ipmctl` 上游说明列有一个已知问题：部分面向 100 系列的平台不生成 ACPI PMTT 表，2.x 的 `show -dimm`、`show -topology`、`show -memoryresources` 和 `create -goal` 会失败，加 `-v` 可见取不到 PMTT 表的提示。本机用的是 3.x，是否受影响要实测。遇到时有两条路。一是在 F10 的 `NVDIMM Configuration` 里选持久内存并 Apply，由固件建立两路 App Direct region；菜单若顺带建了 BTT namespace，回 Linux 用 `ndctl destroy-namespace` 删掉，再按本手册切分。二是按上游 `master_1_0` 分支自行构建 1.x 的 `ipmctl`。`ndctl` 和 `daxctl` 不依赖这张表。 [ipmctl 已知问题](https://github.com/intel/ipmctl#workarounds)
 
 在日志里找 `show -socket` 的两行 `SocketID`。`MappedMemoryLimit` 是固件报告的该 CPU SKU 可映射容量上限，`TotalMappedMemory` 是这次开机已映射的容量。按工具显示直接抄，暂未分配 App Direct 时后者可能偏小。`show -dimm` 应列两路各 6 条可管理的 PMem。`show -region` 列固件已配置的 App Direct 地址范围，空白模块可没有 region。`show -goal` 查有无上次留下的待应用请求，`ndctl list -N` 查有无 Linux 已使用的 namespace。模块原先处于 Memory Mode 时，`show -memoryresources` 的 MemoryCapacity 不为 0、没有 region，`free -h` 的总量远大于 192 GiB，下面的 goal 会把全部容量改成 App Direct。个别模块没有参与原配置时，用 `sudo ipmctl show -a -dimm` 看它的 HealthState、LockState、ManageabilityState 和 ConfigurationStatus，状态正常才纳入 goal。若 `show -socket` 未返回上限，记录实机 BIOS 版本和原输出。 [ipmctl show -socket](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket) · [ipmctl show -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/show-memory-allocation-goal)
 

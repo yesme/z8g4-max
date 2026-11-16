@@ -6,7 +6,7 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 ## T1. CPU、BIOS 与联网
 
-装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P620。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。到货已装的 PMem、P4618 和 D4800X 留在原位，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
+装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P620。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。到货已装的 P4618 和 D4800X 留在原位，PMem 已拔出，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
 
 ### 首次 Live 联网与临时验机系统
 
@@ -80,7 +80,7 @@ bash host/run-step.sh t1-avx
 
 ## T2. 只测 DDR4
 
-1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。PMem 到货已装时，先按 [到货时 PMem 已装好](BIOS.md#到货时-pmem-已装好) 转成 App Direct，否则系统内存是 PMem 容量，本节的 192 GiB 和 144 GiB 都不成立。P620 留在槽 4，无线过渡时 AX210 留在槽 7。
+1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 留在槽 4，无线过渡时 AX210 留在槽 7。
 2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。I1 装好正式 FIT 后，日后复测可从 [FIT 的 GRUB 菜单](FIT-RECOVERY.md#i1-备好本机救援入口)选 Memtest86+。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
 3. 回 SanDisk 上的临时 Xubuntu，按下面顺序核容量、开温度采样、跑 Linux 压测。日志都留在 `~/z8-burnin`。
 
@@ -137,7 +137,7 @@ bash host/run-step.sh t2-ddr4 0
 
 ## T3. PMem 100，App Direct 的专用检查
 
-1. T2 通过后关机断电。DDR4 留在原位，往 CPU0 和 CPU1 各自的 DIMM 2/4/6/7/9/11 加 PMem。到货已装并已转 App Direct 的，从核对两路 region 接着做，混插复测已由 T2 完成。打开 [T3 的 App Direct 操作](PMEM.md#t3-配置-app-direct)，依次做 F10 查条与临时解冻、Linux 盘点和提交 App Direct goal、重启核对两路 region。再用 Memtest86+ 复测混插 DDR4 至少一个完整 pass。回 SanDisk 上的临时系统切 namespace，使用下面的诊断和写读校验验 PMem。
+1. T2 通过后关机断电。DDR4 留在原位，往 CPU0 和 CPU1 各自的 DIMM 2/4/6/7/9/11 加 PMem。这批模块带着原来的 Memory Mode 配置，首次混插开机时内存总量可能是 PMem 容量；goal 生效后再跑 Memtest86+。打开 [T3 的 App Direct 操作](PMEM.md#t3-配置-app-direct)，依次做 F10 查条与临时解冻、Linux 盘点和提交 App Direct goal、重启核对两路 region。再用 Memtest86+ 复测混插 DDR4 至少一个完整 pass。回 SanDisk 上的临时系统切 namespace，使用下面的诊断和写读校验验 PMem。
 
 ```bash
 bash host/run-step.sh t3-pmem

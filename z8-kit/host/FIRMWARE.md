@@ -13,7 +13,14 @@
 
 先读 12 条的 Active 和 Staged 版本、模块标签及健康状态。HP 对 Z8 G4 给出 **BIOS 2.35 与 PMem 01.02.00.5417 或更新**的最低组合。若 12 条同版、达到最低版本、可管理且诊断正常，直接进入 App Direct 测试。若低于最低版、同批混版，或厂商公告明确修复当前故障，再按标签上的 OEM 和料号找适用包。Intel 建议同机版本一致。查到 Dell PowerEdge、HPE Gen10、Lenovo ThinkSystem 均发布过 `01.02.00.5446`，这些公告各自限定支持系统或模块，手头 Z8 与 DIMM 标签仍需核对。未找到匹配包时，低于 HP 最低版的模块优先换成达到基线的同批料号，已达到基线的混版模块先跑 FW 诊断并记录结果。 [HP Optane 白皮书，第 6 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=6) · [Intel PMem 启动指南](https://cdrdv2-public.intel.com/841964/Intel_Optane_Persistent_Memory_Start_Up_Guide.pdf) · [Intel 固件获取与更新](https://www.intel.com/content/www/us/en/support/articles/000032996/technologies/memory-and-storage.html) · [HPE 固件适用范围](https://support.hpe.com/connect/s/softwaredetails?collectionId=MTX-5618354fdcd14e80&language=en_CA)
 
-**本机到货实拍。** 9 条 `01.02.00.5310`，2 条 `01.02.00.5355`，1 条 `01.02.00.5386`。三个版本都低于 5417，且同机混版，按上面的规则属于要处理的情形。先抄 12 条标签上的厂商和料号，再找覆盖该料号的包，统一到同一版本。十二条全部低于基线，换条不现实；找不到匹配包就保留到货版本，把 FW 诊断结果和 T3 的全部写读校验记入基线，出现与固件相关的故障再处理。这批模块在到货版本下已能以 Memory Mode 启动。
+**本机到货实拍。** 11 条 `NMA1XBD128GQS`，后补一条 `NMA1XXD128GQS`，都是带样品标识的 Intel 料号，没有整机厂商的标签。固件为 9 条 `01.02.00.5310`、2 条 `5355`、1 条 `5386`，都低于 5417 且混版。按下面的顺序处理。
+
+1. **不为固件卡住 T3。** 这批模块在到货版本下已能启动并映射，混版可以运行。
+2. **有条件地统一到 `01.02.00.5446`。** 这是能查到的 100 系列最后一版。时机是 T3 提交 goal 之前，此时模块里没有数据。Intel 自己的固件包在需要 NDA 的门户里，整机厂商公开发布同版本的包。这些包面向各家自己的机型，用在样品料号上没有任何一方背书，所以以 `-examine` 的结果为准：它只校验镜像与模块是否匹配，不写入。
+3. **先试一条。** `-examine` 通过就先刷这一条，完全断电再开机，确认 `ActiveFWVersion` 和健康状态，再逐条刷其余。两种料号各自先过一次 `-examine`。任何一条被拒，就全部保留到货版本，把 FW 诊断结果和 T3 的写读校验记入基线。
+4. **写入偏慢时加 `-lpmb`。** 上游说明建议用 2.x 的 `ipmctl` 给 100 系列写固件时加这个选项，本机的 3.x 同样处理。`ipmctl` 本身在本机不可用时见 [PMem 手册的已知问题](PMEM.md#2-在-xubuntu-26041-记录现状并提交-goal)，此时不升级。
+
+[Intel 固件获取与更新](https://www.intel.com/content/www/us/en/support/articles/000032996/memory-and-storage/intel-optane-persistent-memory.html) · [Dell 的 100 系列固件包](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=498kf) · [ipmctl 上游说明](https://github.com/intel/ipmctl#workarounds)
 
 ```bash
 sudo ipmctl show -dimm

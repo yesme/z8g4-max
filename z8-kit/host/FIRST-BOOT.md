@@ -21,20 +21,19 @@
 
 ### T1 · CPU、F10 和联网
 
-1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P620 并接显示器。板载网口优先接网线；需无线过渡时在槽 7 装 AX210 并接天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。本机到货时 PMem、P4618、D4800X 和 AX210 已装好：部件留在原位，P4618 和 D4800X 在 T4 前不写入。 [到货状态](BIOS.md#到货状态与首次-f10-实拍)
-2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均设为 `Disable`，沿用到正式系统。到货值里要改的是 Fast Boot、PXE 以及 SATA 和 sSATA 的 RAID Mode 四项。保存后重新确认 POST 和 DDR4 容量。 [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
+1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P620 并接显示器。板载网口优先接网线；需无线过渡时在槽 7 装 AX210 并接天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。本机到货时 PMem、P4618、D4800X 和 AX210 已装好：PMem 已全部拔出，T3 再插回；其余留在原位，P4618 和 D4800X 在 T4 前不写入。 [到货状态](BIOS.md#到货状态与首次-f10-实拍)
+2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均设为 `Disable`，沿用到正式系统。到货值里要改四项：关 Fast Boot、关 PXE、关 SATA 的 RAID Mode、停用整个 sSATA Controller。保存后重新确认 POST 和 DDR4 容量。 [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
 3. 按 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu**。用板载有线或 AX210 过渡联网，核 DHCP、DNS 和 APT，按[挂载步骤](INSTALL.md#挂载-ventoy-与保存-live-日志)试读同一块 Ventoy 数据分区，再把 **SanDisk CZ430** 选作整盘安装目标。此时 FIT 先不接。按安装器提示拔下 Ventoy，从 SanDisk 冷启临时 Xubuntu，再确认能联网。 [Live 联网与 SanDisk 安装](BURN-IN.md#首次-live-联网与临时验机系统)
 4. 在临时系统安装微码和诊断工具，重启后确认两颗 CPU、两个 DDR4 NUMA 节点。先跑 30 分钟通用 CPU 压测，再跑 30 分钟 AVX-512 VNNI，保存 RAS、温度和满载频率。 [CPU 拷机命令](BURN-IN.md#cpu-拷机)
-5. **到货已装 PMem 时，在这里提前转 App Direct。** 装 T3 的 PMem 工具并保存盘点，先看 CPU1-DIMM4 的健康与锁定状态和 12 条的固件版本，再解冻、提交 goal、重启。`free -h` 约 192 GiB 后才进 T2。 [到货时 PMem 已装好](BIOS.md#到货时-pmem-已装好)
 
 ### T2 · 只测 DDR4
 
-1. 保持 T1 的硬件。PMem 留在槽里时，前提是它已转成 App Direct、系统内存只剩 192 GiB DDR4。F9 进 Ventoy，选 Memtest86+，完整地址范围、默认测试集、Rowhammer 关闭。第 1 pass 是快筛，累计 **4 个完整 pass**，保存零错误结果。
+1. 保持 T1 的硬件。F9 进 Ventoy，选 Memtest86+，完整地址范围、默认测试集、Rowhammer 关闭。第 1 pass 是快筛，累计 **4 个完整 pass**，保存零错误结果。
 2. F9 换回 SanDisk 上的临时系统，先看 DDR4 容量、ECC/EDAC 计数，再做 **144 GiB、4 小时**交错压测。比较前后 CE/UE 和 MCE。发现新增错误或掉条，留在 T2 定位。两轮通过后才加 PMem。 [容量、温度监控及停测](BURN-IN.md#t2-只测-ddr4)
 
 ### T3 · 加 PMem，建并验证正式模型卷
 
-1. 仍从 SanDisk 上的临时系统启动时，先装好 `ipmctl`、`ndctl`、`daxctl` 和 PMem 版 fio 所需工具。关机断电，DDR4 留在原位，每路在 **DIMM 2/4/6/7/9/11** 插六条 PMem 100。首次混插进 F10，看 12 条是否识别，并按手册临时解冻。到货已装并在 T1 末转过 App Direct 的，本步和下一步的 goal 已完成，T2 的四个 pass 就是混插后的 DDR4 复测，从核对 region 接着做。 [T3 工具](PMEM.md#t3-准备工具) · [App Direct 第 1 步](PMEM.md#1-在-f10-查条并临时解冻)
+1. 仍从 SanDisk 上的临时系统启动时，先装好 `ipmctl`、`ndctl`、`daxctl` 和 PMem 版 fio 所需工具。关机断电，DDR4 留在原位，每路在 **DIMM 2/4/6/7/9/11** 插六条 PMem 100。首次混插进 F10，看 12 条是否识别，并按手册临时解冻。这批模块带着原来的 Memory Mode 配置，首次开机时内存总量可能是 PMem 容量，属预期，先提交 goal 再做内存测试。 [PMem 的到货状态](BIOS.md#pmem-的到货状态) [T3 工具](PMEM.md#t3-准备工具) · [App Direct 第 1 步](PMEM.md#1-在-f10-查条并临时解冻)
 2. 回 SanDisk，保存 `ipmctl` 盘点和固件状态。需要初始化时在 **Linux** 提交 App Direct goal，再重启回 SanDisk，确认两路健康 region 和无待应用 goal。随后从 Ventoy 选 Memtest86+ 跑 **1 个完整 pass** 检查混插后的 DDR4，再回 SanDisk 做 PMem 测试。 [App Direct 第 2、3 步](PMEM.md#2-在-xubuntu-26041-记录现状并提交-goal) · [混插与专用压测](BURN-IN.md#t3-pmem-100app-direct-的专用检查)
 3. 按 socket 划两个 **258 GiB fsdax** 和两个剩余 **devdax**。两个 fsdax 条带化，首次格式化为正式 XFS DAX 模型卷。先做 fsdax 文件与两个裸 devdax 的专用写读校验，再将 fsdax 测试文件的 SHA-256 存到 SanDisk 上的日志目录，正常关机、切 AC、回 SanDisk 挂载复核。删掉测试文件，再按 [T3 模型挂载服务](PMEM.md#交给启动服务)交给 systemd，供之后 T5 使用。 [模型卷命令](PMEM.md#模型卷) · [PMem 测试命令](BURN-IN.md#t3-pmem-100app-direct-的专用检查)
 4. 两个 devdax 的裸设备测试结束后才转 kmem。确认两路均为 online/Movable，逐路施压并核冷页下沉，按手册记录服务冷启动用时。保存两个按 socket 填好的 `pmem-model.env`、`pmem-kmem.env`，另记原始四个 namespace UUID、DDR4 节点编号和两路慢节点。I4 会复用这四个 namespace 以及模型卷。 [kmem 上线](PMEM.md#剩余-pmem-转-kmem) · [冷启计时](PMEM.md#t3-记录-kmem-冷启动时间) · [逐路下沉](PMEM.md#核实每路-ddr4-的冷页去向)
