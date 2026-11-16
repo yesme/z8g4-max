@@ -8,7 +8,7 @@
 | `/srv/work/jackywang`、`buck-out`、`/srv/buildbarn/tiered` | 根 XFS 内的目录 | 与 `/` 同一文件系统，工作树和本地产物在此范围可用 reflink。Buildbarn 容器将热层 bind 到 `/store`。 |
 | `/boot`，FIT p2 ext4 | fstab，文件系统 UUID，fsck pass 2 | `defaults,noatime,errors=remount-ro,X-fstrim.notrim`。保留日志，内核升级时可写，省掉 FIT 的读取更新时间和批量 TRIM。 |
 | `/boot/efi`，FIT p1 FAT32 | fstab，FAT 卷 UUID，fsck pass 2 | `defaults,noatime,umask=0077,X-fstrim.notrim`。挂载后文件只向 root 开放，GRUB 和 EFI 更新时可写。 |
-| `/srv/pmem-model`，两路 App Direct fsdax 的 dm-stripe/XFS | `z8-pmem-model.service` | `dax=always,noatime,nodiscard`。普通文件走 DAX，避免权重/Engram 热读更新 atime，保留 XFS 日志供模型文件更新。建卷时设 2 MiB 条带单元并关闭 reflink。 |
+| `/srv/pmem-model`，两路 App Direct fsdax 的 dm-stripe/XFS | `z8-pmem-model.service` | `dax=always,noatime,nodiscard`。普通文件走 DAX，避免权重/Engram 热读更新 atime，保留 XFS 日志供模型文件更新。建卷时设 2 MiB 条带单元并关闭 reflink。`bb-hot-index` 目录存 Buildbarn 热 CS 索引，带 2 MiB extent 提示。 |
 | `/data`、`z8data`、`z8data/reserve` | `/data` 是根 XFS 上的普通目录，ZFS 两者不挂载 | 池根只设继承属性，`reserve` 只留空间，`readonly=on,canmount=off,mountpoint=none`。 |
 | `/data/other`，ZFS `z8data/other` | `data-other.mount`，`mountpoint=legacy` | `rw`，本地 `recordsize=1M,special_small_blocks=16K`，继承 `zstd-3` 等公共属性。随开机拉起池导入，池启动后挂载。 |
 | 冷数据与索引 dm-linear | `z8-cold.service` | Buildbarn 直接打开 SATA0–3 的 32 个数据切片与 D4800X p5 的 32 个索引切片。索引预读为 0。 |

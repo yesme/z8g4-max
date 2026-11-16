@@ -7,7 +7,7 @@
 | SATA7 | 薄光驱位 | 原光驱 |
 | 槽 5 D4800X | PCIe | 两组写缓存、冷库裸索引和 ZFS special。整卡故障会同时影响两组 |
 | 槽 1 P4618 | PCIe | 系统 XFS、活跃工作树、`buck-out`、Buildbarn 热层及冷分片 checkpoint |
-| 两路 PMem100 | DIMM | `/srv/pmem-model` 和 kmem，按 [PMem 手册](../host/PMEM.md#i4-在正式系统复用-pmem)上线 |
+| 两路 PMem100 | DIMM | `/srv/pmem-model`（模型与 Buildbarn 热 CS 索引）和 kmem，按 [PMem 手册](../host/PMEM.md#i4-在正式系统复用-pmem)上线 |
 
 冷 CAS 可重建。RAIDZ1 用于归档工作树、会话日志、数据集和源码快照。D4800X 的单 special vdev 包含池元数据，独立备份 `/data/other`。虚拟机镜像、数据库与容器层留 P4618。
 
@@ -254,10 +254,13 @@ sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml build schedule
 sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml pull cache runner-installer runner worker
 ```
 
-主方案在 P4618 上创建热存储目录。固定镜像默认 UID 0，使用 rootful Docker 默认用户映射。Compose 由 `z8-cold.service` 生成 `devices` 列表及容器可见的固定路径，启动前守卫核对所有可用切片的表和大小、活动分片的 checkpoint、热层 XFS 路径和既有文件几何。
+主方案在 P4618 上创建热存储目录，在 PMem 模型卷上创建热 CS 索引目录并设 2 MiB extent 提示。固定镜像默认 UID 0，使用 rootful Docker 默认用户映射。Compose 由 `z8-cold.service` 生成 `devices` 列表及容器可见的固定路径，启动前守卫核对所有可用切片的表和大小、活动分片的 checkpoint、热层 XFS 路径、热索引目录的 DAX 挂载与 extent 提示，以及既有文件几何。模型卷暂不可用时按 [热 CS 索引的位置](../buildbarn/README.md#热-cs-索引的位置)把索引放回 P4618。
 
 ```bash
 sudo install -d -m 0755 /srv/buildbarn/tiered/{cs-hot,cms,ac}/persistent_state
+findmnt -rn -M /srv/pmem-model -t xfs -O dax=always
+sudo install -d -m 0755 /srv/pmem-model/bb-hot-index
+sudo xfs_io -c 'extsize 2m' /srv/pmem-model/bb-hot-index
 sudo z8-buildbarn-check
 sudo docker compose -p z8-tiered -f compose.tiered.yaml -f /run/z8-cold/compose.json config --quiet
 ```

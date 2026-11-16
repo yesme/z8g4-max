@@ -19,14 +19,49 @@ for store in "${stores[@]}"; do
         exit 1
     }
 done
-# Existing cache files must be retired as a unit before changing their geometry.
-for entry in 'blocks:1758789107712' 'key_location_map:27917287424'; do
-    path="$BB_DATA_DIR/cs-hot/${entry%:*}"
-    if [[ -e "$path" && $(stat -c %s -- "$path") != "${entry#*:}" ]]; then
+# The hot CS index lives outside the store: on the PMem DAX model volume, or on
+# the P4618 root as the documented fallback.
+index_dir=${BB_HOT_INDEX_DIR:-/srv/pmem-model/bb-hot-index}
+[[ "$index_dir" == /* && -d "$index_dir" && -w "$index_dir" ]] || {
+    echo "Missing or unwritable hot index directory $index_dir" >&2
+    exit 1
+}
+read -r index_mount index_fs index_options < <(findmnt -rn -o TARGET,FSTYPE,OPTIONS -T "$index_dir") || true
+case "${index_mount:-} ${index_fs:-}" in
+    '/srv/pmem-model xfs')
+        [[ ",${index_options:-}," == *,dax=always,* ]] || {
+            echo '/srv/pmem-model is not mounted with dax=always.' >&2
+            exit 1
+        }
+        # Sparse index blocks are then allocated as aligned 2 MiB extents.
+        [[ $(xfs_io -c extsize "$index_dir") == "[2097152] $index_dir" ]] || {
+            echo "Set the 2 MiB extent size hint on $index_dir before the first start." >&2
+            exit 1
+        }
+        ;;
+    '/ xfs') ;;
+    *)
+        echo "$index_dir must be on the PMem model volume or the P4618 XFS." >&2
+        exit 1
+        ;;
+esac
+# Existing cache files must be retired as a unit before changing their geometry
+# or moving the index.
+blocks="$BB_DATA_DIR/cs-hot/blocks"
+index="$index_dir/key_location_map"
+for entry in "$blocks:1758789107712" "$index:27917287424"; do
+    path=${entry%:*}
+    if [[ -e "$path" && $(stat -c %s -- "$path") != "${entry##*:}" ]]; then
         echo "Unexpected hot CS geometry in $path; retire the old hot CS as documented." >&2
         exit 1
     fi
 done
+stale="$BB_DATA_DIR/cs-hot/key_location_map"
+if [[ "$stale" != "$index" && -e "$stale" ]] || [[ -e "$blocks" && ! -e "$index" ]] ||
+    [[ -e "$index" && ! -e "$blocks" ]]; then
+    echo "Hot CS blocks and $index do not belong together; retire the old hot CS as documented." >&2
+    exit 1
+fi
 
 if [[ ${1:-} == --prepare ]]; then
     running=$(docker ps -q --filter label=com.docker.compose.project=z8-tiered \

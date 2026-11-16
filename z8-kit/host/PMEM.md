@@ -196,7 +196,7 @@ sudo install -d -o "$(id -u)" -g "$(id -g)" /srv/pmem-model/ds41-llamacpp
 sudo xfs_io -c 'extsize 2m' /srv/pmem-model/ds41-llamacpp
 ```
 
-这里用 `noatime` 免去权重、Engram 热读触发的访问时间更新，保留 XFS 日志和正常的写入同步语义。App Direct DAX 模型卷以读为主，使用 `nodiscard`。在该路径实际创建测试文件，执行 `xfs_io -r -c 'statx -r' /srv/pmem-model/burnin.bin`。核 `stx_attributes_mask` 和 `stx_attributes` 的 `STATX_ATTR_DAX` 位 `0x200000` 都为 1。此卷保存模型权重、Engram 和 tokenizer。模型 revision、SHA-256 和下载清单在 T5 留 SanDisk，在正式系统留 P4618。 [全机挂载表](MOUNTS.md) · [Linux 文件级 DAX 状态](https://docs.kernel.org/filesystems/dax.html) · [两个引擎的 KV 配置](../inference/README.md)
+这里用 `noatime` 免去权重、Engram 热读触发的访问时间更新，保留 XFS 日志和正常的写入同步语义。App Direct DAX 模型卷以读为主，使用 `nodiscard`。在该路径实际创建测试文件，执行 `xfs_io -r -c 'statx -r' /srv/pmem-model/burnin.bin`。核 `stx_attributes_mask` 和 `stx_attributes` 的 `STATX_ATTR_DAX` 位 `0x200000` 都为 1。此卷保存模型权重、Engram 和 tokenizer，I5 起另放 26 GiB 的 Buildbarn 热 CS 索引，容量预算见 [分层说明](TIERING.md#pmem-的三种用途)。模型 revision、SHA-256 和下载清单在 T5 留 SanDisk，在正式系统留 P4618。 [全机挂载表](MOUNTS.md) · [Linux 文件级 DAX 状态](https://docs.kernel.org/filesystems/dax.html) · [两个引擎的 KV 配置](../inference/README.md)
 
 `xfs_info` 应显示 `sunit=512 swidth=1024 blks` 和 `reflink=0`。2 MiB PMD 还要求物理范围、文件偏移和 mmap 地址相容，收紧分配对齐后仍可能回退。在 T5 模型下载后用 `xfs_io -r -c 'fiemap -v' "$DS41_GGUF"` 记录分片 extent；需要确认实际 PMD 命中时，用 `trace-cmd record -e fs_dax:dax_pmd_fault_done` 跟踪 `mmap` 负载。事件 `NOPAGE` 表示成功，`FALLBACK` 表示落入小页路径。Xolotl 的 Engram 走 `pread`，直接查它的 I/O 时延。 [Linux 2 MiB DAX 验证](https://nvdimm.docs.kernel.org/2mib_fs_dax.html)
 

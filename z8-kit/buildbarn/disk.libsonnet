@@ -1,9 +1,12 @@
-function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null, oldBlocks=8, currentBlocks=24, indexDevice=null)
+function(metadata, blocks, bytes, indexBytes, newBlocks, chunking=null, oldBlocks=8, currentBlocks=24, indexDevice=null, indexFile=null)
   {
     'local': {
       keyLocationMap: {
         onBlockDevice: if indexDevice == null then {
-          file: { path: metadata + '/key_location_map', sizeBytes: indexBytes },
+          file: {
+            path: if indexFile == null then metadata + '/key_location_map' else indexFile,
+            sizeBytes: indexBytes,
+          },
         } else { devicePath: indexDevice },
         maximumGetAttempts: 16,
         maximumPutAttempts: 64,
