@@ -7,4 +7,4 @@ HP Z8 G4 双路工作站 `jackywang-xubuntu-max` 的装机计划和部署文件�
 - [部署文件](z8-kit/README.md)包括逐步命令、配置样例和 systemd 单元。
 - [Samsung FIT 救援和备份](z8-kit/host/FIT-RECOVERY.md)包括本机 Live、Memtest86+、元信息备份与机器外副本。
 
-设备路径和节点编号以实机为准。PMem 分层、四卡推理和混合负载的结果待实机验证。
+设备路径和节点编号以实机为准。裸冷库与 dm-linear 切片、介质错误扫描、PMem 分层、四卡推理和混合负载的结果待实机验证。

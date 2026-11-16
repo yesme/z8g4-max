@@ -19,7 +19,7 @@ INDEX = Path("/dev/disk/by-partlabel/z8-cold-index")
 DISKS = tuple(f"sata{i}" for i in range(4))
 SHARDS_PER_DISK = 8
 SHARDS = tuple(f"{disk}-{i}" for disk in DISKS for i in range(SHARDS_PER_DISK))
-DATA_BYTES = 6519 * 256 * 1024**2
+DATA_BYTES = 6510 * 256 * 1024**2
 INDEX_BYTES = 53 * 1024**3 // 2
 GEOMETRY = {"shardCount": len(SHARDS), "dataBytes": DATA_BYTES, "indexBytes": INDEX_BYTES}
 

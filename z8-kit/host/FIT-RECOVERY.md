@@ -76,6 +76,14 @@ ls -lh "$downloads/archives"/*.deb
 
 I3 从 SanDisk 取得并复验 CUDA 工具后，临时挂载 `Z8TOOLS`，执行 `sudo cp -a "$HOME/z8-burnin/cuda-check" /mnt/z8-tools/` 后 `sudo sync -f /mnt/z8-tools` 并卸载。重装时可从 FIT 取回同目录，再由已安装 R580 的正式系统运行。
 
+I5 构建调度器并通过 RE 后，可按上面的办法临时挂载 `Z8TOOLS`，将兼容镜像保存下来。重装用 `sudo docker load -i /mnt/z8-tools/z8-bb-scheduler.tar` 恢复该标签。
+
+```bash
+sudo docker image save -o /mnt/z8-tools/z8-bb-scheduler.tar z8/bb-scheduler:c9ba98c-command-platform
+sudo sync -f /mnt/z8-tools
+sudo umount /mnt/z8-tools
+```
+
 ## 开启元信息备份
 
 I1 完成并验过本机 GRUB 后，用 `sudoedit /etc/z8-storage/recovery-notes.txt` 保存 F10 设置、DIMM 插槽和 D4800X 转接与改装记录。接着执行以下命令，创建第一份备份并建立 boot 校验基线。每周一 03:30 复核，由 `Persistent=true` 补执行关机时错过的任务。日志在系统 journal。
@@ -130,7 +138,7 @@ I2 配好 SSH 后，在 `jackywang-xubuntu-max` 上用 `sudo visudo -f /etc/sudo
 jackywang ALL=(root) NOPASSWD: /usr/local/sbin/z8-recovery-backup --stdout
 ```
 
-从配置了 `z8` SSH 别名的客户端流式取走。还没装 sudoers 规则时，用普通 SSH 会话在主机上运行 `sudo z8-recovery-backup --stdout` 并重定向到 `~/z8-recovery.tar`，再从另一台机器用 `scp z8:z8-recovery.tar .` 复制。备份文件和散列清单按机器外的备份规则保管。
+从配置了 `z8` SSH 别名的客户端流式取走。FIT 的 `/boot` 或 ESP 不可用时仍会导出其余元数据，归档的 `boot-check.txt` 会记 `unavailable` 或 `unreadable`，没有完整的启动文件清单。推理用户的 launcher 和环境以 `jackywang` 的权限读取。还没装 sudoers 规则时，用普通 SSH 会话在主机上运行 `sudo z8-recovery-backup --stdout` 并重定向到 `~/z8-recovery.tar`，再从另一台机器用 `scp z8:z8-recovery.tar .` 复制。备份文件和散列清单按机器外的备份规则保管。
 
 ```bash
 umask 077

@@ -12,7 +12,8 @@ import sys
 
 SECTOR = 4096
 READ_SIZE = 4 * 1024**2
-DEVICE_SIZE = 6519 * 256 * 1024**2
+MEDIA_ERRORS = {errno.EIO, errno.ENODATA}
+DEVICE_SIZE = 6510 * 256 * 1024**2
 
 
 def read_exact(fd, buffer, length, offset):
@@ -32,20 +33,20 @@ def scan(fd, size, emit=print):
                     read_exact(fd, buf, length, offset)
                     continue
                 except OSError as exc:
-                    if exc.errno != errno.EIO:
+                    if exc.errno not in MEDIA_ERRORS:
                         raise
                 for sector in range(offset, offset + length, SECTOR):
                     try:
                         read_exact(fd, buf, SECTOR, sector)
                         continue
                     except OSError as exc:
-                        if exc.errno != errno.EIO:
+                        if exc.errno not in MEDIA_ERRORS:
                             raise
                     try:
                         read_exact(fd, buf, SECTOR, sector)
                         continue
                     except OSError as exc:
-                        if exc.errno != errno.EIO:
+                        if exc.errno not in MEDIA_ERRORS:
                             raise
                     if os.pwrite(fd, zeros, sector) != SECTOR:
                         raise OSError(f"Short zero write at byte {sector}")
@@ -58,18 +59,22 @@ def scan(fd, size, emit=print):
     return repaired
 
 
+def scan_device(path, size):
+    fd = os.open(path, os.O_RDWR | os.O_DIRECT)
+    try:
+        if os.lseek(fd, 0, os.SEEK_END) != size:
+            raise ValueError(f"Wrong size for {path}")
+        return scan(fd, size, lambda msg: print(f"{path}: {msg}", flush=True))
+    finally:
+        os.close(fd)
+
+
 def scan_disk(shards):
     result = 0
     for shard in shards:
         path = Path(f"/dev/mapper/z8-cold-{shard}")
         try:
-            fd = os.open(path, os.O_RDWR | os.O_DIRECT)
-            try:
-                if os.lseek(fd, 0, os.SEEK_END) != DEVICE_SIZE:
-                    raise ValueError(f"Wrong size for {path}")
-                count = scan(fd, DEVICE_SIZE, lambda msg: print(f"{path}: {msg}", flush=True))
-            finally:
-                os.close(fd)
+            count = scan_device(path, DEVICE_SIZE)
             print(f"{path}: bytes_scanned={DEVICE_SIZE} blocks_zeroed={count}", flush=True)
             result = max(result, int(count > 0))
         except (OSError, ValueError) as exc:

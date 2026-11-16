@@ -12,7 +12,7 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 cold = importlib.util.module_from_spec(spec)
 loader.exec_module(cold)
 
-data_bytes = 1_749_930_737_664
+data_bytes = 1_747_514_818_560
 index_bytes = 28_454_158_336
 assert cold.DATA_BYTES == data_bytes and cold.INDEX_BYTES == index_bytes
 for kind, length in [("z8-cold-", data_bytes), ("z8-index-", index_bytes)]:
@@ -22,7 +22,8 @@ for kind, length in [("z8-cold-", data_bytes), ("z8-index-", index_bytes)]:
         slices = [(off, size) for p, off, size in offsets if parent == p]
         assert slices == [(i * length, length) for i in range(len(slices))]
         assert all(off % (256 * 1024**2) == 0 for off, _ in slices)
-assert 8 * data_bytes == 13_999_445_901_312
+assert 8 * data_bytes == 13_980_118_548_480
+assert data_bytes // 93 == 70 * 256 * 1024**2
 assert 32 * index_bytes == 910_533_066_752
 
 with TemporaryDirectory() as temp:
@@ -75,7 +76,7 @@ with TemporaryDirectory() as temp:
         else:
             raise AssertionError("Interrupted reset unexpectedly succeeded")
 
-    table = "0 3417833472 linear 253:2 0"
+    table = "0 3413114880 linear 253:2 0"
     with mock.patch.object(cold, "backing_name", return_value="253:2"), \
             mock.patch.object(cold, "dm_uuid", return_value="z8-cold-sata0-0"), \
             mock.patch.object(cold, "run", side_effect=[table, str(cold.DATA_BYTES - 4096)]):

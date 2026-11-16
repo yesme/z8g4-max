@@ -40,7 +40,9 @@ case "$2" in
     */z8-cold-index) echo 910533066752 ;;
     */dmz-sata[0-3]) echo 25769803776 ;;
     */dmz-sata[4-6]) echo 85899345920 ;;
-    */hc620-*) echo 13999445901312 ;;
+    */hc620-*)
+        chunks=$(cat "$Z8_TEST/chunks" 2>/dev/null || echo 52152)
+        echo $((chunks * 256 * 1024**2)) ;;
     *) exit 1 ;;
 esac
 MOCK
@@ -49,7 +51,10 @@ cat > "$tmp/bin/dmzadm" <<'MOCK'
 set -euo pipefail
 case "$1" in
     --check) exit 0 ;;
-    --format) printf '%s\n' "$*" >> "$Z8_TEST/format.log"; exit 0 ;;
+    --format)
+        [[ "$2" == */dmz-sata[0-6] && "$3" == */ata-disk[0-6] ]]
+        printf '%s\n' "$*" >> "$Z8_TEST/format.log"
+        exit 0 ;;
     --start) ;;
     *) exit 1 ;;
 esac
@@ -66,7 +71,7 @@ case "$1" in
     info) test -L "$Z8_TEST/dev/mapper/$2" ;;
     table)
         test -L "$Z8_TEST/dev/mapper/$2" || exit 1
-        if [[ -e "$Z8_TEST/foreign-$2" ]]; then echo '0 1000 linear 8:0 0'; else echo '0 27342667776 zoned 8:1 8:2'; fi
+        if [[ -e "$Z8_TEST/foreign-$2" ]]; then echo '0 1000 linear 8:0 0'; else printf '0 %s zoned 8:1 8:2\n' "$(( $(blockdev --getsize64 "$Z8_TEST/dev/mapper/$2") / 512 ))"; fi
         ;;
     remove) rm -- "$Z8_TEST/dev/mapper/$2" ;;
     *) exit 2 ;;
@@ -94,9 +99,16 @@ run() { bash "$tmp/storage" "$@"; }
 reject() { if run "$@"; then echo "Unexpected success: $*" >&2; exit 1; fi; }
 run format 0 --create <<< hc620-0
 run format 6 --replace <<< hc620-6
-grep -q -- '--label=hc620-0 --seq=96 ' "$tmp/format.log"
-grep -q -- '--label=hc620-6 --seq=320 --force ' "$tmp/format.log"
+grep -q -- '--label=hc620-0 --seq=96$' "$tmp/format.log"
+grep -q -- '--label=hc620-6 --seq=320 --force$' "$tmp/format.log"
 run map
+printf '52080\n' > "$tmp/chunks"
+run check-map 0
+printf '52079\n' > "$tmp/chunks"
+reject check-map 0
+printf '52157\n' > "$tmp/chunks"
+reject check-map 0
+rm -- "$tmp/chunks"
 reject format 6 --replace <<< hc620-6
 [[ $(run cold-ready | wc -l) -eq 4 ]]
 run import

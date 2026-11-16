@@ -2,7 +2,7 @@
 
 | 设备 | 物理位置 | 用途 |
 |---|---|---|
-| SATA0–3 | 机箱原生 3.5 英寸位 | 四个 dm-zoned mapper，分成 32 个裸冷 CAS 分片，约 50.93 TiB |
+| SATA0–3 | 机箱原生 3.5 英寸位 | 四个 dm-zoned mapper，分成 32 个裸冷 CAS 分片，约 50.86 TiB |
 | SATA4–6 | 双光驱位的三盘笼 | 三个 dm-zoned mapper 组成 `z8data` RAIDZ1，约 25 TiB，挂载 `/data/other` |
 | SATA7 | 薄光驱位 | 原光驱 |
 | 槽 5 D4800X | PCIe | 两组写缓存、冷库裸索引和 ZFS special。整卡故障会同时影响两组 |
@@ -13,7 +13,7 @@
 
 ## 1. 列出实体设备
 
-T4 慢扫完成、I3 通过后，关机断电接回 SATA0–6 和 D4800X。以 T4 的端口、型号、序列号与 by-id 清单识别设备。以下建 GPT、dm-zoned format、写零与建池是首装步骤。接回现有同版布局时沿用原 GPT、配对、GUID 和 `cold-layout.json`，直接装服务。
+T4 慢扫完成、I3 通过后，先做下方的[介质错误演练](#i4-介质错误演练)，然后关机断电接回 SATA0–6 和 D4800X。以 T4 的端口、型号、序列号与 by-id 清单识别设备。以下建 GPT、dm-zoned format、写零与建池是首装步骤。接回现有同版布局时沿用原 GPT、配对、GUID 和 `cold-layout.json`，直接到[安装启动单元](#安装启动单元)。
 
 ```bash
 uname -r
@@ -39,6 +39,16 @@ sudo blkzone report -o 274726912 -c 1 "$disk"
 ```
 
 ARC 下限 2 GiB、上限 8 GiB，留约 184 GiB 标称 DDR4 给其他服务。内核使用默认 dirty data 上限、5 秒 TXG 和 `zfs_arc_shrinker_limit=0`。I7 记录每路 DDR4 Normal 水位、ARC 和 I/O。 [OpenZFS 2.4 参数](https://openzfs.github.io/openzfs-docs/man/v2.4/4/zfs.4.html)
+
+### I4 介质错误演练
+
+在接回生产数据盘之前运行。可在同版 Xubuntu 26.04.1 虚拟机预演。使用当前内核的 `scsi_debug`、`dm-zoned` 模块和第 1 节的工具，从仓库根执行：
+
+```bash
+sudo bash tests/cold-media-smoke.sh
+```
+
+脚本只写新建的 `scsi_debug`、loop 和临时 mapper，退出自动拆掉。它将一个区写满、等回收把数据移到顺序区，再向旧区尾部注入 4 KiB 介质错误并覆写前半区。预期空闲回收卡住，直接 I/O 返回 `ENODATA`；扫描仅改一个 4 KiB 块，注错仍开启时逻辑全文校验通过，空闲区回升。保存终端与 `sudo journalctl -k -b -g 'Medium Error|critical medium error|reclaim'`。若 `modinfo scsi_debug` 找不到模块，确认安装当前 ABI 对应的 `linux-modules-extra-$(uname -r)`。 [scsi_debug 介质错误](https://github.com/torvalds/linux/blob/v7.0/drivers/scsi/scsi_debug.c#L4388-L4399)
 
 ## 2. 建 GPT 与初始化 dm-zoned
 
@@ -79,7 +89,7 @@ done
 
 每组回显型号、分区后，输入 `hc620-N`。失败时先保存终端日志并处理该组。重新执行时单独指定失败的端口，已有签名且确认可擦才使用 `--replace`。
 
-两组都以缓存区数作为 `--seq`。HC620 报 52,156 个可用区时，两份元数据各 2 区，导出 52,152 个 256 MiB chunk，13,999,445,901,312 B。预留顺序区供后台搬迁，HC620 盘头 conventional 区属于普通随机区。D4800X 承接前台写缓冲，逻辑 chunk 与物理区的映射随回收改变。 [dmzadm 2.2.2 元数据算法](https://github.com/westerndigitalcorporation/dm-zoned-tools/blob/v2.2.2/src/dmz_lib.c#L215-L340) · [Linux 回收路径](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L159-L307)
+两组都以缓存区数作为 `--seq`。dmzadm 2.2.2 计算导出长度时扣除两套元数据、预留顺序区与探测到的坏区，内核另保留 HC620 第 0 区的成员超级块。健康盘预计导出约 52,152 个 256 MiB chunk。守卫接受 52,080–52,156 个整区，并核对实际底层设备；每个冷盘只切 52,080 区，给初始化时的尺寸波动留出余量。已经运行的 mapper 仍按原超级块几何启动，运行后坏区增加可能导致已有映射无法读取或启动。预留顺序区供后台搬迁，HC620 盘头 conventional 区属于普通随机区。D4800X 承接前台写缓冲，逻辑 chunk 与物理区的映射随回收改变。 [dmzadm 2.2.2 元数据算法](https://github.com/westerndigitalcorporation/dm-zoned-tools/blob/v2.2.2/src/dmz_lib.c#L215-L340) · [Linux 回收路径](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L159-L307)
 
 冷库每盘 92 个可用缓存区，三盘 ZFS 组每盘 316 个。忙时约 70% 占用启动回收，空闲约 10 秒也可启动。冷库四盘在空缓存起点约 64 GiB 的区容量会到该阈值，扣除按 24 写头/盘计算的 24 GiB 后，新增窗口量级约 40 GiB。I4、I5 记实测初次达到阈值的字节量，与交接的约 52 GiB 估算校对。ZFS 组每盘约 55 GiB 区容量到阈值，理想顺序大块约对应 110 GiB 用户数据。ZFS 默认四个分配器，主 vdev 预计每 metaslab 16 GiB；`4×16/3≈21 GiB` 只给每盘的量级，CoW 碎片和并行队列会改变区占用。 [回收水位](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L418-L454) · [OpenZFS 分配器](https://github.com/openzfs/zfs/blob/zfs-2.4.1/module/zfs/spa_misc.c#L396-L404)
 
@@ -89,13 +99,9 @@ HC620 的前 524 个 conventional 区共 131 GiB，支持随机写。第 0 区�
 
 ## 3. 建 ZFS 池与 legacy mount 数据集
 
-先安装单元并启动 mapper。首次建池前保持 `data-other.mount` 未启用，填完 GUID 后再启用。
+首次建池先完成[安装启动单元](#安装启动单元)的第一段。填写新 GUID 后启用挂载。已有池用原 GUID 跳过建池。
 
 ```bash
-sudo systemctl mask zfs-import-cache.service zfs-import-scan.service
-sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,z8-cold.service,data-other.mount,z8-cold-scan.service,z8-cold-scan.timer} /etc/systemd/system/
-sudo install -d -m 0755 /data/other /srv/buildbarn/tiered
-sudo systemctl daemon-reload
 sudo systemctl start z8-dmzoned.service
 sudo dmsetup status --target zoned
 sudo bash storage/create-pool.sh --create
@@ -109,6 +115,16 @@ sudo bash storage/create-pool.sh --create
 
 ### 安装启动单元
 
+首装和重装复用都做这一段。复用时恢复 `/etc/z8-storage/{hybrid.tsv,storage.env,cold-layout.json}`，清单须与原数据及索引几何一致。
+
+```bash
+sudo install -m 0755 storage/{z8-storage,z8-cold,z8-cold-scan} /usr/local/sbin/
+sudo systemctl mask zfs-import-cache.service zfs-import-scan.service
+sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,z8-cold.service,data-other.mount,z8-cold-scan.service,z8-cold-scan.timer} /etc/systemd/system/
+sudo install -d -m 0755 /data/other /srv/buildbarn/tiered
+sudo systemctl daemon-reload
+```
+
 两条链共享 `z8-dmzoned.service`。ZFS 链用 `z8-zpool → data-other.mount`，至少要 SATA4–6 中两个健康 mapper 和 p9。冷库链用 `z8-cold → z8-buildbarn`，仅需 p5 和已经初始化且可用的冷盘。开机各自启动，停机逆序。将单元装好、填过 GUID 后执行：
 
 ```bash
@@ -117,7 +133,7 @@ sudo systemctl enable --now data-other.mount z8-cold.service
 bash host/run-step.sh i4-status
 ```
 
-`z8-cold init` 首次写 `/etc/z8-storage/cold-layout.json`，启用清单为空。`z8-cold.service` 建出最多 32 个 `/dev/mapper/z8-cold-sataN-S` 及 32 个 `z8-index-sataN-S`。数据每分片 6,519 区、1,749,930,737,664 B，索引每段 28,454,158,336 B。`dm-linear` 以 512 B 扇区计数，边界按 256 MiB 对齐，索引设预读为 0。`/run/z8-cold/cold-layout.json` 记录本次有效分片，`/run/z8-cold/compose.json` 只授权相应裸设备。`/etc` 那份是持久清单，`/run` 每次启动重建。
+`z8-cold init` 首次写 `/etc/z8-storage/cold-layout.json`，启用清单为空。此前若已按 6,519 区初始化，停 cache、worker 和 `z8-cold.service`，把旧清单另存再 `init`，按本节重建冷分片索引和 checkpoint，并退役 CMS。GPT 和一般数据池可沿用。`z8-cold.service` 建出最多 32 个 `/dev/mapper/z8-cold-sataN-S` 及 32 个 `z8-index-sataN-S`。数据每分片 6,510 区、1,747,514,818,560 B，索引每段 28,454,158,336 B。`dm-linear` 以 512 B 扇区计数，边界按 256 MiB 对齐，索引设预读为 0。`/run/z8-cold/cold-layout.json` 记录本次有效分片，`/run/z8-cold/compose.json` 只授权相应裸设备。`/etc` 那份是持久清单，`/run` 每次启动重建。
 
 已有 v2.20 池的迁移须先备份 `/data/other`、验证外部恢复源、停止 Buildbarn，禁用并卸载旧冷库的两个挂载单元，再导出旧池、停 mapper。此版本重建 D4800X 分区与三盘池，从外部恢复普通数据。旧冷 CAS 和所有 CMS 是可丢缓存。保留 AC。热 CS 的容量和索引同时更改，旧热 CS 块、索引、checkpoint 应整套退役后再启动。全新安装跳过迁移。
 
@@ -169,33 +185,48 @@ sudo systemctl stop data-other.mount z8-zpool.service z8-dmzoned.service
 
 I4 分开做三种冷启演练，每轮检查 `bash host/run-step.sh i4-status`。SATA0–3 的一盘缺席应见 24 个可用分片，ZFS 保持 ONLINE；I5 的 cache 上线后复验启动、未命中和剩余分片读写。SATA4–6 的一盘缺席时池应 DEGRADED、32 个冷分片仍可用。整张 D4800X 拔除后二者都应由设备守卫拦下，系统仍可 SSH。接回原盘按原序列号与端口配对，ZFS 等 resilver 完成后再做下一轮。短时缺席的原冷盘带着原索引和 checkpoint 直接回归，启动时按 `/etc` 清单恢复原哈希键。
 
-冷库永久换盘示例为 SATA0。先停 cache 和 worker，显式禁用槽位。冗余不足的其他存储检查完再停公共 mapper。修改 `hybrid.tsv` 中该槽位的 ATA by-id，接上新盘并核身份。`reset sata0` 只清八片索引和对应 checkpoint。仅需重建一个逻辑分片时，可传完整分片名，例如 `sudo z8-cold reset sata0-5`。若换盘当天不能重建，保持槽位禁用，直接按 24 分片启动。修改有效分片必须重建 cache 容器，服务启动参数会处理。降级期写入替代分片的对象在加回时可能再度 miss。
+冷盘永久换盘以 SATA0 为例。关机换盘、重启，更新 `/etc/z8-storage/hybrid.tsv` 中该槽的 ATA by-id，再执行下面的命令。开机时启用的服务会自动拉起；重启后先停冷库应用、扫描及冷分片，显式运行 `map` 补装新 mapper。`reset sata0` 清空该盘八份索引和 checkpoint。只重建一片时可传完整分片名。
 
 ```bash
+sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service z8-cold-scan.service z8-cold.service
 sudo z8-cold disable sata0
-# 已停止两条存储链、关机换盘、更新 ATA by-id 后，保持依赖服务停用再格式化。
 sudo z8-storage format 0 --replace
-sudo systemctl start data-other.mount z8-cold.service
+sudo z8-storage map
+sudo systemctl start z8-cold.service
 sudo z8-cold reset sata0
 sudo systemctl restart z8-cold.service
 sudo z8-cold check
 ```
 
-若 ZFS 成员永久损坏，用 `zpool status -gP z8data` 记失效 vdev GUID。依上面流程停两条链，更新对应 SATA4–6 的 ATA by-id，按 `z8-storage format N --replace` 只处理这一组。启动两条链并用 `sudo zpool replace z8data OLD_GUID /dev/mapper/hc620-N` 替换，等 resilver 完成。临时掉线的原盘保持原配对，按需用 `zpool online` 恢复。
+当天无法重建时保留禁用状态，按剩余分片启动。加回时降级阶段落到替代分片的部分对象可能再次 miss。恢复 cache 和 worker 前按 [Buildbarn 恢复](../buildbarn/README.md#冷分片恢复与-cms)处理 CMS。
 
-只丢 p5 内容时，保留 `/data/other` 与 `z8data`，停冷库/worker，先用 `z8-cold disable all` 禁用旧映射，随后 `z8-cold reset all` 重新初始化索引和状态。此时冷盘不齐可对已接盘逐一运行 `reset sataN`，其余盘继续禁用。从备份恢复几何只能恢复清单。P4618 丢失、checkpoint 无法恢复时同样重建冷索引。D4800X 整卡丢失按 I4 重建原几何和两条链，`/data/other` 从独立备份恢复。重建任意分片前后处理 CMS，保留热 CS、AC，详见 [Buildbarn 恢复](../buildbarn/README.md#冷分片恢复与-cms)。重建后留一份 [FIT 与机器外记录](../host/FIT-RECOVERY.md#每个阶段留一份到另一台机器)。
+ZFS 盘永久损坏时先在 `zpool status -gP z8data` 里记失效 vdev GUID。关机换盘、重启并更新 `/etc/z8-storage/hybrid.tsv`，以 SATA4 为例显式补装 mapper 后替换。池已降级导入时可继续挂载，未导入则先启动 `data-other.mount`。替换设备仍须达到 ZFS 要求的大小。
+
+```bash
+sudo z8-storage format 4 --replace
+sudo z8-storage map
+sudo z8-storage check-map 4
+sudo systemctl start data-other.mount
+sudo zpool replace z8data OLD_GUID /dev/mapper/hc620-4
+sudo zpool status -gP z8data
+```
+
+等待 resilver 完成。临时掉线的原盘保持原配对，按需用 `zpool online` 恢复。只丢 p5 内容或 P4618 的 checkpoint 时，停 cache 和 worker，用 `z8-cold disable all` 后重新初始化索引及状态。若冷盘不足四块，就对已接盘逐个运行 `reset sataN`。几何记录的备份只能恢复清单。
+
+若整张 D4800X 永久损坏，原冷库和池需重建。停 cache 和 worker，先用 `sudo z8-cold disable all` 清空持久有效清单，`init` 不会替换既有清单。按 I4 重建 GPT，更新 `/etc/z8-storage/storage.env` 的整卡 by-id，**七个 mapper 均以 `z8-storage format N --replace` 重新格式化**。重建三盘池后回填新 `Z8_POOL_GUID`，从外部备份恢复 `/data/other`。持久清单为空后才能跑 I4 覆写，再运行 `reset all` 装回冷分片。保留 P4618 的有效热 CS 与 AC，退役 CMS。恢复后留一份 [FIT 与机器外记录](../host/FIT-RECOVERY.md#每个阶段留一份到另一台机器)。
 
 ### 冷库介质扫描
 
-I5 初次上线通过后开启每月扫描。脚本四盘并行，每盘串行八片，以 4 MiB 直接读；EIO 才下探到 4 KiB，两次 EIO 才写零，flush 后直接读回。每片会打印字节数和逻辑偏移，退出 1 表示修过，2 表示缺盘或未完成。已分配冷库接近满载时需要按四盘线速预留一昼夜以上，仍会同构建读流量竞争，按日志看进度。出现 SATA 介质错误先用 `lsblk -S`、`journalctl -k -b` 对照实际 ATA by-id，扫描该盘的八个逻辑分片。物理 LBA 经过 dm-zoned 映射，不能直接当逻辑偏移。修复后的 4 KiB 逻辑读取成功也不能证明固件重映射了原 LBA。持续报介质错误时按坏盘处理。
+I5 初次上线通过后开启每月扫描。脚本四盘并行，每盘串行八片，以 4 MiB 直接读；遇 `EIO` 或 `ENODATA` 才下探到 4 KiB，同一块连续两次读取失败才写零，flush 后直接读回。每片会打印字节数和逻辑偏移，退出 1 表示修过，2 表示缺盘或未完成。已分配冷库接近满载时需要按四盘线速预留一昼夜以上，仍会同构建读流量竞争，按日志看进度。出现 SATA 介质错误先用 `lsblk -S`、`journalctl -k -b` 对照实际 ATA by-id，扫描该盘的八个逻辑分片。物理 LBA 经过 dm-zoned 映射，不能直接当逻辑偏移。修复后的 4 KiB 逻辑读取成功也不能证明固件重映射了原 LBA。持续报介质错误时按坏盘处理。
 
 ```bash
-sudo systemctl enable --now z8-cold-scan.timer
 sudo journalctl -u z8-cold-scan.service -n 100 --no-pager
 sudo flock -n /run/lock/z8-cold-scan.lock /usr/local/sbin/z8-cold-scan sata0
 ```
 
-测试环境先向可丢弃分片写入一个对象，记录索引所指的块设备偏移，再破坏该对象的编码字节。清掉热层中的测试对象或绕过热层后读取，检查日志出现 `Releasing … blocks due to a data integrity error`、返回 miss、重新上传后可读。读 EIO 由原始访问返回错误；变成可读但校验失败后 Buildbarn 才淘汰该块与同分片中更旧的块。不要在已有缓存的生产机上随意擦写。 [Buildbarn 读取与校验](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/flat_blob_access.go#L125-L151)
+同一冷盘反复报同一介质错误且 `dmsetup status` 的空闲 cache 区数迟迟不回升时，立即对该盘运行上面的单盘扫描。合并被坏块中断后会重新排队，候选未变时可能继续读同一坏块。写零落入缓存后旧位置不再有效，回收可以跳过它。回收仍停滞就保留日志并按坏盘处理。 [回收失败与重排](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-reclaim.c#L393-L514) · [缓存写入的位图更新](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L281-L291)
+
+直接读出 I/O 错误时 Buildbarn 会回报错误；逻辑位置恢复可读但内容校验失败后，Buildbarn 才淘汰该块及同分片更旧的块。I5 用隔离的裸设备演练。
 
 ## 5. I5 交给 Buildbarn
 
@@ -204,11 +235,11 @@ sudo flock -n /run/lock/z8-cold-scan.lock /usr/local/sbin/z8-cold-scan sata0
 主方案和全 XFS 回退从 `z8-kit` 根执行：
 
 ```bash
-sudo apt install docker.io docker-compose-v2 jq sysstat
+sudo apt install docker.io docker-compose-v2 curl jsonnet jq sysstat
 sudo systemctl enable --now docker.service
 sudo install -d -m 0755 /opt/z8-kit /srv/buildbarn/tiered
 sudo install -m 0755 buildbarn/z8-buildbarn-check /usr/local/sbin/
-sudo cp -a buildbarn /opt/z8-kit/
+sudo cp -a --no-preserve=ownership buildbarn /opt/z8-kit/
 sudo install -m 0644 storage/systemd/{z8-buildbarn.service,z8-buildbarn-worker.service} /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/z8-buildbarn{,-worker}.service
@@ -236,4 +267,25 @@ sudo systemctl enable --now z8-buildbarn-worker.service
 ss -ltn 'sport = :8980'
 ```
 
-首个代表性全量构建期间，另开终端运行 `watch -n 5 'sudo dmsetup status --target zoned'`。记录四个冷盘的 cache 水位峰值，同时保存原始构建和 I/O 日志。构建后验证冷读和重复热读、两种 worker 的 RE 和按需物化。冷库经常超过 70% 且写入受阻时，才考虑在前 944 GiB 内缩索引扩缓冲，重建冷 CAS；后 453 GiB 属于 ZFS 组。
+### I5.3 损坏对象、24 分片降级和定时扫描
+
+先从仓库根运行隔离演练。脚本用已拉取的固定版 bb-storage 和两个临时 loop 设备，写坏单个测试对象，核 `NotFound`、重传读回与淘汰日志。全 XFS 回退跳过本节。
+
+```bash
+sudo python3 -B tests/cold-cas-smoke.py
+```
+
+正式服务健康时，从同一目录运行 `python3 -B tests/cold-cas-smoke.py --seed`，保存输出的 SEED。脚本预先上传 64 个小对象。关机断开 SATA0，保留原盘配对。临时冷启后确认 24 个分片，再检查缺盘对象 miss、在线对象可读与缺失对象回填。分片名单变化时，服务启动守卫会退役 max 的 CMS；边缘节点按[边缘 CMS 恢复](../buildbarn/EDGE.md#权威冷库重建后的边缘-cms)处理后再接入。
+
+```bash
+sudo jq -e '.active | length == 24' /run/z8-cold/cold-layout.json
+python3 -B tests/cold-cas-smoke.py --degraded REPLACE_SEED
+```
+
+关机接回原盘，用 `i4-status` 核 32 分片，再启用月扫。第一次全量构建期间从 `z8-kit` 根另开终端采样，完毕按 Ctrl+C，日志末尾有四盘各自的最小空闲 cache 区数。I7 同样采一次。多次达到 70% 且写入确实受阻时，再评估前 944 GiB 配比。
+
+```bash
+sudo systemctl enable --now z8-cold-scan.timer
+systemctl list-timers z8-cold-scan.timer
+bash host/run-step.sh i5-cold-watermark
+```

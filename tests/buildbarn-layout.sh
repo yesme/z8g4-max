@@ -20,6 +20,10 @@ cat > "$tmp/bin/stat" <<'EOF'
 #!/usr/bin/env bash
 cat "${@: -1}"
 EOF
+cat > "$tmp/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1 $2" == 'ps -q' ]]
+EOF
 chmod +x "$tmp"/bin/*
 reject() { if bash "$tmp/check"; then echo "$1" >&2; exit 1; fi; }
 
@@ -36,4 +40,14 @@ reject 'Accepted a stale hot CS geometry'
 echo 1758789107712 > "$BB_DATA_DIR/cs-hot/blocks"
 echo 27917287424 > "$BB_DATA_DIR/cs-hot/key_location_map"
 bash "$tmp/check"
-echo 'Buildbarn startup guard tests passed.'
+touch "$BB_DATA_DIR/cms/blocks"
+bash "$tmp/check" --prepare
+[[ ! -e "$BB_DATA_DIR/cms/blocks" && -d "$BB_DATA_DIR/cms/persistent_state" ]]
+touch "$BB_DATA_DIR/cms/blocks"
+bash "$tmp/check" --prepare
+[[ -f "$BB_DATA_DIR/cms/blocks" ]]
+mkdir -p "$BB_DATA_DIR/cold/sata1-0/persistent_state"
+printf '%s\n' '{"active":["sata0-0","sata1-0"]}' > "$tmp/runtime/cold-layout.json"
+bash "$tmp/check" --prepare
+[[ ! -e "$BB_DATA_DIR/cms/blocks" && -d "$BB_DATA_DIR/cms/persistent_state" ]]
+echo 'Buildbarn startup guard and CMS topology tests passed.'

@@ -13,7 +13,7 @@ size = 2 * scanner.READ_SIZE
 bad = 5 * sector
 transient = 7 * sector
 fd = 123
-failures = {bad: 2, transient: 1}
+failures = {}
 writes = []
 logs = []
 
@@ -23,10 +23,10 @@ def read(handle, buffers, offset):
     buffer, = buffers
     assert offset % sector == 0
     if len(buffer) > sector and offset == 0:
-        raise OSError(errno.EIO, "Injected coarse read error")
+        raise OSError(media_errno, "Injected coarse read error")
     if len(buffer) == sector and failures.get(offset, 0):
         failures[offset] -= 1
-        raise OSError(errno.EIO, "Injected sector read error")
+        raise OSError(media_errno, "Injected sector read error")
     buffer[:] = bytes(len(buffer)) if offset == bad else b"a" * len(buffer)
     return len(buffer)
 
@@ -37,13 +37,17 @@ def write(handle, data, offset):
     return sector
 
 
-with mock.patch.object(scanner.os, "preadv", side_effect=read), \
-        mock.patch.object(scanner.os, "pwrite", side_effect=write), \
-        mock.patch.object(scanner.os, "fsync") as flush:
-    assert scanner.scan(fd, size, logs.append) == 1
-    assert writes == [bad]
-    assert logs == [f"logical_offset={bad} bytes_zeroed={sector}"]
-    flush.assert_called_once_with(fd)
+for media_errno in (errno.EIO, errno.ENODATA):
+    failures.update({bad: 2, transient: 1})
+    writes.clear()
+    logs.clear()
+    with mock.patch.object(scanner.os, "preadv", side_effect=read), \
+            mock.patch.object(scanner.os, "pwrite", side_effect=write), \
+            mock.patch.object(scanner.os, "fsync") as flush:
+        assert scanner.scan(fd, size, logs.append) == 1
+        assert writes == [bad]
+        assert logs == [f"logical_offset={bad} bytes_zeroed={sector}"]
+        flush.assert_called_once_with(fd)
 
 with mock.patch.object(scanner.os, "preadv", side_effect=OSError(errno.ENODEV, "device removed")), \
         mock.patch.object(scanner.os, "pwrite") as writes:

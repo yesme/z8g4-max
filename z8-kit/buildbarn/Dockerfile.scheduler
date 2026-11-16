@@ -4,6 +4,8 @@ RUN git init && \
     git fetch --depth=1 https://github.com/buildbarn/bb-remote-execution.git c9ba98cf52456c400278f45a9679635daa40dcd2 && \
     git checkout --detach FETCH_HEAD
 COPY scheduler-command-platform.patch /tmp/
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 RUN git apply /tmp/scheduler-command-platform.patch && \
     CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o /bb_scheduler ./cmd/bb_scheduler
 

@@ -13,6 +13,10 @@ slot_ctx=${SLOT_CTX:-$((131072 / slots))}
 slot_ctx=$(((slot_ctx + 255) / 256 * 256))
 (( slot_ctx <= 1048576 / slots )) || { echo 'Total context exceeds the 1017 limit of 1048576 tokens' >&2; exit 2; }
 threads=${Z8_INFER_THREADS:-4}
+threads_batch=${Z8_INFER_THREADS_BATCH:-$threads}
+batch=${BATCH_SIZE:-512}
+ubatch=${UBATCH_SIZE:-32}
+cpu_share=${MOE_CACHE_CPU_SHARE:-0}
 cache_mib=${MOE_CACHE_MIB:-8192}
 kv_type=${KV_TYPE:-f16}
 attention=()
@@ -26,7 +30,19 @@ case ${KV_OFFLOAD:-1} in
     0) kv_offload=--no-kv-offload ;;
     *) echo 'KV_OFFLOAD must be 0 or 1' >&2; exit 2 ;;
 esac
-[[ "$threads" =~ ^[1-9][0-9]*$ ]] || { echo 'Expected a positive Z8_INFER_THREADS' >&2; exit 2; }
+for arg in Z8_INFER_THREADS Z8_INFER_THREADS_BATCH BATCH_SIZE UBATCH_SIZE; do
+    case "$arg" in
+        Z8_INFER_THREADS) value=$threads ;;
+        Z8_INFER_THREADS_BATCH) value=$threads_batch ;;
+        BATCH_SIZE) value=$batch ;;
+        UBATCH_SIZE) value=$ubatch ;;
+    esac
+    [[ "$value" =~ ^[1-9][0-9]{0,8}$ ]] || { echo "Expected a positive $arg" >&2; exit 2; }
+done
+(( ubatch <= batch )) || { echo 'UBATCH_SIZE must not exceed BATCH_SIZE' >&2; exit 2; }
+[[ "$cpu_share" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]] || {
+    echo 'MOE_CACHE_CPU_SHARE must be between 0 and 1' >&2; exit 2;
+}
 case ${CACHE_PROMPT:-1} in
     1) cache_prompt=--cache-prompt ;;
     0) cache_prompt=--no-cache-prompt ;;
@@ -51,8 +67,8 @@ exec numactl --interleave="$Z8_DRAM_INTERLEAVE" "$LLAMA_BUILD/bin/llama-server" 
     --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017 \
     --load-mode mmap --lazy-mode on --split-mode layer --tensor-split 1,1,1,1 \
     --n-gpu-layers all --cpu-moe --fit off --no-mmproj \
-    --moe-cache-mib "$cache_mib" --moe-cache-cpu-share 0 \
-    --threads "$threads" --threads-batch "$threads" --batch-size 512 --ubatch-size 32 \
+    --moe-cache-mib "$cache_mib" --moe-cache-cpu-share "$cpu_share" \
+    --threads "$threads" --threads-batch "$threads_batch" --batch-size "$batch" --ubatch-size "$ubatch" \
     --parallel "$slots" --ctx-size "$((slots * slot_ctx))" --no-kv-unified \
     -ctk "$kv_type" -ctv "$kv_type" "$kv_offload" "${attention[@]}" \
     --cont-batching --cache-ram 0 --no-cache-idle-slots "$cache_prompt" \

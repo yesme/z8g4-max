@@ -7,8 +7,9 @@ config=${Z8_STORAGE_CONFIG:-/etc/z8-storage}
 action=${1:-}
 case "$action" in
     map|unmap|import|export|cold-ready) [[ $# == 1 ]] ;;
+    check-map) [[ $# == 2 && "$2" =~ ^[0-6]$ ]] ;;
     format) [[ $# == 3 && "$2" =~ ^[0-6]$ && ( "$3" == --create || "$3" == --replace ) ]] ;;
-    *) echo 'Usage: z8-storage map|unmap|import|export|cold-ready or format SLOT --create|--replace' >&2; exit 2 ;;
+    *) echo 'Usage: z8-storage map|unmap|import|export|cold-ready or check-map SLOT or format SLOT --create|--replace' >&2; exit 2 ;;
 esac || exit 2
 
 # shellcheck source=/dev/null
@@ -23,7 +24,7 @@ fi
 
 special=/dev/disk/by-partlabel/z8-special
 index=/dev/disk/by-partlabel/z8-cold-index
-mapper_bytes=13999445901312
+zone_bytes=$((256 * 1024**2))
 names=() disks=() caches=()
 while IFS=$'\t' read -r name disk label extra || [[ -n ${name:-} ]]; do
     [[ -z "$name" || "$name" == \#* ]] && continue
@@ -73,13 +74,15 @@ check_distinct_disks() {
 }
 
 is_expected_mapping() {
-    local i=$1 name=${names[$1]} backing expected table mapper
+    local i=$1 name=${names[$1]} backing expected table mapper bytes
     [[ -b "/dev/mapper/$name" && -b "${disks[i]}" ]] || return 1
     cache_geometry "$i"
     check_partition "${caches[i]}" "$cache_bytes" || return 1
-    [[ $(blockdev --getsize64 "/dev/mapper/$name") == "$mapper_bytes" ]] || return 1
+    bytes=$(blockdev --getsize64 "/dev/mapper/$name") || return 1
+    [[ "$bytes" =~ ^[1-9][0-9]{0,14}$ ]] || return 1
+    (( bytes % zone_bytes == 0 && bytes / zone_bytes >= 52080 && bytes / zone_bytes <= 52156 )) || return 1
     table=$(dmsetup table "$name") || return 1
-    [[ "$table" != *$'\n'* && "$table" =~ ^0[[:blank:]]+27342667776[[:blank:]]+zoned([[:blank:]]|$) ]] || return 1
+    [[ "$table" != *$'\n'* && "$table" =~ ^0[[:blank:]]+([0-9]+)[[:blank:]]+zoned([[:blank:]]|$) && ${BASH_REMATCH[1]} == "$((bytes / 512))" ]] || return 1
     mapper=$(basename "$(readlink -f "/dev/mapper/$name")")
     backing=$(find "/sys/class/block/$mapper/slaves" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort) || return 1
     expected=$(for device in "${disks[i]}" "${caches[i]}"; do
@@ -165,6 +168,10 @@ case "$action" in
             fi
         done
         ;;
+    check-map)
+        require_optane
+        is_expected_mapping "$2"
+        ;;
     format)
         require_optane
         i=$2
@@ -177,12 +184,12 @@ case "$action" in
             exit 1
         fi
         ! dmsetup info "${names[i]}" >/dev/null 2>&1 || { echo "Remove ${names[i]} before formatting." >&2; exit 1; }
-        args=(--format "--label=${names[i]}" "--seq=$seq")
+        args=(--format "$(readlink -f "$cache")" "$(readlink -f "$disk")" "--label=${names[i]}" "--seq=$seq")
         if [[ $3 == --replace ]]; then args+=(--force); fi
         lsblk -b -o NAME,MODEL,SERIAL,SIZE,ZONED,PARTLABEL "$disk" "$cache"
         read -r -p "To erase this pair, enter ${names[i]}: " confirmation
         [[ "$confirmation" == "${names[i]}" ]] || exit 1
-        dmzadm "${args[@]}" "$(readlink -f "$cache")" "$(readlink -f "$disk")"
+        dmzadm "${args[@]}"
         dmzadm --check "$(readlink -f "$cache")" "$(readlink -f "$disk")"
         ;;
     import)

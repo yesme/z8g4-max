@@ -28,7 +28,7 @@ base + {
                 [name]: {
                   weight: 1,
                   backend: disk('/store/cold/' + name, '/dev/z8-cold-' + name, 0, 0,
-                                3, chunking, 22, 66, '/dev/z8-index-' + name),
+                                3, chunking, 22, 65, '/dev/z8-index-' + name),
                 }
                 for name in cold.active
               },

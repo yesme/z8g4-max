@@ -386,7 +386,7 @@ EOF
 sudo update-grub
 ```
 
-I4 完成上述安装后重启。回到正式系统后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem，`sysctl kernel.numa_balancing` 应为 `2`。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。
+I4 完成上述安装后重启。回到正式系统后用 `sudo daxctl list`、`numactl -H` 和 `journalctl -b -u z8-pmem-kmem` 核对 kmem，`sysctl kernel.numa_balancing` 应为 `2`。条带按 `findmnt -M /srv/pmem-model` 和 `journalctl -b -u z8-pmem-model` 核对。仓库已有的推理服务依赖 `/srv/pmem-model`。验证正常启动后，在正式系统执行 `sudo z8-recovery-backup --refresh-boot` 保存本次手工 `update-grub` 后的基线，再做 I4 常规备份。
 
 ## 四卡 pinned DMA 验收
 

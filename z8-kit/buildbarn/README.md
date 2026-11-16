@@ -8,14 +8,14 @@ P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS�
 
 | 组件 | 每分片 | 合计 |
 |---|---:|---:|
-| 冷数据 dm-linear | 6,519 个 256 MiB 区，1,749,930,737,664 B | 32 片约 50.93 TiB |
+| 冷数据 dm-linear | 6,510 个 256 MiB 区，1,747,514,818,560 B | 32 片约 50.86 TiB |
 | 冷索引 dm-linear | 26.5 GiB，最多约 4.31 亿个 66 B 槽 | 848 GiB，约 16.65 GiB/TiB |
-| 分片块 | 22 old、66 current、3 new、3 spare | 每块约 17.34 GiB，扣 spare 后约 49.30 TiB |
+| 分片块 | 22 old、65 current、3 new、3 spare | 每块 17.5 GiB，扣 spare 后约 49.22 TiB |
 | 持久状态 | `/srv/buildbarn/tiered/cold/sataN-S/persistent_state` | P4618 上 32 个独立目录 |
 
-初始按约 10 KiB 编码均值估算，投入活跃块后索引装载约 38%，约 7.5 KiB 时达 50%。按全部几何算则分别约 40% 和 7.9 KiB。质数取整使实际槽数略少。读取走 mmap，索引关闭块设备预读，66 B 更新走缓冲 pwrite。旧记录以 epoch、块引用与摘要过滤；重建先清零索引，再清对应 checkpoint。 [块计算](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/configuration/new_blob_access.go#L189-L210) · [索引格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_location_record_array.go#L12-L95) · [裸设备打开](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/new_block_device_from_device_linux.go#L22-L47)
+初始按约 10 KiB 编码均值估算，投入活跃块后索引装载约 38%，约 7.7 KiB 时达 50%。按全部几何算则分别约 40% 和 7.9 KiB。质数取整使实际槽数略少。读取走 mmap，索引关闭块设备预读，66 B 更新走缓冲 pwrite。旧记录以 epoch、块引用与摘要过滤；重建先清零索引，再清对应 checkpoint。 [块计算](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/configuration/new_blob_access.go#L189-L210) · [索引格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_location_record_array.go#L12-L95) · [裸设备打开](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/new_block_device_from_device_linux.go#L22-L47)
 
-三个 new block 按 4:2:1 的分配次数推进，分散同一批对象的老化。old 块查到的对象会复制保活，查缺走冷层。裸块原地轮转去掉 ZFS CoW；未完整覆盖的 256 MiB chunk 仍可能触发 dm-zoned 合并。 [Buildbarn 分配权重](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L263-L273)
+三个 new block 按 4:2:1 的分配次数推进，分散同一批对象的老化。old 块查到的对象会复制保活，查缺走冷层。每块恰好 70 个区，轮转区边界不跨块。写到一半、空闲回收或随机覆盖仍可能触发 dm-zoned 合并。 [Buildbarn 分配权重](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L263-L273)
 
 P4618 按热 CS **1,638 GiB**、CMS 64 GiB、AC 216 GiB、三份索引合计 34 GiB、worker 输入缓存 128 GiB 预算，合计 **2,080 GiB**。标称 6.4 TB 约余 **3.79 TiB** 给系统、工作树和 `buck-out`，另扣 XFS 元数据。边缘的热 CS 保持 256 GiB 配 4 GiB 索引；全 XFS 回退保持 64 GiB 配 1 GiB 索引。
 
@@ -49,11 +49,11 @@ sudo mv -T /srv/buildbarn/tiered/cms "/srv/buildbarn/tiered/cms.retired.$(date +
 sudo install -d -m 0755 /srv/buildbarn/tiered/cms/persistent_state
 ```
 
-先让 mini、Mac 按[边缘 CMS 恢复](EDGE.md#权威冷库重建后的边缘-cms)各自清空清单缓存，再恢复服务。只改变分片可用性时，保留已接盘的索引和 checkpoint；若出现旧 CMS 清单指向缺失 chunk 的重复失败，按以上步骤退役 CMS。v2.20 迁移到新热层几何时，像 CMS 一样把旧 `cs-hot` 目录整套退役并重建 `cs-hot/persistent_state`。核对无复用需要后删除退役目录释放空间。
+先让 mini、Mac 按[边缘 CMS 恢复](EDGE.md#权威冷库重建后的边缘-cms)各自清空清单缓存，再恢复服务。只改变分片可用性时，保留已接盘的索引和 checkpoint。max 的启动守卫会在有效分片名单变化时自动退役 CMS；mini 和 Mac 在降级和恢复全量后各自退役一次 CMS 再连接。更换一块盘但分片键集合未变时仍要按上面的步骤手工退役。v2.20 迁移到新热层几何时，像 CMS 一样把旧 `cs-hot` 目录整套退役并重建 `cs-hot/persistent_state`。核对无复用需要后删除退役目录释放空间。
 
 ## 调度器的 Buck2 平台兼容
 
-固定版 Buildbarn 只读 `Action.platform`。2026-11-15 的官方 Buck2 发布版 `5b3b13d` 仍把属性写入 `Command.platform`，Docker 对照实测在 `hardlinking` 上返回 `platform {}`。max 只重建调度器。它优先使用 `Action.platform`，空时用当前分块 CAS 的 Command reader 获取旧字段；worker、存储、三台官方 Buck2 与平台约束沿用原配置。同一条 `--remote-only` Linux 工单换用兼容调度器后成功执行，并拉回了结果。由 [I5 软件准备](../storage/README.md#i51-软件目录与单元准备)构建后，`docker compose` 使用本机的 `z8/bb-scheduler:c9ba98c-command-platform`。上游 Buck2 发版支持 Action 平台后，再用官方调度器回归同一 Linux 和 Darwin 工单。 [Buck2 Action 和 Command 源码](https://github.com/facebook/buck2/blob/5b3b13d3eacefe325bf971369197e33c5f4b3968/app/buck2_execute/src/execute/command_executor.rs#L340-L421) · [Buildbarn 删除回退的提交](https://github.com/buildbarn/bb-remote-execution/commit/ca42a43) · [Buck2 issue #1477](https://github.com/facebook/buck2/issues/1477)
+固定版 Buildbarn 只读 `Action.platform`。2026-11-15 的官方 Buck2 发布版 `5b3b13d` 仍把属性写入 `Command.platform`，Docker 对照实测在 `hardlinking` 上返回 `platform {}`。max 只重建调度器。它优先使用 `Action.platform`，空时用当前分块 CAS 的 Command reader 获取旧字段；worker、存储、三台官方 Buck2 与平台约束沿用原配置。同一条 `--remote-only` Linux 工单换用兼容调度器后成功执行，并拉回了结果。由 [I5 软件准备](../storage/README.md#i51-软件目录与单元准备)构建后，`docker compose` 使用本机的 `z8/bb-scheduler:c9ba98c-command-platform`。Go 代理受限时，可向 `docker compose build` 传 `--build-arg GOPROXY=…` 使用你信任的代理。上游 Buck2 发版支持 Action 平台后，再用官方调度器回归同一 Linux 和 Darwin 工单。 [Buck2 Action 和 Command 源码](https://github.com/facebook/buck2/blob/5b3b13d3eacefe325bf971369197e33c5f4b3968/app/buck2_execute/src/execute/command_executor.rs#L340-L421) · [Buildbarn 删除回退的提交](https://github.com/buildbarn/bb-remote-execution/commit/ca42a43) · [Buck2 issue #1477](https://github.com/facebook/buck2/issues/1477)
 
 ## Buck2 客户端
 
@@ -80,7 +80,7 @@ buck2 kill
 
 ### 验证 Linux 缓存
 
-I4 的覆盖脚本已验 dm-zoned 回收，I5 只走真实 Buck2 路径。在工作树 A 远程构建产生新 digest 的目标，确认 worker 写入结果；从干净工作树 B 读取同一产物，首次取回填热层。仅需核一次实际物化和热层读，AC hit 单独不足以证明下载。主方案用 `dmsetup status --target zoned` 和 `iostat -xz 2` 核四盘冷库活动。全 XFS 回退用 `iostat -xz 2` 观察 P4618。 [I4 持续写与覆盖](../storage/README.md#冷库连续覆写)
+I4 的覆盖脚本已验 dm-zoned 回收，I5 只走真实 Buck2 路径。在工作树 A 远程构建产生新 digest 的目标，确认 worker 写入结果；从干净工作树 B 读取同一产物，首次取回填热层。仅需核一次实际物化和热层读，AC hit 单独不足以证明下载。主方案另开终端用 `bash host/run-step.sh i5-cold-watermark`（从 `z8-kit` 根）采四盘最小空闲 cache 区数，配合 `iostat -xz 2` 核 I/O。全 XFS 回退用 `iostat -xz 2` 观察 P4618。 [I4 持续写与覆盖](../storage/README.md#冷库连续覆写)
 
 在 Linux 工作树 A 和同一提交的干净工作树 B 各执行一次下列命令，替换项目目标标签。分别保存两次的 log，检查缓存查询、AC 命中和 worker 的实际执行记录。
 

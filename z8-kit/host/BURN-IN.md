@@ -289,9 +289,11 @@ bash host/run-step.sh i6-probe --usage --repeats 1 --tools
 # 分开终端运行，日志落 P4618。先确认 log 与测试进程都能在当前用户运行。
 nvidia-smi --query-gpu=timestamp,index,temperature.gpu,power.draw,pcie.link.gen.current,pcie.link.width.current --format=csv -l 5 > gpu.csv
 iostat -xz 5 > iostat.log
-# 主方案仅在 z8data 已导入时运行这一条。全 XFS 回退看上面的 iostat。
+# 主方案采四块裸冷盘的缓存水位。完成时 Ctrl+C，保留日志末尾的四盘最小值。
+bash host/run-step.sh i5-cold-watermark
+# 另在 z8data 已导入时监视归档池。
 sudo zpool iostat -v z8data 5 > zpool-iostat.log
 sudo journalctl -kf -o short-monotonic > kernel-follow.log
 ```
 
-用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。在开始与结束各执行一次 `bash host/run-step.sh i7-snapshot PID`，用实际推理 PID 替换 `PID`。脚本收集 slice、两路内存、PMem 页迁移和内核错误。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。
+用 I5 确认的远程执行配置轮流执行 clean checkout 的 Buck2 目标和短增量构建，并保持指向本地 1017 的 OMP 工单或 `inference/probe.py` 回放。在开始与结束各执行一次 `bash host/run-step.sh i7-snapshot PID`，用实际推理 PID 替换 `PID`。脚本收集 slice、两路内存、PMem 页迁移和内核错误。如果主系统安装了 ipmctl，同时保存 `sudo ipmctl show -sensor`。记录四盘最低空闲缓存区数、构建完成时间、推理 p95 首字延迟和 decode 速度作为上线基线。

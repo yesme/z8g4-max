@@ -2,6 +2,7 @@
 set -euo pipefail
 export LC_ALL=C
 
+[[ $# == 0 || ( $# == 1 && $1 == --prepare ) ]] || exit 2
 export BB_DATA_DIR=${BB_DATA_DIR:-/srv/buildbarn/tiered}
 if [[ $(findmnt -rn -o TARGET,FSTYPE -T "$BB_DATA_DIR") != '/ xfs' ]]; then
     echo 'Create the Buildbarn directories on the P4618 XFS before starting.' >&2
@@ -26,3 +27,24 @@ for entry in 'blocks:1758789107712' 'key_location_map:27917287424'; do
         exit 1
     fi
 done
+
+if [[ ${1:-} == --prepare ]]; then
+    running=$(docker ps -q --filter label=com.docker.compose.project=z8-tiered \
+        --filter label=com.docker.compose.service=cache)
+    [[ -z "$running" ]] || { echo 'Stop the existing tiered cache before preparing CMS.' >&2; exit 1; }
+    roster="$BB_DATA_DIR/cms-shards.json"
+    active=$(jq -ce '.active' /run/z8-cold/cold-layout.json)
+    if [[ ! -f "$roster" || $(<"$roster") != "$active" ]]; then
+        cms="$BB_DATA_DIR/cms"
+        # CMS is disposable. Reset it before recording the new roster so a
+        # partial reset is retried at the next start.
+        find "$cms" -mindepth 1 -delete
+        install -d -m 0755 "$cms/persistent_state"
+        sync -f "$cms"
+        echo 'Reset CMS for the current cold shard roster.'
+        temporary=$(mktemp "$roster.XXXXXX")
+        printf '%s\n' "$active" > "$temporary"
+        mv -Tf -- "$temporary" "$roster"
+        sync -f "$BB_DATA_DIR"
+    fi
+fi

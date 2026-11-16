@@ -102,7 +102,7 @@ T1 用 SanDisk 上的临时 Xubuntu 26.04.1 短跑双路 CPU。T2 从 F9 进 Ven
 
 ## SATA0–7、硬盘识别和起转
 
-机箱内用四个原装 3.5 英寸托架。余下三盘用可直通的双 5.25 英寸三盘架或外部固定盘架。先量实际 175 mm 标称深度和连接器空间，确认原装光驱在独立的 9.5 mm 位时两个 5.25 位都可用。选择盘架时保留进风与拉线空间，必要时把后三盘分到外部独立供电且有明确启停顺序的盘架。数据口仍分别接主板 SATA0–6，光驱 SATA7。先给每根线两端贴 SATA 号，再装盘并记序列号。 [HP QuickSpecs，Expansion Bays](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf)
+SATA0–3（冷 CAS）用四个原装 3.5 英寸托架。SATA4–6（ZFS）用可直通的双 5.25 英寸三盘架或外部固定盘架。先量实际 175 mm 标称深度和连接器空间，确认原装光驱在独立的 9.5 mm 位时两个 5.25 位都可用。选择盘架时保留进风与拉线空间，必要时把后三盘分到外部独立供电且有明确启停顺序的盘架。数据口仍分别接主板 SATA0–6，光驱 SATA7。先给每根线两端贴 SATA 号，再装盘并记序列号。 [HP QuickSpecs，Expansion Bays](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf)
 
 ### 先确认系统认盘
 
@@ -115,7 +115,7 @@ sudo journalctl -kb -o short-monotonic | grep -Ei 'ahci|ata[0-9]+:.*(link up|SAT
 
 ### 认盘以后，检查能否用于 dm-zoned
 
-HC620 把盘面划成许多区，大部分区要求从写入指针起顺序写。**ZAC** 是 SATA 盘报告这些区、执行相关操作的一套命令。这里要确认 Linux 经过实际的 AHCI 端口、数据线和盘架，能识别这条写入限制并读到盘区表。确认后交给 dm-zoned，让 ZFS 使用每对 HC620 + D4800X 生成的普通块设备。下列查询只读。 [Linux dm-zoned 说明](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html)
+HC620 把盘面划成许多区，大部分区要求从写入指针起顺序写。**ZAC** 是 SATA 盘报告这些区、执行相关操作的一套命令。这里要确认 Linux 经过实际的 AHCI 端口、数据线和盘架，能识别这条写入限制并读到盘区表。确认后每对 HC620 + D4800X 交给 dm-zoned。SATA0–3 切成裸冷库分片，SATA4–6 交给 ZFS。下列查询只读。 [Linux dm-zoned 说明](https://www.kernel.org/doc/html/latest/admin-guide/device-mapper/dm-zoned.html)
 
 1. 在上面的 `lsblk` 找到 HC620 的序列号和设备名。按本批 SATA 4Kn 14 TB 配置，七盘都应报告 `TRAN=sata`、`ZONED=host-managed`、`LOG-SEC=4096` 和 `PHY-SEC=4096`。后两项分别是系统寻址扇区和物理扇区的字节数。WD 的 14 TB SATA 4Kn 料号为 `HSH721414ALN6M0` 和 `HSH721414ALN6M4`。看到 `512 / 4096` 时先核盘身料号和订单。 [WD HC620 规格表](https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc600-series/data-sheet-ultrastar-dc-hc620.pdf)
 2. 把下面的 `/dev/sdX` 换成该序列号对应的**整盘**，例如 `/dev/sdb`。第一条从盘头查两个区。第二条从标准 14 TB HC620 的第 525 个区开始查两个区。WD 手册给出盘头 524 个普通区、每区 256 MiB，所以第二条的偏移是 `524 × 256 MiB ÷ 512 B = 274726912`。这里的偏移单位由 blkzone 固定为 512 B，即使盘是 4Kn 也用这个数。

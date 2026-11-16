@@ -19,7 +19,7 @@ lock=/run/z8-recovery-backup.lock
 # by an interrupted transaction before attempting the FIT lock.
 if [[ "$mode" == --apt-pre ]]; then rm -f -- "$apt_state"; fi
 exec 9>"$lock"
-if [[ "$mode" == --apt-* ]]; then
+if [[ "$mode" == --apt-* || "$mode" == backup ]]; then
     flock -w 30 9 || die 'Timed out waiting for FIT backup.'
 else
     flock -n 9 || die 'Another recovery backup is running.'
@@ -33,14 +33,17 @@ if [[ "$mode" == --apt-post ]]; then
         die 'Invalid FIT APT pre-check state.'
 fi
 
-boot_source=$(findmnt -rn -M "$boot_dir" -t ext4 -o SOURCE) ||
-    die 'The ext4 FIT boot partition must be mounted.'
-esp_source=$(findmnt -rn -M "$boot_dir/efi" -t vfat -o SOURCE) ||
-    die 'The FIT ESP must be mounted.'
-boot_parent=$(lsblk -dnro PKNAME -- "$boot_source")
-esp_parent=$(lsblk -dnro PKNAME -- "$esp_source")
-[[ -n "$boot_parent" && "$boot_parent" == "$esp_parent" ]] ||
-    die '/boot and /boot/efi must be on the same disk.'
+boot_devices_ready() {
+    boot_source=$(findmnt -rn -M "$boot_dir" -t ext4 -o SOURCE) && [[ -n "$boot_source" ]] || return 1
+    esp_source=$(findmnt -rn -M "$boot_dir/efi" -t vfat -o SOURCE) && [[ -n "$esp_source" ]] || return 1
+    boot_parent=$(lsblk -dnro PKNAME -- "$boot_source") && [[ -n "$boot_parent" ]] || return 1
+    esp_parent=$(lsblk -dnro PKNAME -- "$esp_source") && [[ "$boot_parent" == "$esp_parent" ]]
+}
+boot_status=ok
+if ! boot_devices_ready; then
+    [[ "$mode" == --stdout ]] || die 'Mount the FIT ext4 /boot and FAT /boot/efi on the same disk.'
+    boot_status=unavailable
+fi
 
 recovery_device=
 if [[ "$mode" != --stdout ]]; then
@@ -83,8 +86,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p -- "$volume" "$snapshot"/{gpt,config,hardware,storage}
 
-boot_status=ok
-if ! (
+if [[ "$boot_status" == unavailable ]]; then
+    printf 'FIT /boot or ESP unavailable. Boot checksums were not collected.\n' > "$work/boot-read-errors"
+elif ! (
     cd -- "$boot_dir" || exit 1
     # GRUB changes grubenv during one-shot boots. Comparing it would fail on a healthy FIT.
     find . -type f ! -path './grub/grubenv' -print0 |
@@ -144,7 +148,10 @@ refresh_after_apt() {
 }
 
 if [[ "$mode" == --stdout ]]; then
-    if [[ "$boot_status" == ok ]]; then boot_status=not-compared; fi
+    case "$boot_status" in
+        ok) boot_status=not-compared ;;
+        unreadable|unavailable) rm -f -- "$snapshot/boot.sha256" ;;
+    esac
 else
     mount -t ext4 -o rw,noatime,nosuid,nodev,noexec "$recovery_device" "$volume"
     mounted=1
@@ -186,20 +193,45 @@ fi
 
 printf 'checked_at_utc=%s\nstatus=%s\n' "$(date -u -Is)" "$boot_status" > "$snapshot/boot-check.txt"
 boot_exit=0
+if [[ "$boot_status" == mismatch || "$boot_status" == missing-baseline ]]; then
+    printf '%s\n' 'After verifying the installed boot files, run sudo z8-recovery-backup --refresh-boot.' >&2
+fi
 case "$boot_status" in
     mismatch|unreadable|missing-baseline) boot_exit=1 ;;
 esac
 
 copy_config() {
-    local path=$1
-    [[ -f "$path" && ! -L "$path" ]] || return 0
-    # Back up the deployment allowlist only. Refuse common forms of inline secrets.
+    local path=$1 source=${2:-$1} name
+    local credential='password|secret|api[_-]?key|private[_-]?key'
+    local assignment_key="[[:alpha:]_][[:alnum:]_-]*[\"']?[[:blank:]]*[:=]"
+    [[ -f "$source" && ! -L "$source" ]] || return 0
+    # Match the key, so a safe field on the same line cannot hide a credential.
     if grep -Eiq -e '-----BEGIN .*PRIVATE KEY-----' \
-        -e '(^|[[:space:]"{}])([a-z_0-9]*(password|secret|token|api[_-]?key|private[_-]?key)[a-z_0-9]*)"?[[:space:]]*[:=]' \
-        -e 'Authorization:[[:space:]]*(Bearer|Basic)' "$path"; then
+        -e 'Authorization:[[:space:]]*(Bearer|Basic)' "$source"; then
         die "Inline credentials detected in allowlisted configuration: $path"
     fi
-    install -D -m 0600 -- "$path" "$snapshot/config$path"
+    while IFS= read -r name; do
+        name=${name,,}
+        if [[ "$name" =~ $credential ]]; then
+            die "Inline credentials detected in allowlisted configuration: $path"
+        fi
+        case "$name" in
+            tokenizer|tokenizers|tokenizer_dir|tokenizer_path|*_tokenizer|*_tokenizers|*_tokenizer_dir|*_tokenizer_path|max_tokens|maxtokens|prompt_tokens|prompttokens|completion_tokens|completiontokens|cached_tokens|cachedtokens)
+                continue ;;
+        esac
+        if [[ "$name" == *token* ]]; then
+            die "Inline credentials detected in allowlisted configuration: $path"
+        fi
+    done < <(grep -Eo "$assignment_key" "$source" | sed -E "s/[\"']?[[:blank:]]*[:=]$//")
+    install -D -m 0600 -- "$source" "$snapshot/config$path"
+}
+
+read_user_file() {
+    local path=$1 target=$2
+    # The invoking user can replace components of the deployment path.
+    # Open and read as that user, with a bound on time and bytes.
+    timeout 5s runuser -u jackywang -- env -i PATH=/usr/bin:/bin head -c 1048577 -- "$path" > "$target" 2>/dev/null &&
+        [[ $(stat -c %s -- "$target") -le 1048576 ]]
 }
 
 lsblk -e 7 -o NAME,PATH,MODEL,SERIAL,SIZE,FSTYPE,UUID,PARTUUID,MOUNTPOINTS > "$snapshot/hardware/lsblk.txt"
@@ -243,21 +275,42 @@ for path in /etc/fstab /etc/mdadm/mdadm.conf /etc/default/grub \
     /etc/z8-storage/{hybrid.tsv,storage.env,pmem-model.env,pmem-kmem.env,recovery-notes.txt,model-manifest.txt,cold-layout.json} \
     /etc/systemd/system/{z8-*.service,z8-*.timer,z8*.slice,data-other.mount} \
     /etc/systemd/system/{z8-*.service,z8*.slice,data-other.mount}.d/*.conf \
-    /opt/z8-kit/buildbarn/{*.jsonnet,disk.libsonnet,compose*.yaml,Dockerfile.scheduler,scheduler-command-platform.patch,buck2-shared-worker.buckconfig} \
-    /home/jackywang/.config/z8-infer/launch.sh
+    /opt/z8-kit/buildbarn/{*.jsonnet,disk.libsonnet,compose*.yaml,Dockerfile.scheduler,scheduler-command-platform.patch,buck2-shared-worker.buckconfig}
 do
-    copy_config "$path"
+    if [[ "$path" == /opt/z8-kit/buildbarn/* ]]; then
+        if read_user_file "$path" "$work/deployment-config"; then
+            copy_config "$path" "$work/deployment-config"
+        fi
+    else
+        copy_config "$path"
+    fi
 done
 
 # Never source or copy the full per-user environment. Keep only deployment settings.
+launch=/home/jackywang/.config/z8-infer/launch.sh
 infer=/home/jackywang/.config/z8-infer/env.sh
-if [[ -f "$infer" && ! -L "$infer" ]]; then
-    mkdir -p "$snapshot/config/home/jackywang/.config/z8-infer"
-    while IFS= read -r line; do
-        if [[ "$line" =~ ^export[[:blank:]]+(LLAMA_BUILD|DS41_GGUF|CUDA_VISIBLE_DEVICES|Z8_DRAM_INTERLEAVE|Z8_CUDA_RUNTIME|Z8_NVLINK_P2P|SLOTS|SLOT_CTX|KV_TYPE|KV_OFFLOAD|MOE_CACHE_MIB|CACHE_PROMPT)=([[:alnum:]./,:_+-]+)[[:blank:]]*$ ]]; then
-            printf 'export %s=%q\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
-        fi
-    done < "$infer" > "$snapshot/config$infer"
+if read_user_file "$launch" "$work/infer-launch"; then
+    copy_config "$launch" "$work/infer-launch"
+fi
+if read_user_file "$infer" "$work/infer-env"; then
+    mkdir -p -- "$(dirname "$snapshot/config$infer")"
+    assignment='^[[:blank:]]*export[[:blank:]]+([A-Z0-9_]+)=(.*)$'
+    literal='^([[:alnum:]./,:_+-]+|"[[:alnum:] ./,:_+-]+"|'\''[[:alnum:] ./,:_+-]+'\'')[[:blank:]]*$'
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ $assignment ]] || continue
+        name=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        case "$name" in
+            LLAMA_BUILD|DS41_GGUF|CUDA_VISIBLE_DEVICES|Z8_DRAM_INTERLEAVE|Z8_CUDA_RUNTIME|Z8_NVLINK_P2P|\
+            SLOTS|SLOT_CTX|KV_TYPE|KV_OFFLOAD|MOE_CACHE_MIB|CACHE_PROMPT|Z8_INFER_THREADS|\
+            MOE_CACHE_CPU_SHARE|UBATCH_SIZE|BATCH_SIZE|Z8_INFER_THREADS_BATCH) ;;
+            *) continue ;;
+        esac
+        [[ "$value" =~ $literal ]] || continue
+        value=${BASH_REMATCH[1]}
+        if [[ "$value" == \"* || "$value" == \'* ]]; then value=${value:1:-1}; fi
+        printf 'export %s=%q\n' "$name" "$value"
+    done < "$work/infer-env" > "$snapshot/config$infer"
 fi
 
 if command -v zpool >/dev/null && zpool list -H -o name z8data >/dev/null 2>&1; then
@@ -287,7 +340,7 @@ fi
 ) > "$snapshot/SHA256SUMS"
 if [[ "$mode" == --stdout ]]; then
     tar -C "$snapshot" -cf - .
-    exit "$boot_exit"
+    exit 0
 fi
 
 name=$(date -u +%Y%m%dT%H%M%S.%NZ)

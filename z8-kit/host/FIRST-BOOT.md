@@ -41,7 +41,7 @@
 ### T4 · 加存储，先验裸设备
 
 1. 断电装槽 1 的 P4618，从 SanDisk 上的临时系统启动。验 Gen3 x8 上行、两个 Gen3 x4 下行，且两个独立的约 3.2 TB NVMe 端点都在。过关后再装槽 5 的 D4800X，槽 6 留空。逐端点做固件盘点、SMART 和只读负载。 [P4618 链路](BURN-IN.md#p4618-链路与双控制器) · [NVMe 与 SATA 检查](BURN-IN.md#nvme-健康与-sata-枚举)
-2. 按 **1 → 4 → 7** 块 HC620 分批冷启。在七盘阶段接 SATA7 光驱。每种配置按 BIOS 手册冷启，核盘和链路。保存 SATA0–6 对应的序列号及 ATA 整盘 by-id，逐盘确认 SATA、4Kn、`host-managed` 和 zone 类型。 [SATA 接线与起转](BIOS.md#先确认系统认盘)
+2. 按 **1 → 4 → 7** 块 HC620 分批冷启。SATA0–3（冷库）接原生位，SATA4–6（ZFS）接双光驱位三盘笼，SATA7 接薄光驱。每种配置按 BIOS 手册冷启，核盘和链路。保存 SATA0–6 对应的序列号及 ATA 整盘 by-id，逐盘确认 SATA、4Kn、`host-managed` 和 zone 类型。 [SATA 接线与起转](BIOS.md#先确认系统认盘)
 3. 七盘全部稳定后，各发一次 SMART Extended。七块盘各自扫描，保持供电、通风和禁止自动休眠，等最后完成的盘。核每盘最新自检均为 `Completed without error`。此时仍在验裸盘。D4800X 分区、dm-zoned 初始化、建池和 scrub 全在 I4。 [七盘慢扫命令](BURN-IN.md#七块-hc620-并行慢扫)
 4. 保存无坞主机清单和日志。先关机插入 FIT，再从 F9 启动 SanDisk 上的临时系统，抄 **FIT、两个 P4618 端点**的三个唯一 `ID_SERIAL`，抄 D4800X 的整盘 NVMe by-id。按 I1.2 填好 `autoinstall.yaml`，放到 Ventoy 大数据分区的 `z8/`。关机拔下 FIT，后续验机仍从 SanDisk 启动。主机和七盘完成验收后才接坞。 [主机基线](BURN-IN.md#主机基线) · [读取 ID_SERIAL](INSTALL.md#i12-生成安装配置并核身份)
 
@@ -70,13 +70,13 @@
 
 ### I4 · PMem 复用、建数据池与冷启演练
 
-1. 关机断电接回 D4800X、SATA0–6 的七块 HC620；光驱在 SATA7。回正式系统按 T4 序列号逐一核盘。同一阶段安装 PMem 两份 env 和两个单元，设置 T3 用过的启动参数，重启，确认 `/srv/pmem-model` 仍挂为 XFS DAX、两个 kmem 节点上线。PMem 已有的 goal、namespace、XFS 和权重直接沿用。 [正式系统恢复 PMem](PMEM.md#i4-在正式系统复用-pmem)
-2. 从实测 D4800X 整盘 by-id 新建九分区。按 `hybrid.tsv` 逐组初始化映射；SATA0–3 用 24 GiB 缓存，SATA4–6 用 80 GiB。仅后三个 mapper 加 p9 建 RAIDZ1，保存池 GUID。p5 留作 848 GiB 裸索引。 [I4 磁盘配置与建池](../storage/README.md#1-列出实体设备)
+1. 在正式系统安装 PMem 两份 env 和两个单元，设置 T3 用过的启动参数，重启，确认 `/srv/pmem-model` 仍挂为 XFS DAX、两个 kmem 节点上线。PMem 已有的 goal、namespace、XFS 和权重直接沿用。 [正式系统恢复 PMem](PMEM.md#i4-在正式系统复用-pmem)
+2. 先装存储工具并运行[介质错误演练](../storage/README.md#i4-介质错误演练)。关机断电接回 D4800X 和七块 HC620，光驱留 SATA7。启动后按 T4 序列号核盘，从 D4800X 整盘 by-id 新建九分区。按 `hybrid.tsv` 逐组初始化映射；SATA0–3 用 24 GiB 缓存，SATA4–6 用 80 GiB。仅后三个 mapper 加 p9 建 RAIDZ1，保存池 GUID。p5 留作 848 GiB 裸索引。 [I4 磁盘配置与建池](../storage/README.md#1-列出实体设备)
 3. 启用 `data-other.mount` 和 `z8-cold.service`。先跑 `bash host/run-step.sh i4-cold-aging "$HOME/z8-burnin"`，再清零 32 个索引并启用分片。另对三盘 ZFS 做同步写和 scrub。分别冷启验证少一块冷盘、少一块 ZFS 盘、整卡 D4800X 缺席，每轮用 `bash host/run-step.sh i4-status` 收日志，恢复后确认 32 个分片和三盘池 ONLINE。冷库持续写不达门槛可用全 XFS 回退。I4 配好后运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I4 单元和演练](../storage/README.md#4-i4-安装存储依赖链) · [全 XFS 回退](../buildbarn/README.md#全-xfs-回退)
 
 ### I5 · Buildbarn 与 Buck2
 
-先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装默认每路 2 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#5-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
+先确认两路 kmem 和 I4 确定的存储路径。装 Docker、复制配置与单元、建目录，然后安装默认每路 2 核的 CPU slice 和 runner drop-in，最后启用存储、调度器、Linux worker。按 [I5.3](../storage/README.md#i53-损坏对象24-分片降级和定时扫描) 演练坏对象与 24 分片、启用月扫、记录首次全量构建的四盘水位。先在 max 验缓存读写和按需物化，再接 mini、Mac，验证 Linux 与 Darwin 各有一个实际构建。使用全 XFS 回退时，从其独立目录和 Compose 项目启动。I5 验完运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I5 部署顺序](../storage/README.md#5-i5-交给-buildbarn) · [CPU 分核](CPU-PLACEMENT.md#生成并安装) · [Buck2 客户端](../buildbarn/README.md#buck2-客户端) · [mini 与 Mac](../buildbarn/EDGE.md)
 
 ### I6 · 正式推理和 CLI
 
@@ -84,4 +84,4 @@
 
 ### I7 · 冷启、混合负载与交付
 
-冷启后从另一台机器确认 SSH、存储和远程显示恢复。采用全 XFS 回退时，按 [I5 回退命令](../buildbarn/README.md#全-xfs-回退)启动相应 Compose 项目。手动启动 `z8-infer.service`，检查 API 就绪，再验证推理启停时普通任务的 CPU 集合变化，再用 I5 的 Buck2 与 I6 的推理档跑 **8 小时**混合负载。留存构建时间、首字延迟、decode、各盘和硬件错误增量、NUMA/PMem 计数。完成后运行 `sudo z8-recovery-backup`，并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)，解除正式安装时的临时包 hold。 [I7 命令](BURN-IN.md#i7-正式安装后的整机混合负载) · [内核与驱动维护](INSTALL.md#固定-ga-轨道并试启新内核)
+冷启后从另一台机器确认 SSH、存储和远程显示恢复。采用全 XFS 回退时，按 [I5 回退命令](../buildbarn/README.md#全-xfs-回退)启动相应 Compose 项目。手动启动 `z8-infer.service`，检查 API 就绪，再验证推理启停时普通任务的 CPU 集合变化，再用 I5 的 Buck2 与 I6 的推理档跑 **8 小时**混合负载。留存构建时间、首字延迟、decode、各盘和硬件错误增量、NUMA/PMem 计数及 `i5-cold-watermark` 记录的四盘最低空闲 cache 区数。完成后运行 `sudo z8-recovery-backup`，并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)，解除正式安装时的临时包 hold。 [I7 命令](BURN-IN.md#i7-正式安装后的整机混合负载) · [内核与驱动维护](INSTALL.md#固定-ga-轨道并试启新内核)

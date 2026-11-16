@@ -18,10 +18,8 @@ lba=$(blockdev --getss "$Z8_OPTANE")
     $(blockdev --getsize64 "$special") == "$((1500301910016 - 1184 * 1024**3 - 1048576 - 16384 - lba))" ]]
 systemctl is-active --quiet z8-dmzoned.service
 maps=(/dev/mapper/hc620-{4..6})
-for mapper in "${maps[@]}"; do
-    [[ -b "$mapper" && $(blockdev --getsize64 "$mapper") == 13999445901312 ]]
-    table=$(dmsetup table "${mapper##*/}")
-    [[ "$table" =~ ^0[[:blank:]]+27342667776[[:blank:]]+zoned[[:blank:]] ]]
+for slot in {4..6}; do
+    /usr/local/sbin/z8-storage check-map "$slot"
 done
 for device in "${maps[@]}" "$special"; do
     signatures=$(wipefs --noheadings --output TYPE -- "$device")

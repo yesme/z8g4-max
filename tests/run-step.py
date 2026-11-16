@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import re
 import signal
 import subprocess
 from tempfile import TemporaryDirectory
@@ -38,6 +39,13 @@ esac
 
     def run(*args, target=script):
         return subprocess.run(["bash", str(target), *args], env=env, text=True, capture_output=True, timeout=20)
+
+    public = set(re.findall(r"^  ([ti]\d-[\w-]+)\s", run("--help").stdout, re.M))
+    dispatch, allowed = script.read_text().split('case "$step" in')[1:]
+    steps = lambda body: set(re.findall(r"\b[ti]\d-[\w-]+(?=[|)])", body.split("\nesac")[0]))
+    assert public == steps(dispatch) == steps(allowed)
+    invalid = run("i4-cold-aging")
+    assert invalid.returncode == 2 and "Supply an existing log directory" in invalid.stdout
 
     result = run("t5-gpu-burn", "GPU-abcd")
     assert result.returncode == 0, result.stdout + result.stderr
@@ -80,12 +88,14 @@ esac
     (fixture_host / "inventory.sh").write_text(inv.replace("/sys/class/net/", f"{net}/"))
     stub(fake_bin / "lspci", "echo 'Ethernet controller: Intel I219-LM'")
     stub(fake_bin / "nmcli", "echo enp1s0")
+    stub(fake_bin / "ethtool", """printf 'Supported link modes: 100baseT/Full\\n    1000baseT/Full\\nSupported pause frame use: No\\n'""")
     stub(fake_bin / "ip", "echo default via 192.0.2.1")
     stub(fake_bin / "getent", "echo archive.ubuntu.com")
     stub(fake_bin / "apt-get", '[[ "$*" == "-o APT::Update::Error-Mode=any update" ]]')
     result = run("t1-network", target=fixture)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "driver=e1000e" in result.stdout and "negotiated speed=1000 Mb/s" in result.stdout
+    assert "Supported link modes: 100baseT/Full" in result.stdout and "1000baseT/Full" in result.stdout
 
     # Ctrl+C from a terminal signals every process in the foreground group.
     workload = fake_bin / "stress-ng"

@@ -25,6 +25,10 @@ default=$(GGML_CUDA_P2P=1 bash "$tmp/serve.sh")
 [[ "$default" == *' --cache-prompt '* && "$default" == *' --parallel 1 --ctx-size 131072 '* ]]
 [[ "$default" == *' --threads 4 --threads-batch 4 '* && "$default" == *' -ctk f16 -ctv f16 --kv-offload '* ]]
 [[ "$default" != *' --flash-attn '* ]]
+[[ "$default" == *' --moe-cache-cpu-share 0 '* && "$default" == *' --batch-size 512 --ubatch-size 32 '* ]]
+
+tuned=$(MOE_CACHE_CPU_SHARE=0.25 BATCH_SIZE=1024 UBATCH_SIZE=256 Z8_INFER_THREADS_BATCH=8 bash "$tmp/serve.sh")
+[[ "$tuned" == *' --moe-cache-cpu-share 0.25 '* && "$tuned" == *' --threads 4 --threads-batch 8 --batch-size 1024 --ubatch-size 256 '* ]]
 
 dual=$(SLOTS=2 KV_TYPE=q8_0 Z8_NVLINK_P2P=1 bash "$tmp/serve.sh")
 [[ "$dual" == 'p2p=1 '* && "$dual" == *' --parallel 2 --ctx-size 131072 '* ]]
@@ -54,4 +58,8 @@ reject 'positive SLOTS' SLOTS=18446744073709551616
 reject 'positive SLOT_CTX' SLOT_CTX=-1
 reject 'KV_TYPE must be' KV_TYPE=fp8
 reject 'KV_OFFLOAD must be' KV_OFFLOAD=2
+reject 'between 0 and 1' MOE_CACHE_CPU_SHARE=1.1
+reject 'positive BATCH_SIZE' BATCH_SIZE=0
+reject 'must not exceed' UBATCH_SIZE=513
+reject 'positive Z8_INFER_THREADS_BATCH' Z8_INFER_THREADS_BATCH=-1
 echo 'llama.cpp launcher tests passed: 128K single-slot default, optional slots, KV placement, and context bounds.'

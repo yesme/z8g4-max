@@ -41,7 +41,14 @@ with TemporaryDirectory() as directory:
     (storage / "cold-layout.json").write_text('{"active":["sata0-0"]}\n')
     infer = root / "home/jackywang/.config/z8-infer"
     infer.mkdir(parents=True)
-    (infer / "env.sh").write_text("export SLOTS=2\nexport KV_TYPE=q8_0\nexport KV_OFFLOAD=0\nexport DEEPSEEK_API_KEY=fixture-secret\n")
+    (infer / "env.sh").write_text(
+        'export SLOTS=2\nexport KV_TYPE="q8_0"\nexport KV_OFFLOAD=0\n'
+        "export DS41_GGUF='/srv/pmem-model/file name.gguf'\n"
+        'export UBATCH_SIZE=256\nexport DEEPSEEK_API_KEY=fixture-secret\n'
+        'export MOE_CACHE_CPU_SHARE="$(false)"\n'
+    )
+    launch = infer / "launch.sh"
+    launch.write_text("XOL_TOKENIZER_DIR=/srv/pmem-model/tokenizer\nmax_tokens=128\n")
     (root / "etc/ssh").mkdir(parents=True)
     (root / "etc/ssh/ssh_host_ed25519_key").write_text("fixture-secret")
     wifi = root / "etc/NetworkManager/system-connections"
@@ -61,8 +68,8 @@ with TemporaryDirectory() as directory:
     stub(fake_bin / "findmnt", """
 if [[ "$2" == -S ]]; then exit 1; fi
 case "$3" in
-    "$Z8_FIXTURE/boot") echo /dev/test2 ;;
-    "$Z8_FIXTURE/boot/efi") echo /dev/test1 ;;
+    "$Z8_FIXTURE/boot") [[ ! -e "$Z8_FIXTURE/no-boot" ]]; echo /dev/test2 ;;
+    "$Z8_FIXTURE/boot/efi") [[ ! -e "$Z8_FIXTURE/no-boot" ]]; echo /dev/test1 ;;
     /) echo /dev/test-md ;;
     *) exit 2 ;;
 esac
@@ -98,6 +105,12 @@ echo mounted >> "$Z8_FIXTURE/mount.log"
 unlink "$1"
 mkdir "$1"
 echo unmounted >> "$Z8_FIXTURE/mount.log"
+""")
+    stub(fake_bin / "runuser", """
+[[ $1 == -u && $2 == jackywang && $3 == -- ]]
+if [[ $(readlink -f -- "${@: -1}") == "$Z8_FIXTURE/root-only" ]]; then exit 1; fi
+shift 3
+exec "$@"
 """)
     stub(fake_bin / "sgdisk", 'echo fixture-gpt > "${1#--backup=}"')
     for name in ("mdadm", "xfs_info", "efibootmgr", "apt-mark", "dpkg", "sync", "logger"):
@@ -172,12 +185,39 @@ esac
     reject(b"Inline credentials detected", "--stdout")
     conf.unlink()
 
+    launch.write_text("tokenizer=ok; 'tokenizer_api_key': fixture-secret\n")
+    reject(b"Inline credentials detected", "--stdout")
+    launch.unlink()
+    forbidden = root / "root-only"
+    forbidden.write_text("private-readable-by-root-only")
+    launch.symlink_to(forbidden)
+    deployment = root / "opt/z8-kit/buildbarn"
+    deployment.mkdir(parents=True)
+    (deployment / "config.jsonnet").symlink_to(forbidden)
+    (root / "no-boot").touch()
+    partial = run("--stdout")
+    assert partial.returncode == 0, partial.stderr.decode()
+    with tarfile.open(fileobj=BytesIO(partial.stdout)) as archive:
+        assert b"status=unavailable" in archive.extractfile("./boot-check.txt").read()
+        assert "./boot.sha256" not in archive.getnames()
+        assert not any(name.endswith(("/launch.sh", "/config.jsonnet")) for name in archive.getnames())
+        assert archive.extractfile("./storage/mdadm-scan.txt").read()
+    reject(b"Mount the FIT", "backup")
+    (root / "no-boot").unlink()
+    launch.unlink()
+    launch.write_text("XOL_TOKENIZER_DIR=/srv/pmem-model/tokenizer\nmax_tokens=128\n")
+
     exported = run("--stdout")
     assert exported.returncode == 0, exported.stderr.decode()
     with tarfile.open(fileobj=BytesIO(exported.stdout)) as archive:
         assert all(b"fixture-secret" not in archive.extractfile(m).read() for m in archive if m.isfile())
         env_file = next(name for name in archive.getnames() if name.endswith("z8-infer/env.sh"))
-        assert archive.extractfile(env_file).read() == b"export SLOTS=2\nexport KV_TYPE=q8_0\nexport KV_OFFLOAD=0\n"
+        assert archive.extractfile(env_file).read() == (
+            b"export SLOTS=2\nexport KV_TYPE=q8_0\nexport KV_OFFLOAD=0\n"
+            b"export DS41_GGUF=/srv/pmem-model/file\\ name.gguf\nexport UBATCH_SIZE=256\n"
+        )
+        launch_file = next(name for name in archive.getnames() if name.endswith("z8-infer/launch.sh"))
+        assert b"XOL_TOKENIZER_DIR=" in archive.extractfile(launch_file).read()
 
     def history_entry(package, *, failed=False):
         with history.open("a") as log:

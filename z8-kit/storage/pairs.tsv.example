@@ -1,4 +1,0 @@
-# host-managed HDD by-id<TAB>optional conventional cache partition by-id
-# For independent mapping, omit the second column.
-# /dev/disk/by-id/REPLACE-HC620-01
-# /dev/disk/by-id/REPLACE-HC620-02	/dev/disk/by-id/REPLACE-D4800X-part1

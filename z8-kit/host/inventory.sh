@@ -24,6 +24,13 @@ network_hardware() {
         address=$(<"$nic/address")
         printf 'Interface %s: driver=%s mac=%s\n' "${nic##*/}" "${driver##*/}" "$address"
         if [[ -e "$nic/phy80211" || -d "$nic/wireless" ]]; then continue; fi
+        if command -v ethtool >/dev/null; then
+            LC_ALL=C ethtool "${nic##*/}" 2>/dev/null | awk '
+                /Supported link modes:/ { modes=1 }
+                modes && (/Supported link modes:/ || /^[[:blank:]]+[0-9]+base/) { print; next }
+                modes { exit }
+            ' || true
+        fi
         if link_speed=$(cat "$nic/speed" 2>/dev/null) && [[ "$link_speed" =~ ^[1-9][0-9]*$ ]]; then
             duplex=$(cat "$nic/duplex" 2>/dev/null) || duplex=unknown
             printf '  negotiated speed=%s Mb/s duplex=%s\n' "$link_speed" "$duplex"

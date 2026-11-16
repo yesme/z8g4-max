@@ -2,7 +2,7 @@
 
 2026 年 11 月 16 日 · v2.22 实施版
 
-主机名 `jackywang-xubuntu-max`，登录用户 `jackywang`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。槽 5 的实物为 Intel D4800X 1.5 TB U.2，已硬改为单口 Gen3 x4，装在 PCIe 转接卡上并加风扇。HC620 与 D4800X 组成可重建的冷 CAS 和归档池，冷索引放在 D4800X 的独立 XFS。模型从首装开始直接放在 App Direct。PMem 从 T3 起使用正式条带。
+主机名 `jackywang-xubuntu-max`，登录用户 `jackywang`。按双 8269CY、192 GiB DDR4、12×128 GiB PMem、4×V100 16 GB 和给定的槽位、SATA 接法部署。P4618 的 RAID0/XFS 承担系统、工作树和 Buildbarn 热层。槽 5 的实物为 Intel D4800X 1.5 TB U.2，已硬改为单口 Gen3 x4，装在 PCIe 转接卡上并加风扇。SATA0–3 与 D4800X p5 裸索引组成可重建的冷 CAS。SATA4–6 与 p9 special 组成归档池。模型从首装开始直接放在 App Direct。PMem 从 T3 起使用正式条带。
 
 将本仓库克隆或解压到目标 Linux 的普通用户目录。所有相对路径的操作默认从 `z8-kit` 根目录执行。机旁操作从 [上机操作顺序](z8-kit/host/FIRST-BOOT.md) 开始。本页第 1 节供查看整条路线，第 2–3 节保存硬件与系统配置依据。
 
@@ -100,11 +100,11 @@ HP 的公开 F10 手册未确认 Z8 G4 能让硬盘分批起转，供电按七�
 - I1 从三星 T3 的 Ventoy 启动 Xubuntu Desktop，在图形安装器导入填好的 `autoinstall.yaml`。回 Live 终端核对 FIT 和两个 P4618 端点的 `ID_SERIAL`，执行 `sudo touch /run/z8-storage-confirmed` 放行，再回图形界面确认安装。FIT 上的 GRUB 读入内核与 Dracut 初始化镜像，后者组装 P4618 根阵列。 [安装命令](z8-kit/host/INSTALL.md)
 
 - `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/jackywang` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS 和热 CS（块文件与索引）落 P4618。冷 CS 裸索引在 D4800X p5，冷分片状态在 P4618。单独在 `/srv/pmem-model` 挂 PMem XFS DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在安装配置里显式设 `crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
-- 首启为根 XFS 写 `noatime,nodiscard`，md 实测透出 discard 时用周期 TRIM。FIT 的 `/boot`、ESP 用 `noatime`，从周期 TRIM 排除。PMem 模型 XFS 用 `dax=always,noatime,nodiscard`。两个 ZFS 单元按依赖链以 `rw` 挂载，压缩、atime 和同步写策略保存在 dataset 属性。 [全机挂载参数及核对命令](z8-kit/host/MOUNTS.md) · [fstab 样例](z8-kit/host/fstab-boot.example)
+- 首启为根 XFS 写 `noatime,nodiscard`，md 实测透出 discard 时用周期 TRIM。FIT 的 `/boot`、ESP 用 `noatime`，从周期 TRIM 排除。PMem 模型 XFS 用 `dax=always,noatime,nodiscard`。`data-other.mount` 按依赖链以 `rw` 挂载，压缩、atime 和同步写策略保存在 dataset 属性。 [全机挂载参数及核对命令](z8-kit/host/MOUNTS.md) · [fstab 样例](z8-kit/host/fstab-boot.example)
 
 ### HC620 与 D4800X
 
-七块 HC620 保留 Linux 7.0 默认 I/O 调度器。每盘盘头的 524 个 conventional 区照常由 dm-zoned 管理。槽 5 的 D4800X 承接随机写缓冲，普通区有条件可作后台回收目的地。T4 确认 SATA 4Kn、`host-managed` 和 256 MiB 区。I4 通过 SATA by-id 和同卡 GPT 标签识别配对。`dmzadm --format` 只用于首次或明确重建，冷盘 `--seq=96`，ZFS 盘 `--seq=320`，两组 mapper 均为 52,152 个 chunk。 [分区和首次初始化](z8-kit/storage/README.md#2-建-gpt-与初始化-dm-zoned)
+七块 HC620 保留 Linux 7.0 默认 I/O 调度器。每盘盘头的 524 个 conventional 区照常由 dm-zoned 管理。槽 5 的 D4800X 承接随机写缓冲，普通区有条件可作后台回收目的地。T4 确认 SATA 4Kn、`host-managed` 和 256 MiB 区。I4 通过 SATA by-id 和同卡 GPT 标签识别配对。`dmzadm --format` 只用于首次或明确重建，冷盘 `--seq=96`，ZFS 盘 `--seq=320`，两组 mapper 接受 52,080–52,156 个完整 chunk，冷盘上固定切 52,080 个。 [分区和首次初始化](z8-kit/storage/README.md#2-建-gpt-与初始化-dm-zoned)
 
 - **冷 CAS**。SATA0–3 位于机箱原生盘位，单盘八片，每片约 1.59 TiB。D4800X p1–p4 各 24 GiB，p5 的 848 GiB 裸索引也切 32 个。分片使用稳定的 dm-linear 名称。冷盘临时缺席时按 24 个分片运行，其余冷盘和 ZFS 可继续服务。更换盘只重建该盘的八份索引及 checkpoint。月度扫描从逻辑分片定位读错误。
 - **普通数据**。SATA4–6 位于三盘笼，分别配 D4800X p6–p8 的 80 GiB 缓存，组成三盘 RAIDZ1。p9 取尾部约 213.26 GiB 作 special，预计有 2 GiB 内嵌 ZIL。`z8data/other` 使用 `recordsize=1M,special_small_blocks=16K,compression=zstd-3`，`z8data/reserve` 预留初始可用量的 10%。保留 `autotrim=on`、每月 scrub、ARC 2–8 GiB。单 special 所在整卡损坏时从独立备份恢复。 [建池与属性](z8-kit/storage/README.md#3-建-zfs-池与-legacy-mount-数据集)
@@ -180,7 +180,7 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 
 1. 先在 Linux 的项目目录合入样例 execution platform，保持实际工具链和目标标签。按 [Buck2 daemon 配置](z8-kit/buildbarn/README.md#装进-daemon-读取的配置)安装客户端参数，以 `buck2 build --remote-only //app:target` 构建一个项目内真实目标，替换示例标签。在同机的第二个干净工作树构建同一提交，检查 `buck2 log show` 是否显示远端 AC 命中。用同一个工作树立刻重复容易命中本地 daemon 或已有产物，会掩盖远端行为。
 2. 按 [Linux 与 macOS 构建农场](z8-kit/buildbarn/EDGE.md) 接入 mini 和 Mac。一条命令请求项目既有的 Linux、Darwin 测试目标，核两种平台各由正确 worker 执行。断开到 max 的连接时，启用本机执行入口。
-3. 在 Linux 两个工作树对同一 commit 跑第一次回读和热回读，另选一批此前从未上传的目标测写。主机同时采 `iostat -xz 2`、`zpool iostat -v z8data 2` 和 Buildbarn 日志。冷读应看到后端读取，热读应主要由 P4618 承担。上传落冷 CS，首轮缓冲由 dm-zoned 吸收。用一个远程执行产物验证延迟物化。参数、缓存目录、worker 命令见 [Buildbarn 配置手册](z8-kit/buildbarn/README.md)。
+3. 在 Linux 两个工作树对同一 commit 跑第一次回读和热回读，另选一批此前从未上传的目标测写。主机同时采 `iostat -xz 2`、冷库水位日志（`i5-cold-watermark`）和 Buildbarn 日志。冷读应看到后端读取，热读应主要由 P4618 承担。上传落冷 CS，首轮缓冲由 dm-zoned 吸收。用一个远程执行产物验证延迟物化。参数、缓存目录、worker 命令见 [Buildbarn 配置手册](z8-kit/buildbarn/README.md)。
 
 ## 7. 远程入口
 
@@ -206,4 +206,4 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 
 在有 `systemctl` 和 `apt-config` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖两条依赖链、分片缺席、索引和数据切片、错误注入扫描、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
 
-此前部署包已在 Ubuntu 26.04 用户空间用占位可执行文件检查 systemd 依赖，也核过官方 Live 包清单、Ubuntu 7.0.0-43 amd64 相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、整机安装、BIOS、PMem 上线时间、数据池和推理吞吐均需在目标 Z8 上确认。
+此前部署包已在 Ubuntu 26.04 用户空间用占位可执行文件检查 systemd 依赖，也核过官方 Live 包清单、Ubuntu 7.0.0-43 amd64 相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、整机安装、BIOS、PMem 上线时间、裸冷库、dm-linear 切片、介质错误扫描、三盘池和推理吞吐均需在目标 Z8 上确认。

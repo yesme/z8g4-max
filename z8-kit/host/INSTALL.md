@@ -178,7 +178,7 @@ findmnt -T /srv/work/jackywang -o SOURCE,TARGET,FSTYPE
 findmnt -T /srv/buildbarn -o SOURCE,TARGET,FSTYPE
 ```
 
-两个查询应显示 P4618 的 md 根卷、挂载点 `/` 和 `xfs`。I5 创建并按容器权限配置 `/srv/buildbarn/tiered`。I4 用 `sudo install -d -m 0755 /srv/pmem-model` 创建空的挂载点，随后挂载 PMem XFS DAX。只有 `findmnt -rn -M /srv/pmem-model -t xfs -O dax=always` 成功才下载模型或建 KV 文件目录。卸载后该路径再次指向 P4618 上的空目录。XFS reflink 的本地检查见 [Buck2 与工作树](../buildbarn/README.md#git-worktree-与-xfs-reflink)。
+两个查询应显示 P4618 的 md 根卷、挂载点 `/` 和 `xfs`。I4 创建 `/srv/buildbarn/tiered`，I5 配置容器目录权限。I4 用 `sudo install -d -m 0755 /srv/pmem-model` 创建空的挂载点，随后挂载 PMem XFS DAX。只有 `findmnt -rn -M /srv/pmem-model -t xfs -O dax=always` 成功才下载模型或建 KV 文件目录。卸载后该路径再次指向 P4618 上的空目录。XFS reflink 的本地检查见 [Buck2 与工作树](../buildbarn/README.md#git-worktree-与-xfs-reflink)。
 
 ## 安装并锁定 NVIDIA 显卡驱动
 
@@ -250,6 +250,12 @@ dpkg-query -W "linux-image-$old_abi" "linux-modules-$old_abi" \
 # 把上面确实已安装的四项标为 manual，防止自动清理回退 ABI。
 sudo apt-mark manual "linux-image-$old_abi" "linux-modules-$old_abi" \
     "linux-main-modules-zfs-$old_abi" "linux-modules-nvidia-580-$old_abi"
+```
+
+先重启一次确认已保存的旧内核能从 FIT 启动，核 `uname -r` 和 SSH。确认后先刷新这次手工修改的基线，再模拟升级。
+
+```bash
+sudo z8-recovery-backup --refresh-boot
 sudo apt update
 sudo apt-get -s dist-upgrade
 # 把新 ABI 填作 7.0.0-N-generic，包含末尾的 -generic。

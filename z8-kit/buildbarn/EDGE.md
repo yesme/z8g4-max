@@ -120,7 +120,7 @@ done
 
 ## 权威冷库重建后的边缘 CMS
 
-max 重建一个或多个冷分片后，mini 和 Mac 在重新接入前清空热盘上的 CMS 清单缓存。先停各节点的 cache：mini 从 `z8-kit/buildbarn` 按上线步骤设好 `BB_EDGE_HOT`、`BB_EDGE_COLD`、`BB_EDGE_WORK`、`BB_DATA_DIR`，运行 `sudo --preserve-env=BB_EDGE_HOT,BB_EDGE_COLD,BB_EDGE_WORK,BB_DATA_DIR docker compose -p z8-edge -f compose.edge-linux.yaml stop cache`；Mac 用 `launchctl bootout "gui/$(id -u)/local.z8.farm.cache"`。核对 `HOT` 是 `edge-site.json` 的热卷目录且该卷已挂载，然后删除该目录下 `cms/blocks`、`cms/key_location_map` 和 `cms/persistent_state` 的内容，保留目录本身。按前述节点的启动步骤恢复 cache。其它 CAS 缓存可继续使用。
+max 重建一个或多个冷分片，或改变有效分片名单后，mini 和 Mac 在重新接入前清空热盘上的 CMS 清单缓存。先停各节点的 cache：mini 从 `z8-kit/buildbarn` 按上线步骤设好 `BB_EDGE_HOT`、`BB_EDGE_COLD`、`BB_EDGE_WORK`、`BB_DATA_DIR`，运行 `sudo --preserve-env=BB_EDGE_HOT,BB_EDGE_COLD,BB_EDGE_WORK,BB_DATA_DIR docker compose -p z8-edge -f compose.edge-linux.yaml stop cache`；Mac 用 `launchctl bootout "gui/$(id -u)/local.z8.farm.cache"`。核对 `HOT` 是 `edge-site.json` 的热卷目录且该卷已挂载，然后删除该目录下 `cms/blocks`、`cms/key_location_map` 和 `cms/persistent_state` 的内容，保留目录本身。按前述节点的启动步骤恢复 cache。其它 CAS 缓存可继续使用。
 
 ## Buck2 上线
 

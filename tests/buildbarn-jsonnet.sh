@@ -7,7 +7,7 @@ mkdir "$tmp/config"
 cp z8-kit/buildbarn/*.{jsonnet,libsonnet} "$tmp/config/"
 jq '. + {hostname:"fixture-mac", hot:"/hot", cold:"/cold", work:"/work", socket:"/work/runner.sock"}' \
     z8-kit/buildbarn/edge-site.json.example > "$tmp/config/edge-site.json"
-jq -n '{shardCount:32,dataBytes:1749930737664,indexBytes:28454158336,
+jq -n '{shardCount:32,dataBytes:1747514818560,indexBytes:28454158336,
     active:[range(4) as $disk | range(8) as $shard | "sata\($disk)-\($shard)"]}' > "$tmp/cold-layout.json"
 
 for source in "$tmp"/config/*.jsonnet; do
@@ -35,7 +35,7 @@ jq -e '
           .blocksOnBlockDevice.source == {devicePath:("/dev/z8-cold-" + $name)}
           and .keyLocationMap.onBlockDevice == {devicePath:("/dev/z8-index-" + $name)}
           and .persistent.stateDirectoryPath == ("/store/cold/" + $name + "/persistent_state")
-          and .oldBlocks == 22 and .currentBlocks == 66 and .newBlocks == 3
+          and .oldBlocks == 22 and .currentBlocks == 65 and .newBlocks == 3
           and .blocksOnBlockDevice.spareBlocks == 3))))
 ' "$tmp/config/tiered-cache.rendered.json" >/dev/null
 jq '.active |= map(select(startswith("sata1-") | not))' "$tmp/cold-layout.json" > "$tmp/degraded.json"
