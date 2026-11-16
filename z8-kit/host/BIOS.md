@@ -38,7 +38,7 @@
 
 `Main → System Information` 显示两颗 Xeon Platinum 8269CY、192 GB ECC RDDR4 和 System BIOS `P60 v03.00 04/15/2026`。PMem 拔出后内存总量正是 12 条 DDR4。
 
-**没拍到、T1 仍要核对的项。** `Show Advanced System Information` 里的 ME 版本与 System Board ID、Secure Boot Configuration、VTx 与 VTd、Remote Management Options 的 AMT、TPM、主显示槽位，以及 System Options 第二页。
+**没拍到、T1 仍要核对的项。** `Show Advanced System Information` 里的 ME 版本与 System Board ID、Secure Boot Configuration、VTx 与 VTd、TPM、主显示槽位，以及 System Options 第二页。AMT 已设为 Disable。
 
 **`Reset Factory Defaults on Battery Loss` 到货为 `Apply Default Settings`。** 二手机的纽扣电池寿命未知。电池失效后 F10 回到出厂默认，上面四项和槽 2/3 的 `x8x8` 都会丢，sSATA 也会重新启用。T1 配好后先执行 `Main → Save Custom Defaults`，再用 `Main → Replicated Setup` 把设置导出到 U 盘。设置丢失后用 `Apply Custom Defaults and Exit` 一步恢复 Main 和 Advanced 两页，Security 页的项要另行核对。条件允许时换一颗新的 CR2032。
 
@@ -67,7 +67,7 @@ PMem 的料号、原配置和插回时的注意事项见 [PMem 的到货状态](
 | Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），sSATA Controller Disable，PCIe MMIO Assignment Mode Auto，PCIe Training Reset Disable，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 打开，AX210 需要蓝牙时打开对应内部 USB；拔卡后可拔该内部 USB 线。本机另列 sSATA0、sSATA1 两个口，均未使用，随 sSATA Controller 一起停用。Thunderbolt 两项保持默认，整机不装 Thunderbolt 卡 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
-| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable，Slot 6 与两个 Personality Slot 保持 Disable |
+| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable：P620、V100 和两块 NVMe 都不用可调整 BAR，V100 的 16 GiB 显存 BAR 是固定大小，靠 `PCIE MMIO Assignment Mode = Auto` 分配 64 位地址；T5 的内核日志若报 BAR 分配失败再回来看这两项。Slot 6 与两个 Personality Slot 保持 Disable |
 | Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率。本机 NUMA 项已勾选并灰显。Isoc Mode Disable、Workload Configuration Balanced、Performance Control Performance Mode 保持到货值 |
 | Advanced → Power Management Options | `PCI Express Power Management = Disable`，`SATA Power Management = Disable`。T1 一次设好，验机和正式运行沿用。Intel Speed Select Disabled、Hardware P-States Enable、`OS Controls EPB`、Idle Power Savings Extended 保持到货值 |
 | Advanced → Built-In Device Options | Embedded LAN Controller (AMT) 与 Intel X722 Embedded LAN Port 保持勾选。两项 Idle Fan Speed 增量到货为 0；T4 的 NVMe 温度偏高时调高 `Increase PCIe Idle Fan Speed(%)` 再测 |
