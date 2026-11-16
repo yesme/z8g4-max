@@ -1,5 +1,5 @@
 [Unit]
-Description=Scan and repair logical read errors in Z8 cold CAS
+Description=Scan and repair logical read errors on all Z8 cold CAS disks
 Requisite=z8-cold.service
 PartOf=z8-cold.service
 After=z8-cold.service

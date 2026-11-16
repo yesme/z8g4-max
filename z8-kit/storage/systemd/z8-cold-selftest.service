@@ -1,0 +1,8 @@
+[Unit]
+Description=Start SMART extended self-tests on the Z8 cold CAS disks
+RequiresMountsFor=/etc/z8-storage /usr/local/sbin
+
+[Service]
+Type=oneshot
+StateDirectory=z8-cold-health
+ExecStart=/usr/local/sbin/z8-cold-health selftest

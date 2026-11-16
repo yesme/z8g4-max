@@ -152,13 +152,16 @@ reject unmap
 root="$tmp/systemd"
 units="$root/etc/systemd/system"
 mkdir -p "$units"
-install -m 0644 z8-kit/storage/systemd/{data-other.mount,z8-zpool.service,z8-dmzoned.service,z8-cold.service,z8-cold-scan.timer,z8-cold-scan.service,z8-buildbarn.service} "$units/"
+install -m 0644 z8-kit/storage/systemd/{data-other.mount,z8-zpool.service,z8-dmzoned.service,z8-cold.service,z8-cold-scan.service,z8-cold-scan@.service,z8-cold-health.service,z8-cold-health.timer,z8-cold-selftest.service,z8-cold-selftest.timer,z8-buildbarn.service} "$units/"
 for target in multi-user timers; do printf '[Unit]\nDescription=Target fixture\n' > "$units/$target.target"; done
-systemctl --root "$root" --quiet enable data-other.mount z8-cold.service z8-cold-scan.timer
+systemctl --root "$root" --quiet enable data-other.mount z8-cold.service z8-cold-health.timer z8-cold-selftest.timer
 [[ -L "$units/multi-user.target.wants/data-other.mount" &&
     -L "$units/multi-user.target.wants/z8-cold.service" &&
     -L "$units/z8-zpool.service.wants/data-other.mount" &&
-    -L "$units/timers.target.wants/z8-cold-scan.timer" ]]
+    -L "$units/timers.target.wants/z8-cold-health.timer" &&
+    -L "$units/timers.target.wants/z8-cold-selftest.timer" ]]
+grep -Fxq 'ExecStart=/usr/bin/flock /run/lock/z8-cold-scan.lock /usr/local/sbin/z8-cold-scan %i' "$units/z8-cold-scan@.service"
+grep -Fxq 'RuntimeDirectory=z8-bb-cache' "$units/z8-buildbarn.service"
 grep -Fxq 'BindsTo=z8-dmzoned.service' "$units/z8-cold.service"
 grep -Fxq 'BindsTo=z8-cold.service' "$units/z8-buildbarn.service"
 grep -Fxq 'BindsTo=z8-zpool.service' "$units/data-other.mount"

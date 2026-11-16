@@ -19,7 +19,7 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 
 `z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，推理主线程和同核 HT 伙伴全部归还。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。服务常驻时即使暂时没有 API 请求也保留核心。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
-`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。默认推理运行时普通任务共享 96 个逻辑 CPU。runner 配 88 个活动 action 和 88 CPU 时间配额，给系统和协调进程留 8 个逻辑 CPU 的时间预算。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
+`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。默认推理运行时普通任务共享 96 个逻辑 CPU。runner 配 88 个活动 action，不设 CPU 时间配额：配额用尽时整个 runner cgroup 在该周期剩余时间停转，多线程的链接和编译最先受影响。系统、存储和协调进程靠同级 slice 的权重取得份额。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
 
 推理 slice 与 service 都设 `MemoryLow=160G`。两条是父子层级的同一尽力保护，按实际用量生效，降低它会改变回收次序。CUDA 长期 pin 的页本身不可回收。两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
 
@@ -105,7 +105,7 @@ exec /usr/bin/bash /path/to/z8-kit/inference/serve-llama.sh
 
 **I6 触发 Xolotl 回退时的 `launch.sh`**
 
-暂停推理服务，将生成命令加 `--infer-per-socket 6` 后重新安装。先给每路 5 个 CPU expert worker，另留 1 核给控制线程。若同时跑构建，把 [runner 配额](../buildbarn/compose.worker.yaml) 和 [worker 并发](../buildbarn/shared-worker.jsonnet) 都设成 72，再重启 worker 服务，给系统留 8 个逻辑 CPU 的预算。llama.cpp 若调至每路 4 核，按同样方式使用 80；回到每路 2 核时恢复 88。
+暂停推理服务，将生成命令加 `--infer-per-socket 6` 后重新安装。先给每路 5 个 CPU expert worker，另留 1 核给控制线程。若同时跑构建，把 [worker 并发](../buildbarn/shared-worker.jsonnet) 设成 72，再重启 worker 服务。llama.cpp 若调至每路 4 核，按同样方式使用 80；回到每路 2 核时恢复 88。
 
 Buster 上游启动器会另用 `systemd-run --user` 创建 scope，使实际引擎回到 `user.slice`。在固定 SHA 的 checkout 中先运行 `git apply --check /path/to/z8-kit/inference/buster-inherit-scope.patch`，再执行同路径的 `git apply`。配套补丁保留锁和默认路径，下面的环境变量让引擎继承外层 cgroup。`STRATA_POOL_CORES` 使用生成的 worker 清单，生成的 Xolotl profile 保持 `--threads` 未设，让引擎按列表决定 worker 数。`STRATA_ENGINE_NICE=0` 关闭 launcher 对子进程额外增加 nice 的逻辑，让它继承 service 的 `Nice=-5`。 [Xolotl Buster launcher](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/buster/buster-engine.sh) · [DS4.1 worker 参数](https://github.com/Indras-Mirror/Xolotl/blob/main/tools/v41/engine/ds41_generate.cpp) · [Xolotl 的 engine nice 逻辑](https://github.com/Indras-Mirror/Xolotl/blob/main/serve/server.py#L4053)
 

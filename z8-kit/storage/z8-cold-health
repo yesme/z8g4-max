@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""Start drive self-tests and scan a cold CAS disk only when it reports media trouble."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+CONFIG = Path(os.environ.get("Z8_STORAGE_CONFIG", "/etc/z8-storage"))
+STATE = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/z8-cold-health"))
+DISKS = tuple(f"sata{i}" for i in range(4))
+MEDIUM_ERROR = re.compile(r"critical medium error, dev (sd[a-z]+),")
+READ_FAILURE = 7
+IN_PROGRESS = 15
+
+
+def cold_devices():
+    """Return {sataN: whole-disk by-id path} from the first four hybrid.tsv rows."""
+    devices = {}
+    for line in (CONFIG / "hybrid.tsv").read_text().splitlines():
+        fields = line.split("\t")
+        if len(fields) == 3 and (match := re.fullmatch(r"hc620-([0-3])", fields[0])):
+            devices[f"sata{match.group(1)}"] = fields[1]
+    if tuple(devices) != DISKS:
+        raise ValueError("hybrid.tsv must list hc620-0 to hc620-3 in order")
+    return devices
+
+
+def smart(device):
+    result = subprocess.run(["smartctl", "--json=c", "-a", device], capture_output=True, text=True)
+    # Bits 0 and 1 report a bad command line or a device that could not be opened.
+    if result.returncode & 3:
+        raise OSError(f"smartctl failed for {device}: {result.stderr.strip() or result.stdout.strip()}")
+    return json.loads(result.stdout)
+
+
+def failed_selftests(report):
+    table = report.get("ata_smart_self_test_log", {}).get("standard", {}).get("table", [])
+    return sorted([entry.get("lifetime_hours", 0), entry.get("lba", -1)] for entry in table
+                  if entry.get("status", {}).get("value", 0) >> 4 == READ_FAILURE)
+
+
+def pending_sectors(report):
+    for attribute in report.get("ata_smart_attributes", {}).get("table", []):
+        if attribute.get("id") == 197:
+            return attribute.get("raw", {}).get("value", 0)
+    return 0
+
+
+def selftest_running(report):
+    status = report.get("ata_smart_data", {}).get("self_test", {}).get("status", {})
+    return status.get("value", 0) >> 4 == IN_PROGRESS
+
+
+def reasons(report, previous, medium_error):
+    """Return why this disk needs a logical scan, and its new remembered state."""
+    failures = failed_selftests(report)
+    pending = pending_sectors(report)
+    found = []
+    if medium_error:
+        found.append("kernel medium error")
+    if previous is not None and any(entry not in previous["selftests"] for entry in failures):
+        found.append("self-test read failure")
+    # A used disk's old self-test log is history, but sectors pending now are not.
+    if pending > (previous["pending"] if previous else 0):
+        found.append(f"{pending} pending sectors")
+    return found, {"pending": pending, "selftests": failures}
+
+
+def kernel_medium_errors():
+    """Return kernel device names with medium errors logged since the previous check."""
+    output = subprocess.check_output(
+        ["journalctl", "-k", "-q", "--no-pager", "-o", "cat", f"--cursor-file={STATE / 'journal.cursor'}"],
+        text=True)
+    return {match.group(1) for line in output.splitlines() if (match := MEDIUM_ERROR.search(line))}
+
+
+def check(devices):
+    state_path = STATE / "state.json"
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    bad_devices = kernel_medium_errors()
+    status = 0
+    for disk, device in devices.items():
+        try:
+            report = smart(device)
+        except (OSError, ValueError) as error:
+            print(f"{disk}: {error}", file=sys.stderr, flush=True)
+            status = 1
+            continue
+        found, state[disk] = reasons(report, state.get(disk), os.path.basename(os.path.realpath(device)) in bad_devices)
+        if found:
+            print(f"{disk}: starting logical scan ({', '.join(found)})", flush=True)
+            subprocess.run(["systemctl", "start", "--no-block", f"z8-cold-scan@{disk}.service"], check=True)
+        else:
+            print(f"{disk}: no new media evidence", flush=True)
+    temporary = state_path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, indent=2) + "\n")
+    temporary.replace(state_path)
+    return status
+
+
+def selftest(devices):
+    status = 0
+    for disk, device in devices.items():
+        try:
+            if selftest_running(smart(device)):
+                print(f"{disk}: self-test already running", flush=True)
+                continue
+            subprocess.run(["smartctl", "-q", "errorsonly", "-t", "long", device], check=True)
+            print(f"{disk}: extended self-test started", flush=True)
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            print(f"{disk}: {error}", file=sys.stderr, flush=True)
+            status = 1
+    return status
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=["check", "selftest"])
+    args = parser.parse_args()
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        sys.exit({"check": check, "selftest": selftest}[args.action](cold_devices()))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        sys.exit(f"z8-cold-health: {error}")

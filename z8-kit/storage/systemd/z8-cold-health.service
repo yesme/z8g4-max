@@ -1,0 +1,9 @@
+[Unit]
+Description=Check Z8 cold CAS disks for new media errors
+After=z8-cold.service
+RequiresMountsFor=/etc/z8-storage /usr/local/sbin
+
+[Service]
+Type=oneshot
+StateDirectory=z8-cold-health
+ExecStart=/usr/local/sbin/z8-cold-health check

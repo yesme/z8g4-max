@@ -1,0 +1,12 @@
+[Unit]
+Description=Scan and repair logical read errors on cold CAS disk %i
+Requisite=z8-cold.service
+PartOf=z8-cold.service
+After=z8-cold.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/flock /run/lock/z8-cold-scan.lock /usr/local/sbin/z8-cold-scan %i
+TimeoutStartSec=infinity
+Nice=10
+IOSchedulingClass=idle

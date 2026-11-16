@@ -23,6 +23,8 @@ services:
     cpus: 16
     mem_limit: 40g
     memswap_limit: 40g
+    tmpfs:
+      - /tmp:exec,mode=1777,size=8g
     restart: unless-stopped
     volumes:
       - .:/config:ro

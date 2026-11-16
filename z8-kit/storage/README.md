@@ -38,7 +38,7 @@ sudo blkzone report -c 1 "$disk"
 sudo blkzone report -o 274726912 -c 1 "$disk"
 ```
 
-ARC 下限 2 GiB、上限 8 GiB，留约 184 GiB 标称 DDR4 给其他服务。内核使用默认 dirty data 上限、5 秒 TXG 和 `zfs_arc_shrinker_limit=0`。I7 记录每路 DDR4 Normal 水位、ARC 和 I/O。 [OpenZFS 2.4 参数](https://openzfs.github.io/openzfs-docs/man/v2.4/4/zfs.4.html)
+ARC 下限 1 GiB、上限 4 GiB，留约 188 GiB 标称 DDR4 给其他服务。池只承载归档，元数据和小块在 Optane special 上，未命中的代价低。内核使用默认 dirty data 上限、5 秒 TXG 和 `zfs_arc_shrinker_limit=0`。I7 记录每路 DDR4 Normal 水位、ARC 和 I/O。 [OpenZFS 2.4 参数](https://openzfs.github.io/openzfs-docs/man/v2.4/4/zfs.4.html)
 
 ### I4 介质错误演练
 
@@ -81,7 +81,7 @@ cp storage/storage.env.example storage.env
 ```bash
 sudo install -d -m 0755 /etc/z8-storage
 sudo install -m 0644 hybrid.tsv storage.env /etc/z8-storage/
-sudo install -m 0755 storage/{z8-storage,z8-cold,z8-cold-scan} /usr/local/sbin/
+sudo install -m 0755 storage/{z8-storage,z8-cold,z8-cold-scan,z8-cold-health} /usr/local/sbin/
 for sata in {0..6}; do
     sudo z8-storage format "$sata" --create || break
 done
@@ -118,9 +118,9 @@ sudo bash storage/create-pool.sh --create
 首装和重装复用都做这一段。复用时恢复 `/etc/z8-storage/{hybrid.tsv,storage.env,cold-layout.json}`，清单须与原数据及索引几何一致。
 
 ```bash
-sudo install -m 0755 storage/{z8-storage,z8-cold,z8-cold-scan} /usr/local/sbin/
+sudo install -m 0755 storage/{z8-storage,z8-cold,z8-cold-scan,z8-cold-health} /usr/local/sbin/
 sudo systemctl mask zfs-import-cache.service zfs-import-scan.service
-sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,z8-cold.service,data-other.mount,z8-cold-scan.service,z8-cold-scan.timer} /etc/systemd/system/
+sudo install -m 0644 storage/systemd/{z8-dmzoned.service,z8-zpool.service,z8-cold.service,data-other.mount,z8-cold-scan.service,z8-cold-scan@.service,z8-cold-health.service,z8-cold-health.timer,z8-cold-selftest.service,z8-cold-selftest.timer} /etc/systemd/system/
 sudo install -d -m 0755 /data/other /srv/buildbarn/tiered
 sudo systemctl daemon-reload
 ```
@@ -179,7 +179,7 @@ sudo zpool get autotrim z8data
 停机换设备前从服务链停到 mapper，关机后动线：
 
 ```bash
-sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service z8-cold-scan.service z8-cold.service
+sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service z8-cold-scan.service 'z8-cold-scan@*.service' z8-cold.service
 sudo systemctl stop data-other.mount z8-zpool.service z8-dmzoned.service
 ```
 
@@ -188,7 +188,7 @@ I4 分开做三种冷启演练，每轮检查 `bash host/run-step.sh i4-status`�
 冷盘永久换盘以 SATA0 为例。关机换盘、重启，更新 `/etc/z8-storage/hybrid.tsv` 中该槽的 ATA by-id，再执行下面的命令。开机时启用的服务会自动拉起；重启后先停冷库应用、扫描及冷分片，显式运行 `map` 补装新 mapper。`reset sata0` 清空该盘八份索引和 checkpoint。只重建一片时可传完整分片名。
 
 ```bash
-sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service z8-cold-scan.service z8-cold.service
+sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service z8-cold-scan.service 'z8-cold-scan@*.service' z8-cold.service
 sudo z8-cold disable sata0
 sudo z8-storage format 0 --replace
 sudo z8-storage map
@@ -217,10 +217,16 @@ sudo zpool status -gP z8data
 
 ### 冷库介质扫描
 
-I5 初次上线通过后开启每月扫描。脚本四盘并行，每盘串行八片，以 4 MiB 直接读；遇 `EIO` 或 `ENODATA` 才下探到 4 KiB，同一块连续两次读取失败才写零，flush 后直接读回。每片会打印字节数和逻辑偏移，退出 1 表示修过，2 表示缺盘或未完成。已分配冷库接近满载时需要按四盘线速预留一昼夜以上，仍会同构建读流量竞争，按日志看进度。出现 SATA 介质错误先用 `lsblk -S`、`journalctl -k -b` 对照实际 ATA by-id，扫描该盘的八个逻辑分片。物理 LBA 经过 dm-zoned 映射，不能直接当逻辑偏移。修复后的 4 KiB 逻辑读取成功也不能证明固件重映射了原 LBA。持续报介质错误时按坏盘处理。
+冷 CAS 没有冗余，逻辑扫描找到坏块只能写零；读一遍 50.86 TiB 要按四盘线速占用一昼夜以上，并计入硬盘的年负载额度。因此定时任务只做两件事，全量逻辑读取留给有证据的盘。
+
+- **每月自检。** `z8-cold-selftest.timer` 每月 8 日让 SATA0–3 各自启动 SMART 扩展自检。表面扫描由盘在后台完成，主机 I/O 优先，断电或重启会中止当次自检。
+- **每日取证。** `z8-cold-health.timer` 每天读四盘的 SMART 和上次检查以来的内核日志。某盘出现 `critical medium error`、新的自检读失败或待处理扇区增加时，只对该盘启动 `z8-cold-scan@sataN.service`。首次运行把二手盘已有的失败自检记为历史，当前待处理扇区大于 0 仍会触发。状态存 `/var/lib/z8-cold-health`。
+
+逻辑扫描每盘串行八片，以 4 MiB 直接读；遇 `EIO` 或 `ENODATA` 才下探到 4 KiB，同一块连续两次读取失败才写零，flush 后直接读回。每片会打印字节数和逻辑偏移，退出 1 表示修过，2 表示缺盘或未完成。多块盘同时触发时按锁排队。扫描会同构建读流量竞争，按日志看进度。出现 SATA 介质错误先用 `lsblk -S`、`journalctl -k -b` 对照实际 ATA by-id。物理 LBA 经过 dm-zoned 映射，不能直接当逻辑偏移。修复后的 4 KiB 逻辑读取成功也不能证明固件重映射了原 LBA。持续报介质错误时按坏盘处理。`z8-cold-scan.service` 保留给手动四盘全量扫描。
 
 ```bash
-sudo journalctl -u z8-cold-scan.service -n 100 --no-pager
+sudo journalctl -u z8-cold-health.service -u z8-cold-selftest.service -u 'z8-cold-scan@*' -n 100 --no-pager
+sudo smartctl -l selftest /dev/disk/by-id/ata-REPLACE_SATA0
 sudo flock -n /run/lock/z8-cold-scan.lock /usr/local/sbin/z8-cold-scan sata0
 ```
 
@@ -282,10 +288,10 @@ sudo jq -e '.active | length == 24' /run/z8-cold/cold-layout.json
 python3 -B tests/cold-cas-smoke.py --degraded REPLACE_SEED
 ```
 
-关机接回原盘，用 `i4-status` 核 32 分片，再启用月扫。第一次全量构建期间从 `z8-kit` 根另开终端采样，完毕按 Ctrl+C，日志末尾有四盘各自的最小空闲 cache 区数。I7 同样采一次。多次达到 70% 且写入确实受阻时，再评估前 944 GiB 配比。
+关机接回原盘，用 `i4-status` 核 32 分片，再启用每月自检和每日取证。第一次全量构建期间从 `z8-kit` 根另开终端采样，完毕按 Ctrl+C，日志末尾有四盘各自的最小空闲 cache 区数。I7 同样采一次。多次达到 70% 且写入确实受阻时，再评估前 944 GiB 配比。
 
 ```bash
-sudo systemctl enable --now z8-cold-scan.timer
-systemctl list-timers z8-cold-scan.timer
+sudo systemctl enable --now z8-cold-health.timer z8-cold-selftest.timer
+systemctl list-timers 'z8-cold-*.timer'
 bash host/run-step.sh i5-cold-watermark
 ```
