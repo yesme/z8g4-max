@@ -55,7 +55,7 @@ HP 对 Z8 G4 的 App Direct 混插按每颗 CPU 下的 **DDR4 + PMem DIMM 总容
 
 ### 1. 在 F10 查条并临时解冻
 
-DDR4-only 测试通过后断电，把 12 条 PMem 插进空槽。第一次混插 POST 时按 F10。这个流程由 Xubuntu 的 `ipmctl` 提交 App Direct goal，F10 这次做以下两步。
+DDR4-only 测试通过后断电，把 12 条 PMem 插进空槽。第一次混插 POST 时按 F10。到货已装时从 [到货时 PMem 已装好](BIOS.md#到货时-pmem-已装好) 进入本节。这个流程由 Xubuntu 的 `ipmctl` 提交 App Direct goal，F10 这次做以下两步。
 
 1. 进 `Advanced → NVDIMM Management`，核两路各六条及其固件、当前状态。`NVDIMM Configuration` 保持原值，跳过 `Apply NVDIMM Configuration`。该菜单的 `Volatile Memory` 对应 Intel Memory Mode，`Persistent Memory with BTT` 对应扇区模式。本机需要后续在 Linux 划 `fsdax` 和 `devdax`。
 2. 进 `Security → NVDIMM Security Freeze`，把 `Unfreeze NVDIMMs for this number of boot sequences` 暂设为 **`5`**。按 F10 保存退出。这个开关给 `ipmctl` 配置留出五次启动的窗口。二手模块若处于 `Locked`，还需原解锁方式。
@@ -84,7 +84,7 @@ sudo modprobe nfit
 
 若 F10 识别 12 条而 `show -dimm` 识别不全，用 `sudo journalctl -k -b -g 'NFIT|nvdimm|pmem|dax'` 查固件表和内核枚举，再核 F10 解冻状态。仍不齐时先记录实际 DIMM 和 ACPI NFIT 错误，处理后在同版临时系统重新检查。
 
-在日志里找 `show -socket` 的两行 `SocketID`。`MappedMemoryLimit` 是固件报告的该 CPU SKU 可映射容量上限，`TotalMappedMemory` 是这次开机已映射的容量。按工具显示直接抄，暂未分配 App Direct 时后者可能偏小。`show -dimm` 应列两路各 6 条可管理的 PMem。`show -region` 列固件已配置的 App Direct 地址范围，空白模块可没有 region。`show -goal` 查有无上次留下的待应用请求，`ndctl list -N` 查有无 Linux 已使用的 namespace。若 `show -socket` 未返回上限，记录实机 BIOS 版本和原输出。 [ipmctl show -socket](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket) · [ipmctl show -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/show-memory-allocation-goal)
+在日志里找 `show -socket` 的两行 `SocketID`。`MappedMemoryLimit` 是固件报告的该 CPU SKU 可映射容量上限，`TotalMappedMemory` 是这次开机已映射的容量。按工具显示直接抄，暂未分配 App Direct 时后者可能偏小。`show -dimm` 应列两路各 6 条可管理的 PMem。`show -region` 列固件已配置的 App Direct 地址范围，空白模块可没有 region。`show -goal` 查有无上次留下的待应用请求，`ndctl list -N` 查有无 Linux 已使用的 namespace。模块原先处于 Memory Mode 时，`show -memoryresources` 的 MemoryCapacity 不为 0、没有 region，`free -h` 的总量远大于 192 GiB，下面的 goal 会把全部容量改成 App Direct。个别模块没有参与原配置时，用 `sudo ipmctl show -a -dimm` 看它的 HealthState、LockState、ManageabilityState 和 ConfigurationStatus，状态正常才纳入 goal。若 `show -socket` 未返回上限，记录实机 BIOS 版本和原输出。 [ipmctl show -socket](https://docs.pmem.io/ipmctl-user-guide/module-discovery/show-socket) · [ipmctl show -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/show-memory-allocation-goal)
 
 先按 [T3 固件判定](FIRMWARE.md#t3-pmem-100) 处理该批模块；若刷过，冷启后再采一次现状。已有两路正确的 App Direct region 时直接去第 3 步核对。发现旧 namespace 或未处理的 goal 时，先确认旧配置和数据处置。对可初始化的 12 条执行下面的 **`create -goal`**。在终端核预览确实列出两路各 6 条，再输入 `y`。
 
@@ -93,7 +93,7 @@ sudo ipmctl create -goal MemoryMode=0 PersistentMemoryType=AppDirect
 sudo ipmctl show -a -goal
 ```
 
-`MemoryMode=0` 表示 PMem 的 0% 用作 Intel Memory Mode，DDR4 仍是主内存。`AppDirect` 请求让每路的六条 PMem 做硬件交错。`show -a -goal` 要看到 `Status: New`，即请求已提交、等 BIOS 执行。此时在终端运行 `sudo reboot`，从 F9 回 SanDisk 上的临时系统。启动期间 BIOS 应用 goal，无需到 F10 再点 Apply。 [ipmctl create -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/create-memory-allocation-goal) · [HP Linux 配置，第 11 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=11)
+`MemoryMode=0` 表示 PMem 的 0% 用作 Intel Memory Mode，DDR4 仍是主内存。`AppDirect` 请求让每路的六条 PMem 做硬件交错。`show -a -goal` 要看到 `Status: New`，即请求已提交、等 BIOS 执行。此时在终端运行 `sudo reboot`，从 F9 回 SanDisk 上的临时系统。启动期间 BIOS 应用 goal，无需到 F10 再点 Apply。从 Memory Mode 改过来时内存总量会降到 192 GiB，POST 按 `Prompt on Memory Size Change` 提示确认。 [ipmctl create -goal](https://docs.pmem.io/ipmctl-user-guide/provisioning/create-memory-allocation-goal) · [HP Linux 配置，第 11 页](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=11)
 
 ### 3. 重启回 Xubuntu，核对生效再切 namespace
 

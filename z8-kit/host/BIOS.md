@@ -1,6 +1,46 @@
 # Z8 G4 槽位与 F10 配置
 
-首轮装双 8269CY、散热和内存风道、12 条 DDR4、槽 4 的 P620，网络优先接板载 RJ-45。没有网线时安装槽 7 的 AX210 并接两根天线。接显示器后按 Esc → F10。T1/T2 从独立介质启动，P4618 到 T4 才装。拍下 `Main → System Information` 的板号和初始设置。按 [固件更新](FIRMWARE.md) 核 BIOS 与 ME，再按本页配置。AX210 过渡期间槽 7 保持 `Enable`。需要蓝牙时接内部 USB 线。
+首轮装双 8269CY、散热和内存风道、12 条 DDR4、槽 4 的 P620，网络优先接板载 RJ-45。没有网线时安装槽 7 的 AX210 并接两根天线。接显示器后按 Esc → F10。T1/T2 从独立介质启动，P4618 到 T4 才装。本机到货时多数部件已装好，先看下一节。拍下 `Main → System Information` 的板号和初始设置。按 [固件更新](FIRMWARE.md) 核 BIOS 与 ME，再按本页配置。AX210 过渡期间槽 7 保持 `Enable`。需要蓝牙时接内部 USB 线。
+
+## 到货状态与首次 F10 实拍
+
+2026-11 首次开机进 F10 拍到的状态。这台机到货时已装好双 CPU、DDR4、12 条 PMem、槽 1 的 P4618、槽 5 的 D4800X 和槽 7 的 AX210。本页和验机手册按阶段加装的步骤仍适用：已装的部件留在原位，跳过"装"的动作，验收照做，P4618 和 D4800X 在 T4 前不写入。照片里有盘序列号，仓库公开，照片和序列号留在本机记录。
+
+**四项与首装值不同，T1 先改。**
+
+| 路径 | 到货值 | 首装值 |
+|---|---|---|
+| Advanced → Boot Options | Fast Boot 已勾选 | 取消 |
+| Advanced → Boot Options | Network (PXE) Boot 已勾选 | 取消 |
+| Advanced → System Options | SATA Controller RAID Mode 已勾选 | 取消，走 AHCI |
+| Advanced → System Options | sSATA Controller RAID Mode 已勾选 | 取消 |
+
+**拍到的其余项已符合首装值。**
+
+- Boot Options：USB Storage Boot 开，After Power Loss 为 `Power Off`，Prompt on Memory Size Change 开，Legacy 未启用。
+- System Options：`1TB Memory Cap = Auto`，PCIE MMIO Assignment Mode Auto，PCIe ACS Enable，PCIe Training Reset Disable。
+- Performance Options：Turbo 与 HT 开，核心 All，NUMA 已勾选且灰显，SNC 关。
+- Power Management Options：PCI Express Power Management 和 SATA Power Management 均未勾选。
+- Port Options：SATA0–7、sSATA0–1、前后及内部 USB 全部 Enable。
+- Built-In Device Options：Embedded LAN Controller (AMT) 和 Intel X722 Embedded LAN Port 都开，对应板载 I219-LM 与 X722 两个网口。
+
+| 槽 | 到货实拍 |
+|---|---|
+| 1 | Enable，Gen3 (8Gbps)，Bifurcation Auto。启动项列表里有两个型号为 `7361454_ICRPC5ED2ORA6.4T` 的端点 |
+| 2、3 | Enable，Bifurcation 已是 `x8x8`。未接坞，显示 Gen1 |
+| 4 | Enable，Bifurcation Auto，显示 Gen1。T1 进 Linux 后用 `sudo lspci -vv` 看 P620 的 `LnkCap` 与 `LnkSta` 再判断 |
+| 5 | Enable，Gen3 (8Gbps)。启动项列表里的型号以 `INTEL SSDPD21K015TA` 开头，与 D4800X 1.5 TB 相符 |
+| 6 | Disable，与空槽一致 |
+| 7 | Enable，Gen2 (5Gbps)，AX210 |
+| Personality Slot CPU0、CPU1 | Disable |
+
+每个启用的槽都是 `Option ROM Download = Enable`、`Limit PCIe Speed = Auto`、`Resizable BARs = Disable`，并各有一项 `Intel VROC NVMe Raid (VMD n) = Disable`。启动项列表里 P4618 的两个端点显示同一段序列号，末尾的后缀被截断；T4 以 Linux 的 `ID_SERIAL` 为准，确认两个端点的值不同。
+
+**没拍到、T1 仍要核对的项。** `Main → System Information` 的 BIOS 与 ME 版本和内存总量、Secure Boot Configuration、VTx 与 VTd、Remote Management Options 的 AMT、TPM、主显示槽位，以及 System Options 第二页。
+
+**`Reset Factory Defaults on Battery Loss` 到货为 `Apply Default Settings`。** 二手机的纽扣电池寿命未知。电池失效后 F10 回到出厂默认，上面四项和槽 2/3 的 `x8x8` 都会丢。T1 配好后用 `Main → Replicated Setup` 再导出一次设置，条件允许时换一颗新的 CR2032。
+
+PMem 的到货状态和对验机顺序的影响见 [到货时 PMem 已装好](#到货时-pmem-已装好)。
 
 ## 板上槽位
 
@@ -20,14 +60,15 @@
 
 | 路径 | 首装值 |
 |---|---|
-| Advanced → Boot Options | USB Media Boot Enable，Fast Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 Off，手动按算力坞的上电顺序启动。验机时用 F9 选 Ventoy 或已装好的 SanDisk。I1 装好正式系统后，UEFI Boot Order 再以 Samsung FIT 上的 Ubuntu 引导项为首选 |
+| Advanced → Boot Options | USB Storage Boot Enable，Fast Boot Disable，Network (PXE) Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 `Power Off`，手动按算力坞的上电顺序启动。验机时用 F9 选 Ventoy 或已装好的 SanDisk。I1 装好正式系统后，UEFI Boot Order 再以 Samsung FIT 上的 Ubuntu 引导项为首选 |
 | Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
-| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），PCIe MMIO Assignment Mode Auto，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
-| Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 打开，AX210 需要蓝牙时打开对应内部 USB；拔卡后可拔该内部 USB 线。sSATA 无连接可禁用，按板上实际丝印确认 |
+| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode 与 sSATA Controller RAID Mode 均 Disable（AHCI），PCIe MMIO Assignment Mode Auto，PCIe Training Reset Disable，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
+| Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 打开，AX210 需要蓝牙时打开对应内部 USB；拔卡后可拔该内部 USB 线。本机另列 sSATA0、sSATA1 两个口，无连接时保持默认或禁用，按板上实际丝印确认。Thunderbolt 两项保持默认，整机不装 Thunderbolt 卡 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
-| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8/x8`。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。`Intel VROC NVMe RAID = Disable`，NVMe 阵列由 Linux mdadm 管理 |
-| Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率 |
-| Advanced → Power Management Options | `PCI Express Power Management = Disable`，`SATA Power Management = Disable`。T1 一次设好，验机和正式运行沿用 |
+| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable，Slot 6 与两个 Personality Slot 保持 Disable |
+| Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率。本机 NUMA 项已勾选并灰显。Isoc Mode Disable、Workload Configuration Balanced、Performance Control Performance Mode 保持到货值 |
+| Advanced → Power Management Options | `PCI Express Power Management = Disable`，`SATA Power Management = Disable`。T1 一次设好，验机和正式运行沿用。Intel Speed Select Disabled、Hardware P-States Enable、`OS Controls EPB`、Idle Power Savings Extended 保持到货值 |
+| Advanced → Built-In Device Options | Embedded LAN Controller (AMT) 与 Intel X722 Embedded LAN Port 保持勾选。两项 Idle Fan Speed 增量到货为 0；T4 的 NVMe 温度偏高时调高 `Increase PCIe Idle Fan Speed(%)` 再测 |
 | Security → Security Configuration → System Security | Virtualization Technology (VTx) = Enable，Virtualization Technology for Directed I/O (VTd) = Enable。部分版本将这两项列在 Advanced → System Options |
 | Advanced → NVDIMM Management | 第一次混插只查 12 条模块、固件和当前状态，保留 `NVDIMM Configuration`，跳过 `Apply NVDIMM Configuration`。App Direct goal 在 Xubuntu 提交 |
 | Security → NVDIMM Security Freeze | 按 [T3 的 PMem 流程](PMEM.md#t3-配置-app-direct) 将 `Unfreeze NVDIMMs for this number of boot sequences` 暂设为 `5`，保存后从 F9 启动临时 Xubuntu |
@@ -40,7 +81,7 @@
 
 Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 用 Ventoy 的 UEFI 项启动 Memtest86+ 或 Xubuntu Live，验机时选 SanDisk 的 UEFI 引导项，正式安装后选 FIT 的 UEFI 引导项。装完后以 `test -d /sys/firmware/efi` 和 `LC_ALL=C mokutil --sb-state` 分别确认 UEFI 和 `SecureBoot disabled`。如果之后更新 BIOS 或重置设置，在第一次开机时重新核对这两项。 [HP 固件设置路径](https://support.hp.com/ee-en/document/ish_9642671-9641393-16) · [Ubuntu Secure Boot 文档](https://documentation.ubuntu.com/security/security-features/platform-protections/secure-boot/)
 
-槽 1 留给 P4618，整机不装 Thunderbolt 3 扩展卡。P4618 卡上的交换芯片负责把单条 x8 上行分给两个 x4 控制器。若主机把槽 1 拆成 x4/x4，交换芯片的单条上行最多只能按 x4 协商，即使两块 NVMe 仍能枚举，共享上行带宽也会减半。GE 维修手册的 BIOS 2.47、2.68 实例里，Slot 1 有 `Bifurcation`，Slot 5/7 没有，`Intel VROC NVMe RAID` 列在 `Personality Slot CPU0` 下。 [HP 白皮书，第 7 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=7) · [GE BIOS 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [Broadcom PEX 8718 拓扑](https://docs.broadcom.com/doc/12351848)
+槽 1 留给 P4618，整机不装 Thunderbolt 3 扩展卡。P4618 卡上的交换芯片负责把单条 x8 上行分给两个 x4 控制器。若主机把槽 1 拆成 x4/x4，交换芯片的单条上行最多只能按 x4 协商，即使两块 NVMe 仍能枚举，共享上行带宽也会减半。GE 维修手册的 BIOS 2.47、2.68 实例里，Slot 1 有 `Bifurcation`，Slot 5/7 没有，`Intel VROC NVMe RAID` 列在 `Personality Slot CPU0` 下。本机实拍 Slot 1–4 都有 `Bifurcation`，Slot 5/7 没有，VROC 按槽列出。 [HP 白皮书，第 7 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=7) · [GE BIOS 实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [Broadcom PEX 8718 拓扑](https://docs.broadcom.com/doc/12351848)
 
 ## NUMA 与 SNC
 
@@ -63,9 +104,9 @@ Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 用 Ventoy �
 | Trusted Execution Technology (TXT)、Ready BIOS for Device Guard Use | 保持 Disabled 或未配置。TXT 可能约束 VTx、VTd 和 TPM 的可选状态 |
 | TPM Embedded Security | 这套 XFS 根没有配置 TPM 解锁。确认没有现有 TPM 绑定密钥后，可设 `TPM State = Disable`。`Clear TPM` 保持 No |
 | Advanced → Remote Management Options | `Intel Active Management Technology (AMT) = Disable`，`USB Key Provisioning Support = Disable`。保留 `Intel Management Engine (ME) = Enable`。板载 LAN 保持 Enable，首装和日常远程访问优先走有线；缺网线时用 AX210 |
-| Advanced → Boot Options / HP Sure Recover | `Network (PXE) Boot = Disable`，`USB Media Boot = Enable`。如有 `HP Sure Recover`，设 Disable，OS 恢复使用已验证的独立救援 U 盘 |
+| Advanced → Boot Options / HP Sure Recover | `Network (PXE) Boot = Disable`，`USB Storage Boot = Enable`。如有 `HP Sure Recover`，设 Disable，OS 恢复使用已验证的独立救援 U 盘 |
 | Security → BIOS Sure Start / Utilities | 保留 Sure Start 的固件恢复及 `System Management Command` 的默认值。二者分别负责 BIOS 恢复和维修时重置安全设置 |
-| Security → Utilities → Hard Drive Utilities | DriveLock 保持未启用，保证冷启无需逐盘输密码。PMem 的 NVDIMM Security Freeze 单独按 App Direct 初始化步骤临时解冻 |
+| Security → Utilities → Hard Drive Utilities | DriveLock 保持未启用，保证冷启无需逐盘输密码。PMem 的 NVDIMM Security Freeze 单独按 App Direct 初始化步骤临时解冻。同一页的 NVDIMM Transparent Unlock 和 NVDIMM Passphrase Reset 保持未配置，`ipmctl` 报某条模块 Locked 时再回到这里。Absolute Persistence Module 到货为 Inactive，保持 |
 
 主机冷启动后记录 CPU 虚拟化标志与内核 IOMMU 状态。VT-x 可用时 `lscpu` 显示 `Virtualization: VT-x`，`vmx` 出现在 CPU flags。仅看到 `DMAR` 表存在时，结合内核日志判断翻译是否启用。
 
@@ -99,6 +140,31 @@ CPU0、CPU1 各有一套编号 1–12 的 DIMM 槽。先在主板上找 `CPU0-DI
 | DDR4-only 两轮测试通过后加 PMem | 2、4、6、7、9、11 各加一条 128 GiB PMem | 2、4、6、7、9、11 各加一条 128 GiB PMem |
 
 T1 用 SanDisk 上的临时 Xubuntu 26.04.1 短跑双路 CPU。T2 从 F9 进 Ventoy 菜单启动 Memtest86+，通过后换回临时系统完成 4 小时 DDR4 压测。随后关机断电，**DDR4 原位不动，直接把 PMem 插进空槽**。两边各六条 DDR4 加六条 PMem，共 24 条。第一次混插启动先看 F10 是否认全，再在 [Xubuntu 26.04.1 提交 App Direct goal](PMEM.md)。装每条时记位置和序列号，便于定位 DIMM 错误。 [HP QuickSpecs，第 22 页双路 192 GB](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=22) · [HP Optane 白皮书，第 22 页 24 条混插](https://h10032.www1.hp.com/ctg/Manual/c06527302.pdf#page=22)
+
+### 到货时 PMem 已装好
+
+F10 的 NVDIMM 列表列出 12 条，位置是两路各 DIMM 2/4/6/7/9/11，每条 Capacity 126 GB，与上表一致。当前状态有三点和空白模块不同。
+
+- **整机是 Memory Mode。** 11 条的 Volatile Size 为 126 GB、Persistent Size 为 0。系统把 PMem 当主内存，DDR4 是它的缓存，操作系统看到的内存远大于 192 GiB，T2 的 DDR4 测试无法照原样做。
+- **CPU1-DIMM4 没有参与当前配置。** 它的 Volatile 和 Persistent 都是 0，固件版本也和其余模块不同。可能只是后补的条没有重做配置，也可能是模块本身有问题，要在 Linux 用 `ipmctl` 判断。
+- **固件混版。** 9 条 `01.02.00.5310`，CPU0-DIMM11 与 CPU1-DIMM7 为 `5355`，CPU1-DIMM4 为 `5386`，都低于 [固件手册](FIRMWARE.md#t3-pmem-100) 引用的 HP 最低版本。
+
+PMem 留在槽里，按下面的顺序走。12 条来回插拔的风险高于就地转换，最终配置本来就是混插。
+
+1. T1 照常做 F10、Live 联网、SanDisk 临时系统和 CPU 拷机。这时 `free -h` 显示的是 PMem 容量，属预期。
+2. T1 末在临时系统装 [PMem 工具](PMEM.md#t3-准备工具)并保存盘点，先看 CPU1-DIMM4。十二条都应健康、可管理、未锁定。CPU1-DIMM4 若不健康、被锁定或不可管理，先找卖家处理，再决定是否按一路六条、一路五条继续。
+
+   ```bash
+   sudo ipmctl show -dimm
+   sudo ipmctl show -a -dimm | tee "$HOME/z8-burnin/pmem-dimm-all.log"
+   sudo ipmctl show -memoryresources
+   ```
+
+3. 按 [固件手册](FIRMWARE.md#t3-pmem-100) 决定是否统一固件，再按 [PMem 手册](PMEM.md#1-在-f10-查条并临时解冻) 解冻、提交 App Direct goal 并重启。内存总量会变，POST 按 `Prompt on Memory Size Change` 提示确认。回到临时系统后 `free -h` 应约 192 GiB，`ipmctl show -region` 有两路 region。
+4. 之后才做 T2。PMem 已在槽里，T2 的四个 Memtest86+ pass 同时是混插后的 DDR4 复测，T3 不必再补那一个 pass。T2 报错时，再拔掉 PMem 做 DDR4-only 对照。
+5. T3 从核对 region、切 namespace 接着做。
+
+也可以沿用原方案，先拔下 12 条 PMem 做完 T1、T2 再插回。
 
 ## SATA0–7、硬盘识别和起转
 
