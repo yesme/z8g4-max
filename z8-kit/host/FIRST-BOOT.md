@@ -4,7 +4,7 @@
 
 ## 0. 上电前
 
-- **三星 Portable SSD T3 250 GB（Ventoy）**。现有多系统安装与救援盘。Ventoy 至少为 1.1.18，保留原分区和镜像。F9 启动它后，T1 选 Xubuntu 26.04.1 Desktop ISO，T2/T3 选里面的 Memtest86+。I1 复用同一份 ISO，从 Ventoy 大数据分区读取 `z8/autoinstall.yaml`，之后还用它做救援。提前把仓库副本也存到该分区。 [准备安装配置](INSTALL.md#i12-生成安装配置并核身份)
+- **三星 Portable SSD T3 250 GB（Ventoy）**。现有多系统安装与救援盘。Ventoy 至少为 1.1.18，保留原分区和镜像。用原装的 USB 3.1 Gen2 线直接接主板背面的 USB 口；本机实测换用其他线时出现过 `Boot Device Not Found` 和 Live 启动卡在动画的情况，换回原装线后正常。F9 启动它后，T1 选 Xubuntu 26.04.1 Desktop ISO，T2/T3 选里面的 Memtest86+。I1 复用同一份 ISO，从 Ventoy 大数据分区读取 `z8/autoinstall.yaml`，之后还用它做救援。提前把仓库副本也存到该分区。 [准备安装配置](INSTALL.md#i12-生成安装配置并核身份)
 - **SanDisk Ultra Fit CZ430 128 GB，可清空**。T1 把原来的安装介质改为可启动的临时 Xubuntu 系统，T1–T5 从它启动并保留工具、驱动和日志。I1 前拔下，保留验机系统和记录。
 - **128 GB Samsung FIT**。T4 插入一次，抄 `ID_SERIAL`。I1 才分区。FIT 存 EFI、`/boot`、救援工具和元信息备份，根 `/` 在 P4618 RAID0。 [FIT 分区及救援](FIT-RECOVERY.md)
 - **BC711**。留作备用。
@@ -21,10 +21,10 @@
 
 ### T1 · CPU、F10 和联网
 
-1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P1000 并接显示器。板载网口优先接网线；需无线过渡时在槽 7 装 AX210 并接天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。本机到货时 PMem、P4618、D4800X 和 AX210 已装好：PMem 已全部拔出，T3 再插回；其余留在原位，P4618 和 D4800X 在 T4 前不写入。 [到货状态](BIOS.md#到货状态与首次-f10-实拍)
+1. 每路装一颗 8269CY、散热器和内存风道。CPU0、CPU1 各在 **DIMM 1/3/5/8/10/12** 装六条 16 GiB DDR4。插槽 4 装 P1000 并接显示器。板载网口优先接网线；需无线过渡时在槽 7 装 AX210 并接天线。槽 1/2/3/5/6 留空，SATA 盘和算力坞等到后续阶段。本机到货时 PMem、P4618、D4800X 和 AX210 已装好：PMem、P4618 和 D4800X 现已拆下，分别在 T3、T4 装回；槽 2/3 的两块直通板留在机内，不接坞。 [到货状态](BIOS.md#到货状态与首次-f10-实拍)
 2. 首次 POST 后进 **F10**，记录 BIOS 与 ME，按手册判断是否需要更新。应用首装值：纯 UEFI、Secure Boot 关闭、AHCI、NUMA 开、SNC 关、HT/Turbo/VT-x/VT-d 开、槽 4 主显示。`1TB Memory Cap = Auto`，PCI Express 和 SATA 电源管理均设为 `Disable`，沿用到正式系统。到货值里要改四项：关 Fast Boot、关 PXE、关 SATA 的 RAID Mode、停用整个 sSATA Controller。保存后重新确认 POST 和 DDR4 容量。装系统前可先按 F2 用 HP 自带诊断跑 Processor、System Board 和 Memory Quick Check。 [HP 自带诊断](BURN-IN.md#hp-自带诊断) [F10 首装值](BIOS.md#f10-首装值) · [T1 固件](FIRMWARE.md#t1-hp-biosme-与-cpu-微码)
 3. 按 **F9 → Ventoy UEFI → Xubuntu 26.04.1 Desktop → Try Xubuntu**。用板载有线或 AX210 过渡联网，核 DHCP、DNS 和 APT，按[挂载步骤](INSTALL.md#挂载-ventoy-与保存-live-日志)试读同一块 Ventoy 数据分区，再把 **SanDisk CZ430** 选作整盘安装目标。此时 FIT 先不接。按安装器提示拔下 Ventoy，从 SanDisk 冷启临时 Xubuntu，再确认能联网。 [Live 联网与 SanDisk 安装](BURN-IN.md#首次-live-联网与临时验机系统)
-4. 在临时系统安装微码和诊断工具，重启后确认两颗 CPU、两个 DDR4 NUMA 节点。先跑 30 分钟通用 CPU 压测，再跑 30 分钟 AVX-512 VNNI，保存 RAS、温度和满载频率。 [CPU 拷机命令](BURN-IN.md#cpu-拷机)
+4. 在临时系统安装微码和诊断工具，并装好 R580 显卡驱动，重启后确认两颗 CPU、两个 DDR4 NUMA 节点。满载前先跑 60 秒看两路温度。先跑 30 分钟通用 CPU 压测，再跑 30 分钟 AVX-512 VNNI，保存 RAS、温度和满载频率。 [CPU 拷机命令](BURN-IN.md#cpu-拷机)
 
 ### T2 · 只测 DDR4
 
@@ -40,14 +40,14 @@
 
 ### T4 · 加存储，先验裸设备
 
-1. 断电装槽 1 的 P4618，从 SanDisk 上的临时系统启动。两块卡到货已装时跳过装卡，验收照做。验 Gen3 x8 上行、两个 Gen3 x4 下行，且两个独立的约 3.2 TB NVMe 端点都在。过关后再装槽 5 的 D4800X，槽 6 留空。逐端点做固件盘点、SMART 和只读负载。 [P4618 链路](BURN-IN.md#p4618-链路与双控制器) · [NVMe 与 SATA 检查](BURN-IN.md#nvme-健康与-sata-枚举)
+1. 断电装槽 1 的 P4618，从 SanDisk 上的临时系统启动。验 Gen3 x8 上行、两个 Gen3 x4 下行，且两个独立的约 3.2 TB NVMe 端点都在。过关后再装槽 5 的 D4800X，槽 6 留空。逐端点做固件盘点、SMART 和只读负载。 [P4618 链路](BURN-IN.md#p4618-链路与双控制器) · [NVMe 与 SATA 检查](BURN-IN.md#nvme-健康与-sata-枚举)
 2. 按 **1 → 4 → 7** 块 HC620 分批冷启。SATA0–3（冷库）接原生位，SATA4–6（ZFS）接双光驱位三盘笼，SATA7 接薄光驱。每种配置按 BIOS 手册冷启，核盘和链路。保存 SATA0–6 对应的序列号及 ATA 整盘 by-id，逐盘确认 SATA、4Kn、`host-managed` 和 zone 类型。 [SATA 接线与起转](BIOS.md#先确认系统认盘)
 3. 七盘全部稳定后，各发一次 SMART Extended。七块盘各自扫描，保持供电、通风和禁止自动休眠，等最后完成的盘。核每盘最新自检均为 `Completed without error`。此时仍在验裸盘。D4800X 分区、dm-zoned 初始化、建池和 scrub 全在 I4。 [七盘慢扫命令](BURN-IN.md#七块-hc620-并行慢扫)
 4. 保存无坞主机清单和日志。先关机插入 FIT，再从 F9 启动 SanDisk 上的临时系统，抄 **FIT、两个 P4618 端点**的三个唯一 `ID_SERIAL`，抄 D4800X 的整盘 NVMe by-id。按 I1.2 填好 `autoinstall.yaml`，放到 Ventoy 大数据分区的 `z8/`。关机拔下 FIT，后续验机仍从 SanDisk 启动。主机和七盘完成验收后才接坞。 [主机基线](BURN-IN.md#主机基线) · [读取 ID_SERIAL](INSTALL.md#i12-生成安装配置并核身份)
 
 ## 2. T5 验算力坞
 
-1. 保持坞断开，先在临时 Xubuntu 装 R580，重启确认 P1000 枚举，并在 SanDisk 上[准备 CUDA 验机工具](INSTALL.md#算力坞验收)。按 [R580 包与安装模拟](INSTALL.md#安装并锁定-nvidia-显卡驱动) 操作。关机断电，按 [槽位表](BIOS.md#板上槽位) 接槽 2/3 的 x8/x8 直通板。按底板供电方式确认坞的端点、电源和冷却能在主机 POST 时就绪，核四套水路和泵。若坞为独立手动供电，第一轮上机前核供应商启停顺序并记录。
+1. 保持坞断开，复核 T1 已在临时 Xubuntu 装好的 R580 和 P1000 枚举，并在 SanDisk 上[准备 CUDA 验机工具](INSTALL.md#算力坞验收)。按 [R580 包与安装模拟](INSTALL.md#安装并锁定-nvidia-显卡驱动) 操作。关机断电，按 [槽位表](BIOS.md#板上槽位) 接槽 2/3 的 x8/x8 直通板。按底板供电方式确认坞的端点、电源和冷却能在主机 POST 时就绪，核四套水路和泵。若坞为独立手动供电，第一轮上机前核供应商启停顺序并记录。
 2. 按 **单卡 → 每槽各验两卡 → 四卡** 冷启。每轮保存 GPU UUID、BDF、NUMA 归属和负载下 PCIe 速率/宽度。四卡再测六对 NVLink P2P、NCCL、四卡 1 小时 GPU Burn 和交错 DDR4 的 pinned H→D。检查新增 Xid、AER、ECC，并与 T4 比对存储枚举。 [T5 拷机](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机) · [CUDA/NCCL](INSTALL.md#算力坞验收) · [pinned DMA](PMEM.md#四卡-pinned-dma-验收)
 3. 可从 T5 开始安排约 **232 GiB** 的权重下载，直接写已核实挂载的 PMem 模型卷。四卡硬件过关后做 1017 冒烟。按 T5 手册的速度档判断是否进 I1，从单槽 128K 起步，记录实际使用档、引擎、权重 revision、四卡 UUID、显存与工具来回结果。T5 的源码与编译产物在 SanDisk 上的临时系统。权重留在 PMem 给 I6 复用。 [T5 推理冒烟](BURN-IN.md#t5-末的-1017-推理冒烟)
 4. 停模型和测试服务。把保存在其他目录的验机记录一起收进 SanDisk 的 `~/z8-burnin`，确认日志、磁盘清单及两份 PMem env 都可读。正常关机，拔下并留存 SanDisk，I1 安装期间用不到它。

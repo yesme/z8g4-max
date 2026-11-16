@@ -31,7 +31,7 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 
 ### 第一阶段 · BIOS 设置和硬件测试
 
-顺序是 **CPU → DDR4 → PMem → 存储 → 算力坞**。从三星 Portable SSD T3 250 GB 上的 Ventoy 启动 Xubuntu 26.04.1 Desktop 和 Memtest86+。T1 先把 Xubuntu 装到可清空的 SanDisk Ultra Fit CZ430 128 GB，T1–T5 的 Linux 验机从该临时系统启动，Memtest86+ 从 Ventoy 启动。Samsung FIT 在 T4 临时接入读取序列号，I1 才分区和写入正式引导。T3 在同一系统用 Canonical 官方归档的三份 `.deb` 安装 `ipmctl`，用 26.04 软件源安装 `ndctl` 和 `daxctl`。测试日志和盘序列号保存在 SanDisk，I1 前拔下留存。换件前关机并断交流电。本机到货时 PMem、P4618、D4800X 和 AX210 已装好，PMem 处于 Memory Mode：PMem 已全部拔出，T3 再插回并改成 App Direct，其余留在原位。 [到货状态](z8-kit/host/BIOS.md#到货状态与首次-f10-实拍) · [PMem 工具准备](z8-kit/host/PMEM.md)
+顺序是 **CPU → DDR4 → PMem → 存储 → 算力坞**。从三星 Portable SSD T3 250 GB 上的 Ventoy 启动 Xubuntu 26.04.1 Desktop 和 Memtest86+。T1 先把 Xubuntu 装到可清空的 SanDisk Ultra Fit CZ430 128 GB，T1–T5 的 Linux 验机从该临时系统启动，Memtest86+ 从 Ventoy 启动。Samsung FIT 在 T4 临时接入读取序列号，I1 才分区和写入正式引导。T3 在同一系统用 Canonical 官方归档的三份 `.deb` 安装 `ipmctl`，用 26.04 软件源安装 `ndctl` 和 `daxctl`。测试日志和盘序列号保存在 SanDisk，I1 前拔下留存。换件前关机并断交流电。本机到货时 PMem、P4618、D4800X 和 AX210 已装好，PMem 处于 Memory Mode：PMem、P4618 和 D4800X 现已拆下，按阶段装回，PMem 在 T3 改成 App Direct。 [到货状态](z8-kit/host/BIOS.md#到货状态与首次-f10-实拍) · [PMem 工具准备](z8-kit/host/PMEM.md)
 
 固件随验机阶段处理。T1 最小配置稳定 POST 后核 HP BIOS 与 ME，T3 在提交 App Direct goal 前逐条核 PMem，T4 在 SSD 裸盘压测前核固件，T5 记录每张 V100 的 VBIOS。三星 DDR4 和无源直通板直接做硬件测试。 [固件更新条件与命令](z8-kit/host/FIRMWARE.md)
 
