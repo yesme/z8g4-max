@@ -36,7 +36,7 @@
 
 每个启用的槽都是 `Option ROM Download = Enable`、`Limit PCIe Speed = Auto`、`Resizable BARs = Disable`，并各有一项 `Intel VROC NVMe Raid (VMD n) = Disable`。启动项列表里 P4618 的两个端点显示同一段序列号，末尾的后缀被截断；T4 以 Linux 的 `ID_SERIAL` 为准，确认两个端点的值不同。
 
-`Main → System Information` 显示两颗 Xeon Platinum 8269CY、192 GB ECC RDDR4 和 System BIOS `P60 v03.00 04/15/2026`。PMem 拔出后内存总量正是 12 条 DDR4。Advanced System Information 另记：Memory Speed 2666 MHz，Processor Stepping 7，MicroCode Revision `5003901`，ME Firmware Version `11.22.94.2495`、模式 AMT Disabled，System Board ID `81C7`。序列号、UUID、MAC 地址等留在本机记录。
+`Main → System Information` 显示两颗 Xeon Platinum 8269CY、192 GB ECC RDDR4 和 System BIOS `P60 v03.00 04/15/2026`。PMem 拔出后内存总量正是 12 条 DDR4。Advanced System Information 另记：Memory Speed 2666 MHz，Processor Stepping 7，MicroCode Revision `5003901`，ME Firmware Version 到货为 `11.22.94.2495`、T1 已更新到 `11.22.97.2675`，模式 AMT Disabled，System Board ID `81C7`。序列号、UUID、MAC 地址等留在本机记录。
 
 **T1 已改并确认。** Fast Boot 与 PXE 已关，SATA 为 AHCI，sSATA Controller 已停用，AMT 为 Disable；Secure Boot Configuration、VTx 与 VTd、Remote Management Options 已核对。`PCIE MMIO Assignment Mode` 的选项是 `32 Bit`、`64 Bit`、`Auto`，这一项就是本机的 4G 以上地址分配开关，保持到货时能正常工作的 Auto。四张 V100 各有一个 16 GiB 的固定 BAR，只能放在 4G 以上；T5 接坞后若有卡认不全或内核报 BAR 分配失败，再改成 `64 Bit`。改之前先用 Replicated Setup 导出当前设置：`64 Bit` 会把 P1000 的地址窗口也挪到 4G 以上，万一开机没有画面，清 CMOS 后可以从 U 盘恢复全部设置。System Options 末尾的 `HP Application Driver` 保持未勾选，它只给 HP 的 Windows 软件用。
 
