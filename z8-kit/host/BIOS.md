@@ -38,7 +38,7 @@
 
 `Main → System Information` 显示两颗 Xeon Platinum 8269CY、192 GB ECC RDDR4 和 System BIOS `P60 v03.00 04/15/2026`。PMem 拔出后内存总量正是 12 条 DDR4。Advanced System Information 另记：Memory Speed 2666 MHz，Processor Stepping 7，MicroCode Revision `5003901`，ME Firmware Version `11.22.94.2495`、模式 AMT Disabled，System Board ID `81C7`。序列号、UUID、MAC 地址等留在本机记录。
 
-**T1 已改并确认。** Fast Boot 与 PXE 已关，SATA 为 AHCI，sSATA Controller 已停用，AMT 为 Disable；Secure Boot Configuration、VTx 与 VTd、Remote Management Options 已核对。`PCIE MMIO Assignment Mode` 的选项是 `32 Bit`、`64 Bit`、`Auto`，这一项就是本机的 4G 以上地址分配开关，保持 Auto；T5 的四张 V100 若报 BAR 分配失败，先改成 `64 Bit`。System Options 末尾的 `HP Application Driver` 保持未勾选，它只给 HP 的 Windows 软件用。
+**T1 已改并确认。** Fast Boot 与 PXE 已关，SATA 为 AHCI，sSATA Controller 已停用，AMT 为 Disable；Secure Boot Configuration、VTx 与 VTd、Remote Management Options 已核对。`PCIE MMIO Assignment Mode` 的选项是 `32 Bit`、`64 Bit`、`Auto`，这一项就是本机的 4G 以上地址分配开关，T1 起设为 `64 Bit`：四张 V100 各有一个 16 GiB 的固定 BAR，只能放在 4G 以上，T1–T4 也就在最终设置下验收。改完先保存重启，确认 POST 和 F10 的画面正常，再执行 `Save Custom Defaults`。开机没有画面时清 CMOS 回到默认的 Auto。System Options 末尾的 `HP Application Driver` 保持未勾选，它只给 HP 的 Windows 软件用。
 
 **仍待确认。** `Main → BIOS Event Log` 有无历史硬件事件、主显示槽位的选项位置，以及 TPM 状态。
 
@@ -66,10 +66,10 @@ PMem 的料号、原配置和插回时的注意事项见 [PMem 的到货状态](
 |---|---|
 | Advanced → Boot Options | USB Storage Boot Enable，Fast Boot Disable，Network (PXE) Boot Disable，POST 消息打开（若有），Prompt on Memory Size Change Enable。After Power Loss 固定 `Power Off`，手动按算力坞的上电顺序启动。验机时用 F9 选 Ventoy 或已装好的 SanDisk。I1 装好正式系统后，UEFI Boot Order 再以 Samsung FIT 上的 Ubuntu 引导项为首选 |
 | Advanced → Secure Boot Configuration | `Configure Legacy Support and Secure Boot` 选 `Legacy Support Disable and Secure Boot Disable`。保存后若出现 Boot Mode Change，输入屏幕显示的确认码 |
-| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），sSATA Controller Disable，PCIe MMIO Assignment Mode Auto，PCIe Training Reset Disable，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
+| Advanced → System Options | SATA Controller Enable，SATA Controller RAID Mode Disable（AHCI），sSATA Controller Disable，PCIE MMIO Assignment Mode `64 Bit`，PCIe Training Reset Disable，`1TB Memory Cap = Auto`（验机和正式运行固定值），PCIe ACS 保持当前默认 |
 | Advanced → Port Options | SATA 0–7 全 Enable，前后 USB 打开，AX210 需要蓝牙时打开对应内部 USB；拔卡后可拔该内部 USB 线。本机另列 sSATA0、sSATA1 两个口，均未使用，随 sSATA Controller 一起停用。Thunderbolt 两项保持默认，整机不装 Thunderbolt 卡 |
 | Advanced → Graphics Configuration | Primary Graphics Device 选择 Slot 4 P620 |
-| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable：P620、V100 和两块 NVMe 都不用可调整 BAR，V100 的 16 GiB 显存 BAR 是固定大小，靠 `PCIE MMIO Assignment Mode = Auto` 分配 64 位地址；T5 的内核日志若报 BAR 分配失败再回来看这两项。各槽 `Option ROM Download` 保持 Enable：槽 4 的 P620 靠卡上的固件在开机阶段出画面，关掉后 POST 和 F10 会黑屏；其余槽关掉没有收益。T5 接坞后若 POST 明显变慢或卡住，只把槽 2/3 改成 Disable 作对照，Linux 驱动不依赖固件执行这段 ROM。Slot 6 与两个 Personality Slot 保持 Disable |
+| Advanced → Slot Settings | Slot 1 `Bifurcation = Auto`，Slot 2/3 `Bifurcation = x8x8`（本机选单原文）。`Limit PCIe Speed = Auto`，问题定位时仅对受影响槽试 Gen3 或 Gen2 作信号对照。各槽的 `Intel VROC NVMe Raid = Disable`，NVMe 阵列由 Linux mdadm 管理。各槽 `Resizable BARs` 保持 Disable：P620、V100 和两块 NVMe 都不用可调整 BAR，V100 的 16 GiB 显存 BAR 是固定大小，靠 `PCIE MMIO Assignment Mode = 64 Bit` 分配 4G 以上的地址；T5 的内核日志若报 BAR 分配失败再回来看这两项。各槽 `Option ROM Download` 保持 Enable：槽 4 的 P620 靠卡上的固件在开机阶段出画面，关掉后 POST 和 F10 会黑屏；其余槽关掉没有收益。T5 接坞后若 POST 明显变慢或卡住，只把槽 2/3 改成 Disable 作对照，Linux 驱动不依赖固件执行这段 ROM。Slot 6 与两个 Personality Slot 保持 Disable |
 | Advanced → Performance Options | 验机和正式部署固定 `Non-Uniform Memory Access = Enabled`、`Sub-NUMA Clustering = Disabled`。HT Enabled，所有 cores Enabled，Turbo Enabled。DDR4 走 JEDEC 自动，记录混插后的实际速率。本机 NUMA 项已勾选并灰显。Isoc Mode Disable、Workload Configuration Balanced、Performance Control Performance Mode 保持到货值 |
 | Advanced → Power Management Options | `PCI Express Power Management = Disable`，`SATA Power Management = Disable`。T1 一次设好，验机和正式运行沿用。Intel Speed Select Disabled、Hardware P-States Enable、`OS Controls EPB`、Idle Power Savings Extended 保持到货值 |
 | Advanced → Built-In Device Options | Embedded LAN Controller (AMT) 与 Intel X722 Embedded LAN Port 保持勾选。两项 Idle Fan Speed 增量到货为 0；T4 的 NVMe 温度偏高时调高 `Increase PCIe Idle Fan Speed(%)` 再测 |
