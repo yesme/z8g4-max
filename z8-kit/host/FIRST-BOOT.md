@@ -4,7 +4,7 @@
 
 ## 0. 上电前
 
-- **三星 Portable SSD T3 250 GB（Ventoy）**。现有多系统安装与救援盘。Ventoy 至少为 1.1.18，保留原分区和镜像。F9 启动它后，T1 选 Xubuntu 26.04.1 Desktop ISO，T2/T3 选里面的 Memtest86+。I1 复用同一份 ISO，从 Ventoy 大数据分区读取 `z8/autoinstall.yaml`，之后还用它做救援。提前把仓库副本也存到该分区。 [准备安装配置](INSTALL.md#i12-生成安装配置并核身份)
+- **三星 Portable SSD T3 250 GB（Ventoy）**。现有多系统安装与救援盘。Ventoy 至少为 1.1.18，保留原分区和镜像。用原装的 USB 3.1 Gen2 线直接接主板背面的 USB 口；本机实测换用其他线时出现过 `Boot Device Not Found` 和 Live 启动卡在动画的情况，换回原装线后正常。F9 启动它后，T1 选 Xubuntu 26.04.1 Desktop ISO，T2/T3 选里面的 Memtest86+。I1 复用同一份 ISO，从 Ventoy 大数据分区读取 `z8/autoinstall.yaml`，之后还用它做救援。提前把仓库副本也存到该分区。 [准备安装配置](INSTALL.md#i12-生成安装配置并核身份)
 - **SanDisk Ultra Fit CZ430 128 GB，可清空**。T1 把原来的安装介质改为可启动的临时 Xubuntu 系统，T1–T5 从它启动并保留工具、驱动和日志。I1 前拔下，保留验机系统和记录。
 - **128 GB Samsung FIT**。T4 插入一次，抄 `ID_SERIAL`。I1 才分区。FIT 存 EFI、`/boot`、救援工具和元信息备份，根 `/` 在 P4618 RAID0。 [FIT 分区及救援](FIT-RECOVERY.md)
 - **BC711**。留作备用。
