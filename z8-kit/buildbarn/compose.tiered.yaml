@@ -16,6 +16,11 @@ services:
         bind:
           create_host_path: false
       - type: bind
+        source: ${BB_HOT_INDEX_DIR:-/srv/pmem-model/bb-hot-index}
+        target: /hot-index
+        bind:
+          create_host_path: false
+      - type: bind
         source: /run/z8-cold/cold-layout.json
         target: /cold-layout.json
         read_only: true

@@ -10,6 +10,7 @@
 - [拷机命令、时长和错误判读](z8-kit/host/BURN-IN.md) · [App Direct、DAX、kmem 和 pinned DMA](z8-kit/host/PMEM.md)
 - [BIOS、PMem、SSD 和各板卡的固件更新步骤](z8-kit/host/FIRMWARE.md)
 - [九分区建池、启动单元、缺盘和换盘](z8-kit/storage/README.md) · [Buildbarn 服务和 Buck2 客户端](z8-kit/buildbarn/README.md)
+- [各类数据的介质、通路和故障域](z8-kit/host/TIERING.md)
 - [1017 构建、模型版本和启动参数](z8-kit/inference/README.md) · [CLI 工作树](z8-kit/harness/README.md) · [远程图形和 SSH](z8-kit/remote/README.md)
 
 ## 已定的部署配置
@@ -20,7 +21,7 @@
 | 主板与驱动 | 纯 UEFI，Secure Boot、SNC、ASPM 和 SATA 电源管理关，NUMA、HT、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P620 显示，四张 V100 计算 |
 | 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，默认每路 2 核，运行时 HT 伙伴留空，停服后全部归还 |
 | 存储 | SATA0–3 各用 24 GiB 写缓存，裸冷 CS 共 32 片、约 50.9 TiB；p5 是 848 GiB 裸索引。SATA4–6 各用 80 GiB 写缓存，组成约 25 TiB RAIDZ1；p9 约 213 GiB special，承载元数据、小块与 ZIL |
-| 构建 | max 热 CS 1,638 GiB，索引 26 GiB；冷分片 checkpoint 在 P4618。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 提供权威 AC/CAS 和唯一调度器，Linux 与 Darwin 由平台属性分流 |
+| 构建 | max 热 CS 1,638 GiB 在 P4618，其 26 GiB 索引在 PMem 模型卷；冷分片 checkpoint 在 P4618。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 提供权威 AC/CAS 和唯一调度器，Linux 与 Darwin 由平台属性分流 |
 | 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、8 GiB GPU 专家缓存，按显存与工具闭环结果降档 |
 | 远程 | 板载有线为主，AX210 Wi-Fi 过渡，DHCP 保留、SSH/tmux，独立图形用 xrdp/Xfce，控制本机桌面用 P620 的 X11/NVENC + Sunshine/Moonlight |
 
@@ -99,7 +100,7 @@ HP 的公开 F10 手册未确认 Z8 G4 能让硬盘分批起转，供电按七�
 
 - I1 从三星 T3 的 Ventoy 启动 Xubuntu Desktop，在图形安装器导入填好的 `autoinstall.yaml`。回 Live 终端核对 FIT 和两个 P4618 端点的 `ID_SERIAL`，执行 `sudo touch /run/z8-storage-confirmed` 放行，再回图形界面确认安装。FIT 上的 GRUB 读入内核与 Dracut 初始化镜像，后者组装 P4618 根阵列。 [安装命令](z8-kit/host/INSTALL.md)
 
-- `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/jackywang` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS 和热 CS（块文件与索引）落 P4618。冷 CS 裸索引在 D4800X p5，冷分片状态在 P4618。单独在 `/srv/pmem-model` 挂 PMem XFS DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在安装配置里显式设 `crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
+- `/srv` 是标准的本机服务数据目录，默认由根 XFS 承载。手动创建 `/srv/work/jackywang` 和 `/srv/buildbarn/tiered`。项目、`buck-out`、Buildbarn AC、CMS 和热 CS 块文件落 P4618，热 CS 索引放 `/srv/pmem-model/bb-hot-index`。冷 CS 裸索引在 D4800X p5，冷分片状态在 P4618。单独在 `/srv/pmem-model` 挂 PMem XFS DAX，先用 `findmnt -M` 查该挂载点再写入模型。P4618 的 XFS 在安装配置里显式设 `crc=1,reflink=1`，首启用 `xfs_info /` 验证。 [安装命令与目录](z8-kit/host/INSTALL.md) · [文件系统目录标准](https://specifications.freedesktop.org/fhs/latest/srv.html)
 - 首启为根 XFS 写 `noatime,nodiscard`，md 实测透出 discard 时用周期 TRIM。FIT 的 `/boot`、ESP 用 `noatime`，从周期 TRIM 排除。PMem 模型 XFS 用 `dax=always,noatime,nodiscard`。`data-other.mount` 按依赖链以 `rw` 挂载，压缩、atime 和同步写策略保存在 dataset 属性。 [全机挂载参数及核对命令](z8-kit/host/MOUNTS.md) · [fstab 样例](z8-kit/host/fstab-boot.example)
 
 ### HC620 与 D4800X
@@ -127,7 +128,7 @@ bash host/run-step.sh i4-status
 |---|---|
 | 四卡 HBM（64 GiB 标称） | dense、attention、活跃 KV 和 8 GiB 合计热专家缓存 |
 | 两路 DDR4（192 GiB） | 各 96 GiB。推理从两个 DDR4 节点交错分配；按引擎所需分配 pinned DMA 缓冲。系统、Buck2 保留本地优先 |
-| App Direct fsdax（2×258 GiB） | 2 MiB dm-stripe，约 508 GiB 块设备容量，XFS DAX，挂 `/srv/pmem-model`。存一套 GGUF、Engram 与 tokenizer |
+| App Direct fsdax（2×258 GiB） | 2 MiB dm-stripe，约 508 GiB 块设备容量，XFS DAX，挂 `/srv/pmem-model`。存一套 GGUF、Engram 与 tokenizer，另放 26 GiB 的 Buildbarn 热 CS 索引 |
 | 两路剩余 App Direct | 各自以可迁移 kmem 上线，启用 memmap on memory 和冷页下沉。活跃推理 KV 由引擎分配 |
 
 **NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。共享 arena 交错避免单侧 96 GiB 先耗尽。DAX 文件通过 CPU 访问，普通 DDR4 做 CUDA staging。默认每路留最后 2 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 96 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
@@ -163,7 +164,8 @@ I6 放行看近满上下文时每卡至少余 2 GiB、20 次连续工具往返�
 
 | 位置 | 部署 |
 |---|---|
-| P4618 RAID0/XFS | `/srv/work`、`buck-out`、AC、CMS、1,638 GiB 热 CS、索引与冷分片 checkpoint |
+| P4618 RAID0/XFS | `/srv/work`、`buck-out`、AC、CMS 及其索引、1,638 GiB 热 CS 与冷分片 checkpoint |
+| PMem 模型卷 | 26 GiB 热 CS 索引，DAX 直通 |
 | HC620 SATA0–3 | 32 个 256 MiB 对齐的裸冷 CAS 分片，合计约 50.9 TiB |
 | D4800X p5 | 848 GiB 裸索引，32 段各 26.5 GiB。持久设备清单在 `/etc/z8-storage/cold-layout.json` |
 | HC620 SATA4–6 与 D4800X p9 | 三盘 RAIDZ1 加 special，挂载 `/data/other` |

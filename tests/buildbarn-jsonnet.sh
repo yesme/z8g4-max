@@ -21,6 +21,14 @@ assert_index_size() {
     ' "$config" >/dev/null
 }
 assert_index_size "$tmp/config/tiered-cache.rendered.json" '["readCaching","fast","local"]' 26
+# Only the hot CS index leaves the store; AC and CMS indexes stay beside their blocks.
+jq -e '(.contentAddressableStorageServer.contentAddressableStorage
+        | .chunkStorage.readCaching.fast.local.keyLocationMap.onBlockDevice.file.path == "/hot-index/key_location_map"
+          and .chunkMappingStorage.chunkMappingValidating.backend.local.keyLocationMap.onBlockDevice.file.path == "/store/cms/key_location_map")
+    and .actionCache.backend.completenessChecking.backend.local.keyLocationMap.onBlockDevice.file.path == "/store/ac/key_location_map"
+' "$tmp/config/tiered-cache.rendered.json" >/dev/null
+jq -e '.contentAddressableStorageServer.contentAddressableStorage.chunkStorage.readCaching.fast.local
+    .keyLocationMap.onBlockDevice.file.path | startswith("/hot/")' "$tmp/config/edge-cache.rendered.json" >/dev/null
 assert_index_size "$tmp/config/edge-cache.rendered.json" '["readCaching","fast","local"]' 4
 jq -e '.buildDirectories[0] | (.native | has("caseInsensitive") | not)
     and (.runners[0].environmentVariables.PATH | contains("/usr/bin"))' \

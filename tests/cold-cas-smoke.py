@@ -157,12 +157,14 @@ def lab():
             store["keyLocationMap"]["onBlockDevice"]["file"]["sizeBytes"] = 8 << 20
         for directory in ("cs-hot", "cms", "ac", "cold/sata0-0"):
             (work / "store" / directory / "persistent_state").mkdir(parents=True)
+        (work / "hot-index").mkdir()
         (config / "test.json").write_text(json.dumps(conf))
 
         run("docker", "run", "-d", "--name", name, "--network", "host", "--pull", "never",
             "--device", f"{devices[0]}:/dev/z8-cold-sata0-0:rw",
             "--device", f"{devices[1]}:/dev/z8-index-sata0-0:rw",
             "-v", f"{config}:/config:ro", "-v", f"{work / 'store'}:/store",
+            "-v", f"{work / 'hot-index'}:/hot-index",
             image, "/config/test.json")
         cleanup.callback(run, "docker", "rm", "-f", name)
         try:

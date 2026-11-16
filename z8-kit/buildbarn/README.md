@@ -2,7 +2,7 @@
 
 ## P4618 热层与 HC620 冷层
 
-P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS、AC 和 32 个冷分片 checkpoint。SATA0–3 上的 dm-zoned 设备承载权威冷 CS，D4800X p5 提供裸索引。上传先写权威冷库，首次冷读回填热 CS。SATA4–6 的 ZFS 专供一般数据。 [Buildbarn 读缓存](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
+P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS、AC 和 32 个冷分片 checkpoint。热 CS 的 26 GiB 索引放在 PMem 模型卷上，经 DAX 直接访问。SATA0–3 上的 dm-zoned 设备承载权威冷 CS，D4800X p5 提供裸索引。上传先写权威冷库，首次冷读回填热 CS。SATA4–6 的 ZFS 专供一般数据。 [Buildbarn 读缓存](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
 ### 冷 CS 几何与容量
 
@@ -17,7 +17,7 @@ P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS�
 
 三个 new block 按 4:2:1 的分配次数推进，分散同一批对象的老化。old 块查到的对象会复制保活，查缺走冷层。每块恰好 70 个区，轮转区边界不跨块。写到一半、空闲回收或随机覆盖仍可能触发 dm-zoned 合并。 [Buildbarn 分配权重](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L263-L273)
 
-P4618 按热 CS **1,638 GiB**、CMS 64 GiB、AC 216 GiB、三份索引合计 34 GiB、worker 输入缓存 128 GiB 预算，合计 **2,080 GiB**。标称 6.4 TB 约余 **3.79 TiB** 给系统、工作树和 `buck-out`，另扣 XFS 元数据。边缘的热 CS 保持 256 GiB 配 4 GiB 索引；全 XFS 回退保持 64 GiB 配 1 GiB 索引。
+P4618 按热 CS **1,638 GiB**、CMS 64 GiB、AC 216 GiB、AC 与 CMS 两份索引合计 8 GiB、worker 输入缓存 128 GiB 预算，合计 **2,054 GiB**。标称 6.4 TB 约余 **3.81 TiB** 给系统、工作树和 `buck-out`，另扣 XFS 元数据。热 CS 的 26 GiB 索引在 PMem 模型卷。边缘的热 CS 保持 256 GiB 配 4 GiB 索引；全 XFS 回退保持 64 GiB 配 1 GiB 索引。
 
 排查过早淘汰时在 max 看 `TooManyAttempts` 和 `put_too_many_iterations_total`。CS 标签汇总冷热层，编码后独立 chunk 大小和 blob 上报的未压缩大小分别计量。 [计数定义](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go)
 
@@ -38,6 +38,41 @@ sudo cat /run/z8-cold/cold-layout.json
 ```
 
 确认 cache 成功打开本轮授权的设备，检查 GetCapabilities、冷 CAS 上传/读取、CMS 拆分和 AC 命中。健康时 32 个分片和 64 个裸设备。少一块冷盘时 24 个分片和 48 个设备，已有对象可能未命中。I4 持续写未过线或全部冷盘不可用时用[全 XFS 回退](#全-xfs-回退)。
+
+### 热 CS 索引的位置
+
+热 CS 的 `key_location_map` 默认在 `/srv/pmem-model/bb-hot-index`，容器内固定为 `/hot-index`。bb-storage 读走 mmap、写走 `pwrite`，放在 XFS DAX 上后读写都直达 PMem，不占页缓存。Linux 7.0 的 XFS 对 DAX 写和缓冲写取同一把独占 `XFS_IOLOCK_EXCL`，迁移不新增锁竞争。每条记录带校验和并按 epoch 过滤，掉电语义不变。AC 和 CMS 的索引仍在各自的 P4618 目录。 [分层依据](../host/TIERING.md#pmem-的三种用途) · [bb-storage 读写路径](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/memory_mapped_block_device_unix.go) · [XFS DAX 写](https://github.com/torvalds/linux/blob/v7.0/fs/xfs/xfs_file.c#L950-L1010)
+
+索引重置时 bb-storage 把文件截断再拉长，成为稀疏文件。目录上的 2 MiB extent 提示让后续分配保持对齐，启动守卫会检查该提示和 `dax=always`。`z8-buildbarn.service` 排在 `z8-pmem-model.service` 之后启动。首次上线后核对索引未进页缓存：
+
+```bash
+sudo xfs_io -r -c 'statx -r' /srv/pmem-model/bb-hot-index/key_location_map | grep -E 'stat.attributes|stat.size'
+sudo fincore /srv/pmem-model/bb-hot-index/key_location_map
+df -h /srv/pmem-model
+```
+
+`fincore` 的 `RES` 应为 0。热 CS 的块、索引和 checkpoint 是一套：索引换位置、从旧版本迁移或 PMem 重建后，三者一起退役，守卫拒绝只剩其一或遗留在 `cs-hot` 目录的旧索引。
+
+```bash
+sudo systemctl stop z8-buildbarn-worker.service z8-buildbarn.service
+sudo mv -T /srv/buildbarn/tiered/cs-hot "/srv/buildbarn/tiered/cs-hot.retired.$(date +%s)"
+sudo install -d -m 0755 /srv/buildbarn/tiered/cs-hot/persistent_state
+sudo rm -f -- /srv/pmem-model/bb-hot-index/key_location_map
+```
+
+取 I5 基线或 PMem 不可用时，把索引放回 P4618。先按上面的命令退役热 CS，再给服务加覆盖并启动。手动运行 `z8-buildbarn-check` 或 `docker compose` 时带同一个变量。
+
+```bash
+sudo install -d -m 0755 /srv/buildbarn/tiered/cs-hot-index
+sudo systemctl edit z8-buildbarn.service
+```
+
+```ini
+[Service]
+Environment=BB_HOT_INDEX_DIR=/srv/buildbarn/tiered/cs-hot-index
+```
+
+回到 PMem 时删除该覆盖和 `cs-hot-index` 里的旧索引，再退役一次热 CS。
 
 ### 冷分片恢复与 CMS
 
@@ -151,7 +186,8 @@ target=//app:binary
 
 先按上面的配置取一次真实构建的基线（吞吐、每路 `Normal` 水位、`i5-cold-watermark`），下列各项逐个对照，无改善就不留。
 
-- **热 CS 索引迁到 `/srv/pmem-model`。** 26 GiB 的 `cs-hot/key_location_map` 放到 XFS DAX 后不占页缓存，66 B 更新也不再回写整个 4 KiB NAND 页。bb-storage 读走 mmap、写走 `pwrite`；Linux 7.0 的 XFS 对 DAX 写和缓冲写都取独占 `XFS_IOLOCK_EXCL`，迁移不新增锁竞争。模型卷是跨两路的条带，任一成员失效整卷重建，所以 AC 的索引留在 P4618：CS 索引丢了只需回填，AC 索引丢了全部动作要重跑。迁移时把 `cs-hot` 的块、索引和 checkpoint 作为一套退役，并同步改启动守卫里的路径与字节数检查。 [bb-storage 读写路径](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/memory_mapped_block_device_unix.go) · [XFS DAX 写](https://github.com/torvalds/linux/blob/v7.0/fs/xfs/xfs_file.c#L950-L1010)
+- **热 CS 索引的两种位置。** 默认在 PMem DAX。先按[放回 P4618 的步骤](#热-cs-索引的位置)取一轮基线，再切到 PMem，比较两路 `Normal` 水位、`pgdemote_*` 与 `pgpromote_*` 计数和构建吞吐。
+- **worker 目录放 tmpfs。** 输入缓存和构建目录是临时数据，重启后可从热 CS 重新拉取。tmpfs 没有日志，搭输入目录时的硬链接和删除变成纯内存操作，也不再回写 P4618；挂载时可用内存策略把页优先放到两个 kmem 节点。代价是这部分内存不能被丢弃，要设大小上限并计入 runner 的 512 GiB。两个目录必须在同一个文件系统上才能硬链接。
 - **THP `always`。** DAX 的 2 MiB 映射不看这个开关，缺页路径对 DAX VMA 直接放行，按 [PMem 手册](../host/PMEM.md#模型卷)的 `dax_pmd_fault_done` 核实即可。`always` 只影响匿名页，可能给编译器带来 TLB 收益，也可能让 Go、Node 进程变大，按构建吞吐和内存两项决定。 [Linux 7.0 THP 判定](https://github.com/torvalds/linux/blob/v7.0/mm/huge_memory.c#L103-L133)
 - **cache 的内存上限。** 容器进程在 Docker 自己的 cgroup，写在 `z8-buildbarn.service` 上的 `MemoryHigh` 管不到它，要用 Compose 的 `mem_limit`。页缓存可下沉到 kmem，每缓存 1 GiB 约占 4 MiB 不可移动的 `xa_node` 和页表；上限压得过低会让冷索引和热块反复换入。只在 `Normal` 水位确有压力时设一个 100 GiB 量级的护栏。
 - **冷数据片的预读保持默认。** 分块下限 256 KiB，缩小预读会把一次冷读拆成许多小请求；HDD 上寻道占主导，顺带多读的部分近乎免费，页缓存可回收。索引切片仍为 0。

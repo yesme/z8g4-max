@@ -35,7 +35,10 @@ base + {
               },
             },
           },
-          fast: disk('/store/cs-hot', '/store/cs-hot/blocks', 1638 * GiB, 26 * GiB, 3, chunking),
+          // The index is hashed, so it gains little from the page cache. Compose
+          // binds /hot-index to the PMem DAX model volume, or to P4618 as a fallback.
+          fast: disk('/store/cs-hot', '/store/cs-hot/blocks', 1638 * GiB, 26 * GiB, 3, chunking,
+                     indexFile='/hot-index/key_location_map'),
           replicator: { 'local': {} },
         },
       },
