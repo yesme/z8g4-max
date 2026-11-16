@@ -43,6 +43,18 @@ inode 与目录项缓存、页表、页缓存的索引节点、ZFS ARC、CUDA �
 
 ## 留在本地的元数据
 
+各文件系统的元数据都记在自己的介质上，不跨设备：P4618 的在 P4618，模型卷的在 PMem，ZFS 的在 D4800X special。
+
+- **模型卷自己的 XFS 元数据。** 超级块、AG 头、inode、extent 记录和内部日志都持久化在 PMem 条带上，没有外置日志设备。DAX 只对文件数据生效：Linux 7.0 的 XFS 读写元数据时仍把块拷进 DDR4 的缓冲区，这一点没有挂载选项可关。这份内存副本的大小跟文件数走，不跟容量走。模型卷只有几十个大文件加一个索引文件，预计是 MB 级，而且可回收，所以实际效果等同于不占 DDR4。上线后用下面的命令核对；文件数保持在这个量级，不要把小文件多的目录放进模型卷。 [XFS 缓冲区的内存来源](https://github.com/torvalds/linux/blob/v7.0/fs/xfs/xfs_buf.c#L160-L250)
+
+```bash
+sudo find /srv/pmem-model -xdev | wc -l
+sudo xfs_io -r -c 'fiemap -v' /srv/pmem-model/bb-hot-index/key_location_map | tail -n 3
+sudo grep -E '^xfs_(inode|buf|ili) ' /proc/slabinfo
+```
+
+`slabinfo` 是全机合计，P4618 的工作树占绝大部分；模型卷的份额按它的文件数和 extent 数估。
+
 - **P4618 的 XFS 元数据和日志。** 放到 PMem 会让一条 PMem 故障连带丢掉系统和全部工作树，启动链也要在 initramfs 里先拼 PMem。XFS 的元数据更新先在内存攒批，瓶颈在 CPU 和锁；P4618 的日志落盘是几十微秒级。
 - **ZFS 的 special。** 已在 Optane SSD 上。归档池的元数据从约 10 µs 降到 1 µs 没有实际意义，ZFS 也不使用 DAX。
 - **AC 和 CMS 的索引。** 各 4 GiB，留在 P4618。CS 索引丢了只需回填，AC 索引丢了全部动作要重跑。
