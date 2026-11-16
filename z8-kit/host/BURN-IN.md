@@ -6,7 +6,7 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 ## T1. CPU、BIOS 与联网
 
-装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P1000。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。到货已装的 P4618 和 D4800X 留在原位，PMem 已拔出，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
+装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P1000。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。本机到货已装的 PMem、P4618 和 D4800X 都已拆下，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
 
 ### HP 自带诊断
 
@@ -36,9 +36,9 @@ bash host/run-step.sh t1-network
 
 如果扫不到 SSID，先核两根天线、F10 槽 7 和 `rfkill list`。软阻断时运行 `sudo rfkill unblock wifi`。PCIe 已识别但接口缺失时，看 `sudo journalctl -k -b --no-pager -g 'iwlwifi|firmware'`。如果日志确实报缺固件，用另一台联网机器从 26.04 官方源下载 `linux-firmware-intel-wireless` 的 `.deb`，经 USB 拷入，`sudo dpkg -i ./linux-firmware-intel-wireless_*.deb` 后在本机控制台运行 `sudo modprobe -r iwlmvm iwlwifi`，再运行 `sudo modprobe iwlwifi`。安装好的临时系统也可重启。能够连上 AP 但没有默认路由或 DNS 时，先处理 DHCP/DNS。`apt update` 若报告仓库访问失败，先解决该错误再安装工具。
 
-Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra Fit CZ430 128 GB**。按计划此时 P4618 等存储还未安装；到货已装时，它们会出现在安装器的磁盘列表里。FIT 先不接。先只插三星 Portable SSD T3 250 GB，从其 Ventoy 菜单启动，等进入 Live 再插 SanDisk。CZ430 的标称容量约为 119 GiB，供临时桌面系统、CUDA 构建工具和日志使用。 [SanDisk 型号规格](https://www.sandisk.com/products/usb-flash-drives/sandisk-ultra-fit-usb-3-1?sku=SDCZ430-128G-G46) · [Xubuntu 容量要求](https://xubuntu.org/download/#system-requirements)
+Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra Fit CZ430 128 GB**。此时 P4618 等存储还未安装，FIT 也先不接。先只插三星 Portable SSD T3 250 GB，从其 Ventoy 菜单启动，等进入 Live 再插 SanDisk。CZ430 的标称容量约为 119 GiB，供临时桌面系统、CUDA 构建工具和日志使用。 [SanDisk 型号规格](https://www.sandisk.com/products/usb-flash-drives/sandisk-ultra-fit-usb-3-1?sku=SDCZ430-128G-G46) · [Xubuntu 容量要求](https://xubuntu.org/download/#system-requirements)
 
-1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。此时 Samsung FIT 留在机外，T4 才接入读序列号。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。机内已有 NVMe 时，按序列号确认目标是 SanDisk，装完用 `lsblk -o NAME,MODEL,SIZE,FSTYPE,PARTLABEL` 确认 P4618 和 D4800X 上没有新分区。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
+1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。此时 Samsung FIT 留在机外，T4 才接入读序列号。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
 2. 安装后按提示拔 Ventoy，SanDisk 留在原 USB 口。从 F9 启动指向 SanDisk 的 UEFI 引导项。运行 `findmnt /`、`findmnt /boot/efi`，用 `lsblk` 验证两者都在 SanDisk。保持网线连接，或在无线过渡时用 AX210 重连。再执行 `sudo apt update`。
 3. 用 `mkdir -p "$HOME/z8-burnin"` 建日志目录。后续保存验机输出的命令从这个目录运行，或显式给出目录路径。T2/T3 内存测试时才从 Ventoy 选 Memtest86+，其余各轮从 SanDisk 上的临时 Xubuntu 启动。
 
@@ -191,7 +191,7 @@ sudo env PMEM_TEST_DAX=/dev/REPLACE_FIRST_DAX PMEM_TEST_SIZE=8G \
 
 ### P4618 链路与双控制器
 
-先装槽 1 的 P4618（到货已装则直接验），从验机介质启动。记录桥接层次、各端口实际协商宽度和两个 NVMe 序列号，然后再装槽 5 的 D4800X。
+先装槽 1 的 P4618，从验机介质启动。记录桥接层次、各端口实际协商宽度和两个 NVMe 序列号，然后再装槽 5 的 D4800X。
 
 ```bash
 sudo apt install pciutils nvme-cli
