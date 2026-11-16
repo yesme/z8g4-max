@@ -36,9 +36,11 @@
 
 每个启用的槽都是 `Option ROM Download = Enable`、`Limit PCIe Speed = Auto`、`Resizable BARs = Disable`，并各有一项 `Intel VROC NVMe Raid (VMD n) = Disable`。启动项列表里 P4618 的两个端点显示同一段序列号，末尾的后缀被截断；T4 以 Linux 的 `ID_SERIAL` 为准，确认两个端点的值不同。
 
-`Main → System Information` 显示两颗 Xeon Platinum 8269CY、192 GB ECC RDDR4 和 System BIOS `P60 v03.00 04/15/2026`。PMem 拔出后内存总量正是 12 条 DDR4。
+`Main → System Information` 显示两颗 Xeon Platinum 8269CY、192 GB ECC RDDR4 和 System BIOS `P60 v03.00 04/15/2026`。PMem 拔出后内存总量正是 12 条 DDR4。Advanced System Information 另记：Memory Speed 2666 MHz，Processor Stepping 7，MicroCode Revision `5003901`，ME Firmware Version `11.22.94.2495`、模式 AMT Disabled，System Board ID `81C7`。序列号、UUID、MAC 地址等留在本机记录。
 
-**没拍到、T1 仍要核对的项。** `Show Advanced System Information` 里的 ME 版本与 System Board ID、Secure Boot Configuration、VTx 与 VTd、TPM、主显示槽位，以及 System Options 第二页。AMT 已设为 Disable。
+**T1 已改并确认。** Fast Boot 与 PXE 已关，SATA 为 AHCI，sSATA Controller 已停用，AMT 为 Disable；Secure Boot Configuration、VTx 与 VTd、Remote Management Options 已核对。`PCIE MMIO Assignment Mode` 的选项是 `32 Bit`、`64 Bit`、`Auto`，这一项就是本机的 4G 以上地址分配开关，保持 Auto；T5 的四张 V100 若报 BAR 分配失败，先改成 `64 Bit`。System Options 末尾的 `HP Application Driver` 保持未勾选，它只给 HP 的 Windows 软件用。
+
+**仍待确认。** `Main → BIOS Event Log` 有无历史硬件事件、主显示槽位的选项位置，以及 TPM 状态。
 
 **`Reset Factory Defaults on Battery Loss` 到货为 `Apply Default Settings`。** 二手机的纽扣电池寿命未知。电池失效后 F10 回到出厂默认，上面四项和槽 2/3 的 `x8x8` 都会丢，sSATA 也会重新启用。T1 配好后先执行 `Main → Save Custom Defaults`，再用 `Main → Replicated Setup` 把设置导出到 U 盘。设置丢失后用 `Apply Custom Defaults and Exit` 一步恢复 Main 和 Advanced 两页，Security 页的项要另行核对。条件允许时换一颗新的 CR2032。
 
