@@ -50,6 +50,17 @@ Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra 
 bash host/run-step.sh t1-cpu-prepare
 ```
 
+**先装 R580 再压测。** 临时系统默认用开源的 nouveau 驱动 P1000。本机实测它在关闭图形界面的瞬间让整机锁死，键盘灯都不再响应。装完临时系统后就按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装 `nvidia-driver-580`，重启后 `lsmod | grep -E 'nvidia|nouveau'` 应只有 `nvidia` 一组；T5 只需复核。
+
+**先跑 60 秒看两路温度。** 开两个终端，一个看温度，一个跑满载。本机 8269CY 的 `sensors` 上限是 high 87 °C、crit 93 °C。
+
+```bash
+watch -n 2 "sensors | grep Package"
+stress-ng --cpu "$(nproc)" --cpu-method matrixprod --timeout 60s --metrics-brief
+```
+
+任何一路到 87 °C 就按 Ctrl+C。一分钟内顶到上限，或者两路相差超过 10 °C，都先停下来处理散热：查该路散热器的风扇和风扇线，再拆下散热器看硅脂是否涂匀、保护膜是否撕掉，按标签顺序重新拧紧四颗螺丝。本机首次满载时 CPU0 在一分钟内到 93 °C、CPU1 为 75 °C，原因是 CPU0 的硅脂没涂好；此前的 30 分钟压测也因此在几分钟内卡死。60 秒正常后把时间加到 5 分钟、15 分钟，再跑下面的完整一轮。
+
 重启进 SanDisk 临时系统后运行下列检查。
 
 ```bash
@@ -267,7 +278,7 @@ bash host/run-step.sh t4-inventory
 
 ## T5. 算力坞 V100 与 PCIe 拷机
 
-- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P1000。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
+- T4 通过后，先在临时系统复核 T1 已装的 R580 和 P1000；T1 没装的按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 补装。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
 - 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。然后做 1017 冒烟。
 
 ### T5 末的 1017 推理冒烟
