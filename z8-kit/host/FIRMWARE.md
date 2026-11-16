@@ -16,11 +16,13 @@
 **本机到货实拍。** 11 条 `NMA1XBD128GQS`，后补一条 `NMA1XXD128GQS`，都是带样品标识的 Intel 料号，没有整机厂商的标签。固件为 9 条 `01.02.00.5310`、2 条 `5355`、1 条 `5386`，都低于 5417 且混版。按下面的顺序处理。
 
 1. **不为固件卡住 T3。** 这批模块在到货版本下已能启动并映射，混版可以运行。
-2. **有条件地统一到 `01.02.00.5446`。** 这是能查到的 100 系列最后一版。时机是 T3 提交 goal 之前，此时模块里没有数据。Intel 自己的固件包在需要 NDA 的门户里，整机厂商公开发布同版本的包。这些包面向各家自己的机型，用在样品料号上没有任何一方背书，所以以 `-examine` 的结果为准：它只校验镜像与模块是否匹配，不写入。
+2. **有条件地统一到 `01.02.00.5446`。** 这是能查到的 100 系列最后一版。时机是 T3 提交 goal 之前，此时模块里没有数据。Intel 自己的固件包在需要 NDA 的门户里，由整机厂商各自发布。HP 的 Optane 白皮书说明 Z6/Z8 G4 的模块固件以 SoftPaq 发布、从 UEFI Shell U 盘更新，先在 HP 的 Z8 G4 支持页找；找不到再看其他厂商公开的同版本包。这些包面向各家自己的机型，用在样品料号上没有任何一方背书，所以以 `-examine` 的结果为准：它只校验镜像与模块是否匹配，不写入。
 3. **先试一条。** `-examine` 通过就先刷这一条，完全断电再开机，确认 `ActiveFWVersion` 和健康状态，再逐条刷其余。两种料号各自先过一次 `-examine`。任何一条被拒，就全部保留到货版本，把 FW 诊断结果和 T3 的写读校验记入基线。
 4. **写入偏慢时加 `-lpmb`。** 上游说明建议用 2.x 的 `ipmctl` 给 100 系列写固件时加这个选项，本机的 3.x 同样处理。`ipmctl` 本身在本机不可用时见 [PMem 手册的已知问题](PMEM.md#2-在-xubuntu-26041-记录现状并提交-goal)，此时不升级。
 
-[Intel 固件获取与更新](https://www.intel.com/content/www/us/en/support/articles/000032996/memory-and-storage/intel-optane-persistent-memory.html) · [Dell 的 100 系列固件包](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=498kf) · [ipmctl 上游说明](https://github.com/intel/ipmctl#workarounds)
+能查到的 100 系列版本都在 `01.02.00` 分支，末四位越大越新：5355、5360、5367、5375（2019-07）、5395（2019-12）、5417、5435（2020-04）、5444、5446（2021-07，最后一版）。本机的 5310 和 5386 没有查到公开发布记录。
+
+[Intel 固件获取与更新](https://www.intel.com/content/www/us/en/support/articles/000032996/memory-and-storage/intel-optane-persistent-memory.html) · [HPE 的版本记录](https://support.hpe.com/hpsc/swd/public/detail?swItemId=MTX-72236c502db445d98e3aa406bc) · [Dell 的 100 系列固件包](https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=498kf) · [ipmctl 上游说明](https://github.com/intel/ipmctl#workarounds)
 
 ```bash
 sudo ipmctl show -dimm
