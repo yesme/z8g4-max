@@ -6,7 +6,21 @@ T1–T4 在主机独立运行时完成，槽 2/3 的直通卡未装、算力坞�
 
 ## T1. CPU、BIOS 与联网
 
-装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P620。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
+装两颗 8269CY、散热器、内存风道、12 条 DDR4 和槽 4 的 P1000。有网线就接板载 RJ-45。无线过渡时，断电装槽 7 的 AX210 和两根天线；用到蓝牙再接内部 USB。P4618、D4800X、HC620 和算力坞留到对应阶段。到货已装的 P4618 和 D4800X 留在原位，PMem 已拔出，见 [到货状态](BIOS.md#到货状态与首次-f10-实拍)。按 [BIOS 手册](BIOS.md) 设 F10，并按 [固件手册](FIRMWARE.md) 处理主板固件。
+
+### HP 自带诊断
+
+开机按 Esc 再按 F2，或在 F10 的 `Main → System Diagnostics` 进入 HP PC Hardware Diagnostics UEFI。它不依赖任何系统盘，BIOS 按 U 盘、硬盘、BIOS 内置的顺序找这个工具；本机没有另装时运行的是内置的 `2.3.8.0 - BIOS`，菜单为 Processor、Memory Test、Storage Tests、System Board Test 和 Keyboard Test。它用来做装系统前的快筛和日后开不了机时的排查，不替代下面的拷机。
+
+| 阶段 | 用哪项 | 说明 |
+|---|---|---|
+| T1 | Processor、System Board Test | 各几分钟。通过时记下 PASS ID，失败时记下 24 位 Failure ID |
+| T2 | Memory Test 的 Quick Check | 192 GiB 约一小时，放在 Memtest86+ 之前先筛一遍。四个完整 pass 的 Memtest86+ 和 144 GiB 的 Linux 压测照做 |
+| T4 | Storage Tests 的快速项 | 先看它列出了哪些盘，只做 SMART 类的快速检查。七块 14 TB 盘的全盘读由并行的 SMART 长自检完成，不用它的完整测试 |
+
+它不显示温度、频率和 ECC 可纠正错误计数，也没有 GPU 计算、PMem 和 dm-zoned 的测试，这些仍看 Linux 下的日志。需要完整版时，在 Windows 电脑上运行 HP 的 SoftPaq sp167305（版本 10.8.4.0），选择装到 U 盘；安装程序会把 U 盘分区改名为 `HP_TOOLS`，所以用一只单独的 U 盘，不要用 Ventoy、SanDisk 或 FIT。 [HP 维修手册的诊断章节](https://kaas.hpcloud.hp.com/pdf-public/pdf_6792418_en-US-1.pdf) · [sp167305 说明](https://ftp.hp.com/pub/softpaq/sp167001-167500/sp167305.html)
+
+进了 Linux 以后，可以试 `sudo modprobe hp-wmi-sensors` 再运行 `sensors`。HP 商用机经 WMI 报告的风扇转速和板上温度由这个驱动接入 hwmon，本机是否有数据以实测为准。 [Linux 7.0 hp-wmi-sensors](https://docs.kernel.org/7.0/hwmon/hp-wmi-sensors.html)
 
 ### 首次 Live 联网与临时验机系统
 
@@ -22,9 +36,9 @@ bash host/run-step.sh t1-network
 
 如果扫不到 SSID，先核两根天线、F10 槽 7 和 `rfkill list`。软阻断时运行 `sudo rfkill unblock wifi`。PCIe 已识别但接口缺失时，看 `sudo journalctl -k -b --no-pager -g 'iwlwifi|firmware'`。如果日志确实报缺固件，用另一台联网机器从 26.04 官方源下载 `linux-firmware-intel-wireless` 的 `.deb`，经 USB 拷入，`sudo dpkg -i ./linux-firmware-intel-wireless_*.deb` 后在本机控制台运行 `sudo modprobe -r iwlmvm iwlwifi`，再运行 `sudo modprobe iwlwifi`。安装好的临时系统也可重启。能够连上 AP 但没有默认路由或 DNS 时，先处理 DHCP/DNS。`apt update` 若报告仓库访问失败，先解决该错误再安装工具。
 
-Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra Fit CZ430 128 GB**。此时 P4618 等存储还未安装，FIT 也先不接。先只插三星 Portable SSD T3 250 GB，从其 Ventoy 菜单启动，等进入 Live 再插 SanDisk。CZ430 的标称容量约为 119 GiB，供临时桌面系统、CUDA 构建工具和日志使用。 [SanDisk 型号规格](https://www.sandisk.com/products/usb-flash-drives/sandisk-ultra-fit-usb-3-1?sku=SDCZ430-128G-G46) · [Xubuntu 容量要求](https://xubuntu.org/download/#system-requirements)
+Live 联网验证通过后，把临时系统装到 **可清空的 SanDisk Ultra Fit CZ430 128 GB**。按计划此时 P4618 等存储还未安装；到货已装时，它们会出现在安装器的磁盘列表里。FIT 先不接。先只插三星 Portable SSD T3 250 GB，从其 Ventoy 菜单启动，等进入 Live 再插 SanDisk。CZ430 的标称容量约为 119 GiB，供临时桌面系统、CUDA 构建工具和日志使用。 [SanDisk 型号规格](https://www.sandisk.com/products/usb-flash-drives/sandisk-ultra-fit-usb-3-1?sku=SDCZ430-128G-G46) · [Xubuntu 容量要求](https://xubuntu.org/download/#system-requirements)
 
-1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。此时 Samsung FIT 留在机外，T4 才接入读序列号。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
+1. 在 Live 中，插入 SanDisk 前后各运行一次 `lsblk -d -o NAME,PATH,MODEL,SERIAL,SIZE,TRAN`，用新增设备的型号和序列号认出 SanDisk，容量约 119 GiB。此时 Samsung FIT 留在机外，T4 才接入读序列号。再打开 **Install Xubuntu → Interactive installation → Erase disk and install Xubuntu**。只选 SanDisk，使用默认 ext4，保持加密和第三方驱动选项关闭。在最后确认页核对目标后继续。机内已有 NVMe 时，按序列号确认目标是 SanDisk，装完用 `lsblk -o NAME,MODEL,SIZE,FSTYPE,PARTLABEL` 确认 P4618 和 D4800X 上没有新分区。 [桌面安装流程](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#erase-disk-and-install-ubuntu)
 2. 安装后按提示拔 Ventoy，SanDisk 留在原 USB 口。从 F9 启动指向 SanDisk 的 UEFI 引导项。运行 `findmnt /`、`findmnt /boot/efi`，用 `lsblk` 验证两者都在 SanDisk。保持网线连接，或在无线过渡时用 AX210 重连。再执行 `sudo apt update`。
 3. 用 `mkdir -p "$HOME/z8-burnin"` 建日志目录。后续保存验机输出的命令从这个目录运行，或显式给出目录路径。T2/T3 内存测试时才从 Ventoy 选 Memtest86+，其余各轮从 SanDisk 上的临时 Xubuntu 启动。
 
@@ -80,7 +94,7 @@ bash host/run-step.sh t1-avx
 
 ## T2. 只测 DDR4
 
-1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P620 留在槽 4，无线过渡时 AX210 留在槽 7。
+1. 沿用 T1 的硬件。DDR4 仍用 CPU0、CPU1 各自 DIMM 1/3/5/8/10/12。F10 确认 192 GiB、每路六条，NUMA 开、Fast Boot 和 SNC 关。P1000 留在槽 4，无线过渡时 AX210 留在槽 7。
 2. F9 选 Ventoy UEFI，在菜单选现有的 Memtest86+ x86_64。选完整地址范围和默认测试集，Rowhammer 保持关闭。先做 1 pass 快筛，再持续至至少 **4 个完整 pass**。I1 装好正式 FIT 后，日后复测可从 [FIT 的 GRUB 菜单](FIT-RECOVERY.md#i1-备好本机救援入口)选 Memtest86+。可用时开 ECC 轮询并拍下结果，另查 BIOS 事件和 Linux EDAC。要求 0 错。
 3. 回 SanDisk 上的临时 Xubuntu，按下面顺序核容量、开温度采样、跑 Linux 压测。日志都留在 `~/z8-burnin`。
 
@@ -137,7 +151,7 @@ bash host/run-step.sh t2-ddr4 0
 
 ## T3. PMem 100，App Direct 的专用检查
 
-1. T2 通过后关机断电。DDR4 留在原位，往 CPU0 和 CPU1 各自的 DIMM 2/4/6/7/9/11 加 PMem。打开 [T3 的 App Direct 操作](PMEM.md#t3-配置-app-direct)，依次做 F10 查条与临时解冻、Linux 盘点和提交 App Direct goal、重启核对两路 region。再用 Memtest86+ 复测混插 DDR4 至少一个完整 pass。回 SanDisk 上的临时系统切 namespace，使用下面的诊断和写读校验验 PMem。
+1. T2 通过后关机断电。DDR4 留在原位，往 CPU0 和 CPU1 各自的 DIMM 2/4/6/7/9/11 加 PMem。这批模块带着原来的 Memory Mode 配置，首次混插开机时内存总量可能是 PMem 容量；goal 生效后再跑 Memtest86+。打开 [T3 的 App Direct 操作](PMEM.md#t3-配置-app-direct)，依次做 F10 查条与临时解冻、Linux 盘点和提交 App Direct goal、重启核对两路 region。再用 Memtest86+ 复测混插 DDR4 至少一个完整 pass。回 SanDisk 上的临时系统切 namespace，使用下面的诊断和写读校验验 PMem。
 
 ```bash
 bash host/run-step.sh t3-pmem
@@ -177,7 +191,7 @@ sudo env PMEM_TEST_DAX=/dev/REPLACE_FIRST_DAX PMEM_TEST_SIZE=8G \
 
 ### P4618 链路与双控制器
 
-先装槽 1 的 P4618，从验机介质启动。记录桥接层次、各端口实际协商宽度和两个 NVMe 序列号，然后再装槽 5 的 D4800X。
+先装槽 1 的 P4618（到货已装则直接验），从验机介质启动。记录桥接层次、各端口实际协商宽度和两个 NVMe 序列号，然后再装槽 5 的 D4800X。
 
 ```bash
 sudo apt install pciutils nvme-cli
@@ -243,7 +257,7 @@ bash host/run-step.sh t4-hdd-start "${hdds[@]}"
 
 ### 主机基线
 
-七盘运行时复查当前网络。走有线时记录板载网口驱动和协商速率；仍用 AX210 过渡时复查 Wi-Fi，使用蓝牙时也查蓝牙控制器，并保存 `iwlwifi` 日志。确认重启可联网。主机保持独立，保存硬件、内核、RAS、SMART 与 SATA 对应表。P620 为唯一显卡。
+七盘运行时复查当前网络。走有线时记录板载网口驱动和协商速率；仍用 AX210 过渡时复查 Wi-Fi，使用蓝牙时也查蓝牙控制器，并保存 `iwlwifi` 日志。确认重启可联网。主机保持独立，保存硬件、内核、RAS、SMART 与 SATA 对应表。P1000 为唯一显卡。
 
 ```bash
 bash host/run-step.sh t4-inventory
@@ -253,7 +267,7 @@ bash host/run-step.sh t4-inventory
 
 ## T5. 算力坞 V100 与 PCIe 拷机
 
-- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P620。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
+- T4 通过后，先在临时系统按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 装驱动、确认 P1000。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。 [GPU Burn](https://github.com/wilicc/gpu-burn)
 - 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。然后做 1017 冒烟。
 
 ### T5 末的 1017 推理冒烟

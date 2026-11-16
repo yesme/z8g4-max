@@ -6,7 +6,7 @@
 
 I1 接两只 USB 设备。**三星 Portable SSD T3 250 GB（Ventoy）** 启动 `xubuntu-26.04.1-desktop-amd64.iso` 并存放安装 YAML，**三星 FIT 128 GB** 是引导盘的写入目标。T1–T5 的临时 Xubuntu 和验机记录留在 SanDisk CZ430 128 GB。按 [T5 交接步骤](FIRST-BOOT.md#2-t5-验算力坞) 保存记录并关机，拔下 SanDisk，再接 FIT。
 
-T5 通过后关机断电，断开 V100、七块 HC620 和 D4800X。保留 DDR4、PMem、P620 和 P4618。优先接板载网口；还在用无线过渡时保留接好天线的 AX210。用 F9 选 Ventoy 的 UEFI 入口，在菜单选现有 Xubuntu 26.04.1 Desktop ISO。ISO 的 SHA-256 可在 Windows 用 `Get-FileHash -Algorithm SHA256` 核对。 [Xubuntu 26.04.1 ISO 与 SHA256SUMS](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/)
+T5 通过后关机断电，断开 V100、七块 HC620 和 D4800X。保留 DDR4、PMem、P1000 和 P4618。优先接板载网口；还在用无线过渡时保留接好天线的 AX210。用 F9 选 Ventoy 的 UEFI 入口，在菜单选现有 Xubuntu 26.04.1 Desktop ISO。ISO 的 SHA-256 可在 Windows 用 `Get-FileHash -Algorithm SHA256` 核对。 [Xubuntu 26.04.1 ISO 与 SHA256SUMS](https://cdimage.ubuntu.com/xubuntu/releases/26.04.1/release/)
 
 正式安装时，图形界面负责导入 YAML 和确认，Subiquity 把明确列出的磁盘动作交给 Curtin 创建阵列和文件系统。桌面安装器的 [#1210](https://github.com/canonical/ubuntu-desktop-provision/issues/1210) 涉及手动分区页找不到预建 md 阵列。I1 直接走自动安装，P4618 在这一阶段由安装器分区和组阵。 [桌面安装器导入配置](https://ubuntu.com/desktop/docs/en/latest/tutorial/install-ubuntu-desktop/#type-of-installation) · [Subiquity RAID 配置](https://canonical-subiquity.readthedocs-hosted.com/en/latest/howto/configure-storage.html#raid)
 
@@ -182,7 +182,7 @@ findmnt -T /srv/buildbarn -o SOURCE,TARGET,FSTYPE
 
 ## 安装并锁定 NVIDIA 显卡驱动
 
-T5 在临时系统执行本节的 APT 和重启核验，完成后回拷机手册接坞。I3 在正式系统重新执行本节，再做下面的 Sunshine 和复接验证。两次开始时都只有槽 4 的 P620。**R580 是 NVIDIA Linux 显卡驱动的 580.x 分支**，也是 NVIDIA 最后一条同时支持 V100（Volta）和 P620（Pascal）的驱动分支。这台机安装 Ubuntu 的专有驱动包 `nvidia-driver-580`，并接受该分支的补丁更新。2026 年 11 月 13 日核对的 APT 组合为 `580.178.04-0ubuntu0.26.04.1` 和 `linux-modules-nvidia-580-generic 7.0.0-43.43`。第三方 CUDA 构建留在独立用户空间，目标 `sm_70` 用 CUDA 12.x。 [NVIDIA 驱动支持矩阵](https://docs.nvidia.com/datacenter/tesla/drivers/cuda-toolkit-driver-and-architecture-matrix.html) · [580.x 支持的 GPU](https://download.nvidia.com/XFree86/Linux-x86_64/580.159.03/README/supportedchips.html) · [Ubuntu 驱动包](https://packages.ubuntu.com/resolute-updates/nvidia-driver-580) · [Ubuntu 驱动安装](https://ubuntu.com/server/docs/how-to/graphics/install-nvidia-drivers/)
+T5 在临时系统执行本节的 APT 和重启核验，完成后回拷机手册接坞。I3 在正式系统重新执行本节，再做下面的 Sunshine 和复接验证。两次开始时都只有槽 4 的 P1000。**R580 是 NVIDIA Linux 显卡驱动的 580.x 分支**，也是 NVIDIA 最后一条同时支持 V100（Volta）和 P1000（Pascal）的驱动分支。这台机安装 Ubuntu 的专有驱动包 `nvidia-driver-580`，并接受该分支的补丁更新。2026 年 11 月 13 日核对的 APT 组合为 `580.178.04-0ubuntu0.26.04.1` 和 `linux-modules-nvidia-580-generic 7.0.0-43.43`。第三方 CUDA 构建留在独立用户空间，目标 `sm_70` 用 CUDA 12.x。 [NVIDIA 驱动支持矩阵](https://docs.nvidia.com/datacenter/tesla/drivers/cuda-toolkit-driver-and-architecture-matrix.html) · [580.x 支持的 GPU](https://download.nvidia.com/XFree86/Linux-x86_64/580.159.03/README/supportedchips.html) · [Ubuntu 驱动包](https://packages.ubuntu.com/resolute-updates/nvidia-driver-580) · [Ubuntu 驱动安装](https://ubuntu.com/server/docs/how-to/graphics/install-nvidia-drivers/)
 
 ```bash
 sudo install -m 0644 host/z8-nvidia-580.pref.example /etc/apt/preferences.d/z8-nvidia-580
@@ -206,7 +206,7 @@ nvidia-smi --query-gpu=name,pci.bus_id,driver_version --format=csv
 sudo journalctl -k -b -g 'NVRM|Xid'
 ```
 
-在 T5 核 P620 与 R580 后，返回 [算力坞测试](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机)。下文用于 I3 正式系统。确认 P620 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与[快速 CUDA/NCCL](#算力坞验收)，并在 Moonlight 串流时再核一次捕获的显示接口和 P620 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
+在 T5 核 P1000 与 R580 后，返回 [算力坞测试](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机)。下文用于 I3 正式系统。确认 P1000 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与[快速 CUDA/NCCL](#算力坞验收)，并在 Moonlight 串流时再核一次捕获的显示接口和 P1000 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
 
 ## 固定 GA 轨道并试启新内核
 
