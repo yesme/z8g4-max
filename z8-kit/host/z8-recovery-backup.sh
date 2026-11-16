@@ -62,7 +62,8 @@ volume="$work/fit"
 stage=
 pending_link=
 mounted=0
-# shellcheck disable=SC2329 # The EXIT trap runs this after every mounted path.
+# ShellCheck 0.9 can miss this callback when it is invoked by the EXIT trap.
+# shellcheck disable=SC2317,SC2329
 cleanup() {
     local status=$?
     trap - EXIT
