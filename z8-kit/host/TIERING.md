@@ -11,13 +11,14 @@ Linux 把 DDR4 和 kmem 上线的 PMem 当作两层内存：冷的可移动页�
 | **DAX 直通**，不进页缓存 | 总量大、每次只碰一点的数据，后端是 PMem | 每次访问都付 PMem 延迟，随机读约 300 ns，约为 DDR4 的 3 倍；不占 DDR4 |
 | **页缓存**，DDR4 → kmem → 设备 | 有热集、会反复读的数据，后端是 NVMe 或 HDD | 热页常驻 DDR4；每缓存 1 GiB 约占 4 MiB 不可移动的内核结构 |
 
-PMem 和 DDR4 只差几倍，所以直通划算。Optane SSD 一次随机读约 10 µs，NAND 约 80 µs，和 DDR4 差两个数量级，页缓存在这两种设备上仍然有价值。NVMe 是块设备，对它做 mmap 映射的就是页缓存，内核没有绕开的开关；要绕开只能由应用使用 `O_DIRECT`。
+PMem 和 DDR4 只差几倍，所以直通划算。例外是每次都要整块读、还要交给显卡的数据：1017 的 routed expert 每个 token 要用约 2 GiB，DAX 上的页又不能被显卡长期锁定，所以放进锁页 DDR4。Optane SSD 一次随机读约 10 µs，NAND 约 80 µs，和 DDR4 差两个数量级，页缓存在这两种设备上仍然有价值。NVMe 是块设备，对它做 mmap 映射的就是页缓存，内核没有绕开的开关；要绕开只能由应用使用 `O_DIRECT`。
 
 ## 各类数据的位置和通路
 
 | 数据 | 介质 | 通路 |
 |---|---|---|
-| 1017 权重、Engram、tokenizer | PMem fsdax 条带，`/srv/pmem-model` | DAX 直通 |
+| 1017 的 Engram、tokenizer | PMem fsdax 条带，`/srv/pmem-model` | DAX 直通，每个 token 只读几行 |
+| 1017 的 routed expert，约 123 GiB | 文件在同一模型卷，启动时读进锁页 DDR4 | 不经页缓存；不可回收，不下沉 |
 | Buildbarn 热 CS 索引，26 GiB | 同一模型卷的 `bb-hot-index` | DAX 直通 |
 | Buildbarn 热 CS 块、AC、CMS 及后两者的索引 | P4618 XFS | 页缓存，可下沉 |
 | Buildbarn 冷索引，848 GiB | D4800X p5 裸分区 | 页缓存，预读为 0，可下沉 |
@@ -27,11 +28,11 @@ PMem 和 DDR4 只差几倍，所以直通划算。Optane SSD 一次随机读约 
 | runner 的 `/tmp` | tmpfs | 可移动页，可下沉 |
 | Buck2、agent、编译进程的匿名内存 | — | DDR4，冷页下沉 |
 | `/data/other` | SATA4–6 RAIDZ1 加 D4800X special | ZFS ARC，只在 DDR4，上限 4 GiB |
-| 推理的 KV 和热专家 | 四卡显存 | — |
+| 推理的 KV、非专家权重和热专家 | 四卡显存 | — |
 
 ## 只能留在 DDR4 的部分
 
-inode 与目录项缓存、页表、页缓存的索引节点、ZFS ARC、CUDA 长期锁页和内核栈都不可移动，不能下沉到 kmem。192 GiB DDR4 的预算实际留给这一组；可移动的匿名页和文件页背后有约 964 GiB kmem。给 DDR4 减负时先看这一组的大小，例如工作树文件数和 ARC 上限，页缓存总量是次要的。kmem 自己的页描述符由 `memmap_on_memory` 放在 PMem 上。 [kmem 配置](PMEM.md#剩余-pmem-转-kmem) · [CPU 与内存保护](CPU-PLACEMENT.md)
+inode 与目录项缓存、页表、页缓存的索引节点、ZFS ARC、CUDA 长期锁页和内核栈都不可移动，不能下沉到 kmem。192 GiB DDR4 的预算实际留给这一组，其中最大的一项是推理运行时约 123 GiB 的专家锁页内存；可移动的匿名页和文件页背后有约 964 GiB kmem。给 DDR4 减负时先看这一组的大小，例如工作树文件数和 ARC 上限，页缓存总量是次要的。kmem 自己的页描述符由 `memmap_on_memory` 放在 PMem 上。 [kmem 配置](PMEM.md#剩余-pmem-转-kmem) · [CPU 与内存保护](CPU-PLACEMENT.md)
 
 ## PMem 的三种用途
 

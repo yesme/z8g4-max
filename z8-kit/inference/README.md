@@ -77,7 +77,11 @@ DS41_ENGRAM="$DS41_MODEL_DIR/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf"
 )
 ```
 
-**首装目标为单槽 128K。** 四卡 layer split、f16 GPU KV（`SLOTS=1 SLOT_CTX=131072 KV_TYPE=f16 KV_OFFLOAD=1`）。启动器始终显式给 `--ctx-size`，总和计入每槽的 256-token 对齐并设上限 1,048,576。热点专家用 8192 MiB 合计 GPU 缓存，只在 T5/I3 用正式内核默认参数确认六对都走 NVLink且通过数据校验后，才 `export Z8_NVLINK_P2P=1`。未通过时沿用启动器默认关闭。routed experts 留在 host，可按需从 PMem 的 `mmap` 读取，实际 pinned staging 由引擎分配。CPU miss share 默认 0，batch/microbatch 默认 512/32，batch 线程沿用推理线程数。只有实际微批的 token 数进入上游的接纳范围时，才会走该专家缓存路径。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md) · [32-token 接纳上限](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L340)
+**首装目标为单槽 128K。** 四卡 layer split、f16 GPU KV（`SLOTS=1 SLOT_CTX=131072 KV_TYPE=f16 KV_OFFLOAD=1`）。启动器始终显式给 `--ctx-size`，总和计入每槽的 256-token 对齐并设上限 1,048,576。热点专家用 24576 MiB 合计 GPU 缓存，只在 T5/I3 用正式内核默认参数确认六对都走 NVLink且通过数据校验后，才 `export Z8_NVLINK_P2P=1`。未通过时沿用启动器默认关闭。CPU miss share 默认 0，batch/microbatch 默认 512/512，batch 线程沿用推理线程数。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md)
+
+**专家放锁页 DDR4，Engram 留在 PMem。** 1017 有 40 层，每层 384 个 routed expert，每个 token 每层选 6 个。IQ2_XXS 这套的专家平均 8.2 MiB、共约 123 GiB，其余权重约 5.7 GiB，Engram 约 103 GiB。每生成一个 token 要用到约 2 GiB 专家权重，显存缓存之外的专家从哪里取决定了速度。启动器用 `--load-mode dio`：专家读进 CUDA 的锁页主机内存，按 `Z8_DRAM_INTERLEAVE` 落在两路 DDR4，未命中时按 PCIe 链路速度上传。Engram 是按行按需读的张量，任何加载模式下都走文件映射，留在 PMem。不要改回 `mmap`：模型文件在 DAX 卷上，映射出来的是 PMem 本身的页，Linux 不允许长期锁定这类页，上传会退化成单线程从 PMem 拷贝。加载要读约 123 GiB，启动为分钟级。 [1017 官方配置](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/main/config.json) · [ISTA 张量分配表](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF/blob/65d53bc8be65123e255ff02f3ded958b6dbf54fd/tensor-allocation/DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS.rco-allocation.txt) · [按需张量始终走映射](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model.cpp#L2049-L2052) · [fsdax 页不可长期锁定](https://github.com/torvalds/linux/blob/v7.0/mm/gup.c#L1213-L1214)
+
+**提示词按 512 一批处理。** 超过 32 个 token 的微批只读专家缓存，把没缓存到的专家上传一次后整批计算，不会把生成阶段的热专家挤出缓存。微批越大，每个 token 分摊的上传越少。512 微批要在每张卡上给一层专家的临时副本留显存，估计最多约 3 GiB，以启动日志的 compute buffer 为准。显存有余量时可在 I6 试 `BATCH_SIZE=2048 UBATCH_SIZE=2048`。 [大批量的缓存行为](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L693-L696)
 
 ```bash
 export LLAMA_BUILD Z8_CUDA_RUNTIME DS41_GGUF
@@ -88,18 +92,18 @@ bash "$kit/inference/serve-llama.sh"
 
 ### 上下文降档与验收
 
-从表中第一档开始。只在显存不足、每卡余量不足或该 KV 档不能正确运行时进入下一档。前五档保持 KV 在 GPU，需要更长且 64K 已能运行时，可试最后一档恢复 128K。
+从表中第一档开始。只在显存不足、每卡余量不足或该 KV 档不能正确运行时进入下一档。首装的 24576 MiB 按每张卡 16 GiB 估：非专家权重约 1.4 GiB，专家缓存 6 GiB，512 微批的临时专家副本最多约 3 GiB，其余给 KV 和计算缓冲。首装档启动后每卡余量明显多于 2 GiB 时，按 4096 MiB 一档上调 `MOE_CACHE_MIB`；16384 MiB 仍放不下时再降到 8192 MiB。前五档保持 KV 在 GPU，需要更长且 64K 已能运行时，可试最后一档恢复 128K。
 
 | 顺序 | 每槽上下文 | KV 类型和位置 | 四卡合计 GPU 专家缓存 |
 |---|---:|---|---:|
-| 首装 | 128K | `KV_TYPE=f16 KV_OFFLOAD=1` | 8192 MiB |
-| 量化 KV | 128K | `KV_TYPE=q8_0 KV_OFFLOAD=1` | 8192 MiB |
-| 减专家缓存 | 128K | `KV_TYPE=q8_0 KV_OFFLOAD=1` | 4096 MiB |
-| 进一步量化 | 128K | `KV_TYPE=q4_0 KV_OFFLOAD=1` | 4096 MiB |
-| 缩上下文 | 64K | `KV_TYPE=q4_0 KV_OFFLOAD=1` | 4096 MiB |
-| 主机 KV | 128K | `KV_TYPE=f16 KV_OFFLOAD=0` | 4096 MiB |
+| 首装 | 128K | `KV_TYPE=f16 KV_OFFLOAD=1` | 24576 MiB |
+| 量化 KV | 128K | `KV_TYPE=q8_0 KV_OFFLOAD=1` | 24576 MiB |
+| 减专家缓存 | 128K | `KV_TYPE=q8_0 KV_OFFLOAD=1` | 16384 MiB |
+| 进一步量化 | 128K | `KV_TYPE=q4_0 KV_OFFLOAD=1` | 16384 MiB |
+| 缩上下文 | 64K | `KV_TYPE=q4_0 KV_OFFLOAD=1` | 16384 MiB |
+| 主机 KV | 128K | `KV_TYPE=f16 KV_OFFLOAD=0` | 16384 MiB |
 
-用 `SLOT_CTX=65536` 切到 64K，用 `MOE_CACHE_MIB=4096` 减缓存。量化档启动器为 K/V 传同一类型，并显式开启 Flash Attention。v1.0.0 的 DeepSeek 4.1 路径使用同一份 K 张量保存 MLA 数据，量化 V 参数仍受 Flash Attention 校验约束。量化 CUDA 内核和长文本正确性用本机 SM70 构建验收。主机档通过 `--no-kv-offload` 把活跃 KV 放到 CPU 内存并改变注意力调度，单独记录速度，只在可用时采用。 [v1.0.0 上下文与量化校验](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-context.cpp#L4150-L4179) · [DeepSeek 4.1 量化缓存路径](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/models/deepseek41.cpp#L472-L484) · [后端分配](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-kv-cache.cpp#L193-L216)
+用 `SLOT_CTX=65536` 切到 64K，用 `MOE_CACHE_MIB=16384` 减缓存。量化档启动器为 K/V 传同一类型，并显式开启 Flash Attention。v1.0.0 的 DeepSeek 4.1 路径使用同一份 K 张量保存 MLA 数据，量化 V 参数仍受 Flash Attention 校验约束。量化 CUDA 内核和长文本正确性用本机 SM70 构建验收。主机档通过 `--no-kv-offload` 把活跃 KV 放到 CPU 内存并改变注意力调度，单独记录速度，只在可用时采用。 [v1.0.0 上下文与量化校验](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-context.cpp#L4150-L4179) · [DeepSeek 4.1 量化缓存路径](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/models/deepseek41.cpp#L472-L484) · [后端分配](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-kv-cache.cpp#L193-L216)
 
 按 1017 官方配置，长程 K 每行含 512 个 latent 和 128 个 index 值。f16 行大小为 1280 B。按 v1.0.0 的四卡等比分层，三个半速源加一个跨卡副本，以及一个全速源加两个跨卡副本，共约 `(4/2 + 3) × 1280 = 6400 B/token`，128K 单槽约 800 MiB 长程 KV（源码估算）。raw 滑窗、compressor state、对齐以及推理图临时缓冲另计，实际按启动日志逐缓冲区核对。1Cat 的 54 KB/token、128K 首次填充 110 秒、前缀命中 0.9–1.7 秒来自其四张 32 GiB V100 配方。 [1017 官方配置](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/main/config.json) · [llama.cpp 跨设备 KV 副本](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-kv-cache-dsv4.cpp#L1199-L1277) · [1Cat 上游记录](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md#results)
 
@@ -230,6 +234,13 @@ bash host/run-step.sh i6-probe --base http://127.0.0.1:18000/v1 --usage \
 
 用 `A` 的 `prompt_ms` 和首字延迟记录首次填充，`A-repeat` 记录前缀命中 token 和第二轮首字延迟，再看 B 后续 A 的正确性和生成速度。首次填充可为分钟级，记录实测时间即可。近满窗口要求每张卡至少余 **2 GiB**，SSE 完整、无 OOM/Xid，且真实 harness 连续 **20 轮工具往返**通过。只在实际使用双槽时加 `--parallel-pairs` 验两路项目标记。Xolotl 8K 回退用短文本及 8150 端口，加 `--reasoning-effort none`，删去 `--usage`，按回退档记录。
 
-若 decode 受专家 miss 或 CPU 限制，可在 I6 用上游 `scripts/moe-cache-tune.py` 包装等效的 `llama-server` 命令测一次，再设 `MOE_CACHE_CPU_SHARE`。允许覆写 `UBATCH_SIZE`、`BATCH_SIZE` 和 `Z8_INFER_THREADS_BATCH`，改后同样核长提示 TTFT、显存和工具往返。加核需同时满足[推理线程跑满且加核提速](../host/CPU-PLACEMENT.md)，可用 `pidstat -t -p PID 1` 观察。 [上游调优说明](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md#picking-the-arguments)
+**选定上下文档后，用上游调参脚本定专家缓存和 CPU 份额。** 先停掉正在跑的服务，确认没有构建在跑，在同一组环境变量下执行下面两条；测试时不必先改分核。脚本用启动器的同一条 `llama-server` 命令起六次服务，各生成几千 token，按空闲显存给出缓存上限，打印拟合出的上传速度、CPU 速度和推荐的 `--moe-cache-mib`、`--moe-cache-cpu-share`。
+
+```bash
+bash "$kit/inference/serve-llama.sh" --tune --out "$PWD/moe-tune-4"
+Z8_INFER_THREADS=12 bash "$kit/inference/serve-llama.sh" --tune --out "$PWD/moe-tune-12"
+```
+
+输出里的 `uploads` 应接近单卡链路速度，Gen3 x8 约 6 GiB/s。只有 1–3 GiB/s 说明专家不在锁页内存，先查 `LOAD_MODE` 和两路 DDR4 的余量。把推荐值写成 `MOE_CACHE_MIB` 和 `MOE_CACHE_CPU_SHARE`。专家在锁页内存时，上游说明 CPU 份额通常帮不上：12 线程的推荐速度比 4 线程高不到 5% 就保持每路 2 核，否则按[每路 6 核](../host/CPU-PLACEMENT.md)重新生成分核。脚本只测生成，提示词处理另用上面探针的长提示记录 `prompt_ms`。允许覆写 `UBATCH_SIZE`、`BATCH_SIZE` 和 `Z8_INFER_THREADS_BATCH`，改后同样核长提示 TTFT、显存和工具往返。 [上游调优说明](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md#picking-the-arguments)
 
 选定档位后把 OMP 的 `contextWindow` 与实际每槽一致，按[正式服务启停](../host/CPU-PLACEMENT.md#启停本地模型)保存参数。核启动日志的 `n_ctx_seq` / `n_ctx_slot` 和 API 就绪，再进入 [I7](../host/BURN-IN.md#i7-正式安装后的整机混合负载)。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)

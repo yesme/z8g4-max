@@ -15,6 +15,11 @@ cat > "$tmp/bin/numactl" <<'EOF'
 printf 'p2p=%s ' "${GGML_CUDA_P2P:-unset}"
 printf '%s ' "$@"
 EOF
+cat > "$tmp/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+printf 'tuner '
+printf '%s ' "$@"
+EOF
 chmod +x "$tmp"/bin/*
 export PATH="$tmp/bin:$PATH"
 export LLAMA_BUILD="$tmp/build" DS41_GGUF="$tmp/model/model.gguf"
@@ -25,7 +30,14 @@ default=$(GGML_CUDA_P2P=1 bash "$tmp/serve.sh")
 [[ "$default" == *' --cache-prompt '* && "$default" == *' --parallel 1 --ctx-size 131072 '* ]]
 [[ "$default" == *' --threads 4 --threads-batch 4 '* && "$default" == *' -ctk f16 -ctv f16 --kv-offload '* ]]
 [[ "$default" != *' --flash-attn '* ]]
-[[ "$default" == *' --moe-cache-cpu-share 0 '* && "$default" == *' --batch-size 512 --ubatch-size 32 '* ]]
+[[ "$default" == *' --moe-cache-mib 24576 --moe-cache-cpu-share 0 '* ]]
+[[ "$default" == *' --batch-size 512 --ubatch-size 512 '* && "$default" == *' --load-mode dio --lazy-mode on '* ]]
+[[ $(LOAD_MODE=mmap bash "$tmp/serve.sh") == *' --load-mode mmap --lazy-mode on '* ]]
+
+# The tuner receives the unchanged server command after its own options.
+tuner=$(Z8_INFER_THREADS=12 bash "$tmp/serve.sh" --tune --max-mib 16384)
+[[ "$tuner" == "tuner $tmp/scripts/moe-cache-tune.py --max-mib 16384 -- numactl --interleave=0,1 $tmp/build/bin/llama-server "* ]]
+[[ "$tuner" == *' --threads 12 --threads-batch 12 '* && "$tuner" == *' --load-mode dio '* ]]
 
 tuned=$(MOE_CACHE_CPU_SHARE=0.25 BATCH_SIZE=1024 UBATCH_SIZE=256 Z8_INFER_THREADS_BATCH=8 bash "$tmp/serve.sh")
 [[ "$tuned" == *' --moe-cache-cpu-share 0.25 '* && "$tuned" == *' --threads 4 --threads-batch 8 --batch-size 1024 --ubatch-size 256 '* ]]
@@ -53,6 +65,7 @@ reject() {
 }
 reject 'Total context exceeds' SLOTS=2 SLOT_CTX=600000
 reject 'Total context exceeds' SLOTS=3 SLOT_CTX=349525
+reject 'LOAD_MODE must be' LOAD_MODE=mlock
 reject 'positive SLOTS' SLOTS=0
 reject 'positive SLOTS' SLOTS=18446744073709551616
 reject 'positive SLOT_CTX' SLOT_CTX=-1
@@ -62,4 +75,4 @@ reject 'between 0 and 1' MOE_CACHE_CPU_SHARE=1.1
 reject 'positive BATCH_SIZE' BATCH_SIZE=0
 reject 'must not exceed' UBATCH_SIZE=513
 reject 'positive Z8_INFER_THREADS_BATCH' Z8_INFER_THREADS_BATCH=-1
-echo 'llama.cpp launcher tests passed: 128K single-slot default, optional slots, KV placement, and context bounds.'
+echo 'llama.cpp launcher tests passed: 128K single-slot default, pinned experts, tuner command, optional slots, KV placement, and context bounds.'
