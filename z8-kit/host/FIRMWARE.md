@@ -29,7 +29,7 @@ SP113620 的说明没有列 BIOS 前置条件；白皮书的最低组合是 BIOS
 1. **不为固件卡住 T3。** 这批模块在到货版本下已能启动并映射。量产固件能否写进样品条没有任何一方背书，被拒就保留到货版本，把 FW 诊断结果和 T3 的写读校验记入基线。
 2. **先只插一条试。** 把 `fw_ekvb0_1.2.0.5446_rel.bin` 拷到 FAT32 U 盘。只插一条 PMem 开机，进 F10 的 `Advanced → NVDIMM Management → Update Firmware on NVDIMMs`，选 U 盘和固件文件。界面会显示固件已暂存及写入的版本，再按提示断电重启。回到 NVDIMM 列表确认版本变为 `01.02.00.5446`。两种料号各试一条。
 3. **再插齐其余模块，同样操作一次。** F10 方式对当前插着的全部模块一起暂存。固件在断电重启后才生效；启动新固件失败时模块回退到原版本。
-4. **需要逐条控制或先做只读校验时用 `ipmctl`。** `load -source 文件 -examine -dimm` 只校验镜像与模块是否匹配，不写入；加 `-dimm ID` 可只写一条。Linux 的 3.x 写 100 系列偏慢时加 `-lpmb`。Linux 的 `ipmctl` 在本机不可用时，用 SP113618 的 `ipmctl.efi` 从 UEFI Shell U 盘执行同样的命令。
+4. **需要逐条控制或先做只读校验时用 `ipmctl`。** `load -source 文件 -examine -dimm` 只校验镜像与模块是否匹配，不写入；加 `-dimm ID` 可只写一条。Linux 的 3.x 写 100 系列偏慢时加 `-lpmb`。Linux 的 `ipmctl` 在本机不可用时，用 SP113618 的 `ipmctl.efi` 从 UEFI Shell U 盘执行同样的命令。走 Shell 时先把固件拷到 U 盘根目录并改成短文件名，如 `cp fw_ekvb0_1.2.0.5446_rel.bin fs0:\pmem5446.bin`：T1 刷 ME 时，同一个 Shell 打不开带多个点的长文件名，原因没有查实，短文件名可用。
 
 镜像文件名里的 `ekvb0` 是它面向的控制器版本。某条模块拒收时记下提示原文，HP 的包里没有别的镜像可换。
 

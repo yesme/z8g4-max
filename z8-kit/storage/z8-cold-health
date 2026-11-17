@@ -70,6 +70,11 @@ def reasons(report, previous, medium_error):
     return found, {"pending": pending, "selftests": failures}
 
 
+def scan_request(disk):
+    """Marker for a scan that evidence asked for; z8-cold-scan removes it after covering the disk."""
+    return STATE / f"scan-owed-{disk}"
+
+
 def kernel_medium_errors():
     """Return kernel device names with medium errors logged since the previous check."""
     output = subprocess.check_output(
@@ -84,17 +89,32 @@ def check(devices):
     bad_devices = kernel_medium_errors()
     status = 0
     for disk, device in devices.items():
+        medium_error = os.path.basename(os.path.realpath(device)) in bad_devices
         try:
             report = smart(device)
         except (OSError, ValueError) as error:
             print(f"{disk}: {error}", file=sys.stderr, flush=True)
             status = 1
-            continue
-        found, state[disk] = reasons(report, state.get(disk), os.path.basename(os.path.realpath(device)) in bad_devices)
-        if found:
-            print(f"{disk}: starting logical scan ({', '.join(found)})", flush=True)
-            subprocess.run(["systemctl", "start", "--no-block", f"z8-cold-scan@{disk}.service"], check=True)
+            # The journal cursor has moved on, so a kernel error cannot wait for a readable SMART report.
+            report, found = None, ["kernel medium error"] if medium_error else []
         else:
+            previous = state.get(disk)
+            if previous and previous.get("serial") != report.get("serial_number"):
+                # A replaced disk starts over: the old baseline and open request belong to the old disk.
+                previous = None
+                scan_request(disk).unlink(missing_ok=True)
+            found, state[disk] = reasons(report, previous, medium_error)
+            state[disk]["serial"] = report.get("serial_number")
+        request = scan_request(disk)
+        if found:
+            request.write_text(", ".join(found) + "\n")
+        if request.exists():
+            # A scan that was stopped, rejected or never started is requested again every day.
+            why = ", ".join(found) or "earlier request not finished"
+            print(f"{disk}: requesting logical scan ({why})", flush=True)
+            if subprocess.run(["systemctl", "start", "--no-block", f"z8-cold-scan@{disk}.service"]).returncode:
+                status = 1
+        elif report:
             print(f"{disk}: no new media evidence", flush=True)
     temporary = state_path.with_suffix(".tmp")
     temporary.write_text(json.dumps(state, indent=2) + "\n")

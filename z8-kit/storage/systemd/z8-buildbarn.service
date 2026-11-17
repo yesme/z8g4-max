@@ -3,6 +3,7 @@ Description=Buildbarn with sharded cold CAS and XFS hot cache
 Requires=docker.service
 BindsTo=z8-cold.service
 Wants=z8-pmem-model.service
+PartOf=z8-pmem-model.service
 After=docker.service z8-cold.service z8-pmem-model.service
 RequiresMountsFor=/opt/z8-kit /srv/buildbarn
 

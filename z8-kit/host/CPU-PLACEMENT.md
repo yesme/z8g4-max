@@ -157,7 +157,7 @@ buck2 --isolation-dir z8-build build --local-only -j 8 //path:target
 
 用户态 slice 的 CPU 集合与 IRQ／内核线程亲和性独立。只有推理尾延迟异常且 `mpstat -P ALL 1` 或 `/proc/interrupts` 显示存储／网卡 IRQ 持续落在推理核时，才按实际向量检查 `/proc/irq/<IRQ>/effective_affinity_list`。需迁移时用 irqbalance 的 `IRQBALANCE_BANNED_CPULIST` 排开推理 CPU 和 HT 伙伴，屏蔽值取生成的 `/etc/z8-infer-cpu.env` 中 `Z8_IRQ_BANNED_CPUS`。全局 workqueue、CAT/MBA 保持默认。 [Ubuntu irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
-启动前、运行中、停止后分别检查。对实际 `llama-server` 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到包含推理核及其 HT 伙伴的 104 个逻辑 CPU。`-j` 与容器的 CPU 时间配额仍分别限制构建并发和 CPU 时间。
+启动前、运行中、停止后分别检查。对实际 `llama-server` 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到包含推理核及其 HT 伙伴的 104 个逻辑 CPU。构建并发仍由 Buck2 的 `-j` 和 runner 的活动 action 数限制，runner 没有 CPU 时间配额。
 
 ```bash
 systemctl show z8infer.slice z8build.slice z8build-local.slice user.slice \

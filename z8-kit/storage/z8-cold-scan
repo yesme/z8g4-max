@@ -14,6 +14,8 @@ SECTOR = 4096
 READ_SIZE = 4 * 1024**2
 MEDIA_ERRORS = {errno.EIO, errno.ENODATA}
 DEVICE_SIZE = 6510 * 256 * 1024**2
+REQUESTS = Path(os.environ.get("Z8_COLD_HEALTH_STATE", "/var/lib/z8-cold-health"))
+DISKS = tuple(f"sata{i}" for i in range(4))
 
 
 def read_exact(fd, buffer, length, offset):
@@ -83,22 +85,42 @@ def scan_disk(shards):
     return result
 
 
+def request_stamp(disk):
+    """Identify the scan request that z8-cold-health left open for this disk, if any."""
+    try:
+        return (REQUESTS / f"scan-owed-{disk}").stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def settle(disk, stamp):
+    """Close the request this scan answered, unless new evidence arrived while it ran."""
+    if stamp is not None and request_stamp(disk) == stamp:
+        (REQUESTS / f"scan-owed-{disk}").unlink(missing_ok=True)
+
+
+def main(disk=None):
+    """Scan one cold disk, or all four, and return the exit status."""
+    disks = (disk,) if disk else DISKS
+    # z8-cold list verifies the complete tables, backing devices and sizes.
+    shards = subprocess.check_output(["/usr/local/sbin/z8-cold", "list"], text=True).splitlines()
+    groups = {name: [s for i in range(8) if (s := f"{name}-{i}") in shards] for name in disks}
+    complete = {name: group for name, group in groups.items() if len(group) == 8}
+    if len(complete) != len(disks):
+        print(f"Scanning {len(complete)}/{len(disks)} ready cold disks.", file=sys.stderr, flush=True)
+    stamps = {name: request_stamp(name) for name in complete}
+    with ThreadPoolExecutor(max_workers=len(disks)) as pool:
+        outcomes = list(pool.map(scan_disk, complete.values()))
+    for name, outcome in zip(complete, outcomes):
+        if outcome < 2:
+            settle(name, stamps[name])
+    return max([0 if len(complete) == len(disks) else 2, *outcomes])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    disks = tuple(f"sata{i}" for i in range(4))
-    parser.add_argument("disk", choices=disks, nargs="?")
-    args = parser.parse_args()
+    parser.add_argument("disk", choices=DISKS, nargs="?")
     try:
-        # z8-cold list verifies the complete tables, backing devices and sizes.
-        shards = subprocess.check_output(["/usr/local/sbin/z8-cold", "list"], text=True).splitlines()
-        groups = [[s for i in range(8) if (s := f"{disk}-{i}") in shards]
-                  for disk in ((args.disk,) if args.disk else disks)]
-        expected = 1 if args.disk else len(disks)
-        complete = [group for group in groups if len(group) == 8]
-        if len(complete) != expected:
-            print(f"Scanning {len(complete)}/{expected} ready cold disks.", file=sys.stderr, flush=True)
-        with ThreadPoolExecutor(max_workers=expected) as pool:
-            outcomes = list(pool.map(scan_disk, complete))
-        sys.exit(max([0 if len(complete) == expected else 2, *outcomes]))
+        sys.exit(main(parser.parse_args().disk))
     except (OSError, subprocess.CalledProcessError) as error:
         sys.exit(f"z8-cold-scan: {error}")

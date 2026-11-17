@@ -1,5 +1,6 @@
 [Unit]
 Description=Check Z8 cold CAS disks for new media errors
+Requisite=z8-cold.service
 After=z8-cold.service
 RequiresMountsFor=/etc/z8-storage /usr/local/sbin
 
