@@ -7,8 +7,8 @@ Usage: bash host/run-step.sh STEP [ARGS...]
 
   t1-network                   Check Ethernet or transitional Wi-Fi, DNS and APT
   t1-cpu-prepare               Install microcode and CPU diagnostics before reboot
-  t1-cpu                       Run the 30-minute general CPU stress test
-  t1-avx                       Run the VNNI preflight and 30-minute stress test
+  t1-cpu                       Warm up at half load, then run the 30-minute general CPU stress test
+  t1-avx                       Run the VNNI preflight, the same warm-up and the 30-minute stress test
   t1-avx-temperature           Stream per-core AVX temperature, frequency and power
   t2-memory                    Show memory, NUMA topology and ECC counters
   t2-temperature               Stream CPU temperature and throttle counts (Ctrl+C to stop)
@@ -34,6 +34,7 @@ Usage: bash host/run-step.sh STEP [ARGS...]
   i7-snapshot [PID]            Capture NUMA, memory, CPU and hardware counter evidence
 
 Default logs: ~/z8-burnin/steps. Override the directory with Z8_LOG_DIR.
+Z8_THERMAL_GATE=off lets t1-cpu and t1-avx go to full load after a failed package temperature check.
 EOF
 }
 
@@ -54,14 +55,70 @@ ras() {
     return "$status"
 }
 
+# One "label<TAB>temperature<TAB>limit" line per CPU package, in whole degrees Celsius.
+package_temperatures() {
+    local label sensor
+    for label in /sys/class/hwmon/hwmon*/temp*_label; do
+        [[ -r "$label" && $(<"$label") == Package\ id\ * ]] || continue
+        sensor=${label%_label}
+        printf '%s\t%s\t%s\n' "$(<"$label")" "$(($(<"${sensor}_input") / 1000))" "$(($(<"${sensor}_crit") / 1000))"
+    done
+}
+
+# Refuse full load when half load already shows a cooling fault. A badly seated cooler took one
+# package of this machine to its limit within a minute of full load, and the 30-minute run hung the host.
+thermal_gate() {
+    local samples=$1 label peak limit hottest='' coolest='' problem=''
+    printf '\n[Peak package temperature during half-load warm-up]\n'
+    while IFS=$'\t' read -r label peak limit; do
+        printf '%s: peak %s °C, limit %s °C\n' "$label" "$peak" "$limit"
+        if (( peak > limit - 15 )); then problem='a package came within 15 °C of its limit at half load'; fi
+        if [[ -z "$hottest" ]] || (( peak > hottest )); then hottest=$peak; fi
+        if [[ -z "$coolest" ]] || (( peak < coolest )); then coolest=$peak; fi
+    done < <(awk -F'\t' '{ if (!($1 in peak) || $2 > peak[$1]) peak[$1] = $2; limit[$1] = $3 }
+        END { for (label in peak) print label FS peak[label] FS limit[label] }' "$samples" | sort)
+    if [[ -z "$hottest" ]]; then
+        problem='no coretemp package sensor is readable'
+    elif (( hottest - coolest > 10 )); then
+        problem="the packages differ by $((hottest - coolest)) °C"
+    fi
+    [[ -n "$problem" ]] || return 0
+    if [[ ${Z8_THERMAL_GATE:-on} == off ]]; then
+        printf 'Thermal gate overridden: %s.\n' "$problem"
+        return 0
+    fi
+    printf 'Full load skipped: %s.\n' "$problem" >&2
+    printf 'Check the cooler, its fan and the thermal paste. Z8_THERMAL_GATE=off overrides.\n' >&2
+    return 1
+}
+
+cpu_warmup() {
+    local cpu_count samples sampler status=0
+    cpu_count=$(nproc)
+    samples=$(mktemp)
+    package_temperatures > "$samples"
+    # Sample under load: the die cools within a second once the workers stop.
+    (set +x; while sleep 2; do package_temperatures; done) >> "$samples" 2>/dev/null &
+    sampler=$!
+    printf '\n[Half-load warm-up]\n'
+    stress-ng --cpu "$cpu_count" --cpu-load 50 --cpu-method matrixprod --timeout 5m || status=$?
+    kill "$sampler" 2>/dev/null || true
+    wait "$sampler" 2>/dev/null || true
+    if (( status == 0 )); then thermal_gate "$samples" || status=$?; fi
+    rm -f -- "$samples"
+    return "$status"
+}
+
 stress_with_ras() {
-    local result=0 interrupted=0
+    local result=0 interrupted=0 warmup=0
+    if [[ $1 == --cpu-warmup ]]; then warmup=1; shift; fi
     sudo systemctl enable --now rasdaemon
     printf '\n[RAS before stress]\n'
     ras
     # Keep collecting evidence when the terminal interrupts the load.
     trap 'interrupted=1' INT
-    "$@" || result=$?
+    if (( warmup )); then cpu_warmup || result=$?; fi
+    if (( result == 0 && !interrupted )); then "$@" || result=$?; fi
     trap - INT
     if (( interrupted )); then result=130; fi
     printf '\n[RAS after stress]\n'
@@ -143,7 +200,8 @@ run_step() {
             awk '/^microcode/ {print $3}' /proc/cpuinfo | sort -u
             numactl --hardware
             cpu_count=$(nproc)
-            stress_with_ras stress-ng --cpu "$cpu_count" --cpu-method matrixprod --verify --timeout 30m --metrics-brief
+            stress_with_ras --cpu-warmup \
+                stress-ng --cpu "$cpu_count" --cpu-method matrixprod --verify --timeout 30m --metrics-brief
             ;;
         t1-avx)
             sudo modprobe msr
@@ -151,7 +209,7 @@ run_step() {
             lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE
             stress-ng --vnni 1 --vnni-intrinsic --vnni-method vpdpbusd512 --verify -t 5s --metrics-brief
             cpu_count=$(nproc)
-            stress_with_ras stress-ng --vnni "$cpu_count" --vnni-intrinsic \
+            stress_with_ras --cpu-warmup stress-ng --vnni "$cpu_count" --vnni-intrinsic \
                 --vnni-method vpdpbusd512 --verify --timeout 30m --metrics-brief
             ;;
         t2-memory)

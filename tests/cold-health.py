@@ -53,30 +53,53 @@ def run(command, **kwargs):
             return subprocess.CompletedProcess(command, 2, "", "open failed")
         # Bit 6 only reports an old error log entry.
         return subprocess.CompletedProcess(command, 64, json.dumps(reports[command[-1]]), "")
-    return subprocess.CompletedProcess(command, 0, "", "")
+    return subprocess.CompletedProcess(command, int(command[0] == "systemctl" and fail_start), "", "")
 
 
-journal = "critical medium error, dev sdc, sector 8 op 0x0:(READ)\nI/O error, dev sdd, sector 1\n"
+def check(journal=""):
+    """Run one daily check and return its status, the scans it requested and the open requests."""
+    calls.clear()
+    with mock.patch.object(health.subprocess, "run", side_effect=run), \
+            mock.patch.object(health.subprocess, "check_output", return_value=journal), \
+            mock.patch.object(health.os.path, "realpath", side_effect=names.__getitem__):
+        status = health.check(devices)
+    started = [command[-1].removeprefix("z8-cold-scan@").removesuffix(".service")
+               for command in calls if command[0] == "systemctl"]
+    return status, started, sorted(path.name.removeprefix("scan-owed-") for path in (tmp / "state").glob("scan-owed-*"))
+
+
 names = {f"/dev/disk/by-id/ata-disk{i}": f"/dev/sd{'cdef'[i]}" for i in range(4)}
-with mock.patch.object(health.subprocess, "run", side_effect=run), \
-        mock.patch.object(health.subprocess, "check_output", return_value=journal), \
-        mock.patch.object(health.os.path, "realpath", side_effect=names.__getitem__):
-    fail_disk2 = True
-    assert health.check(devices) == 1
-    started = [command[-1] for command in calls if command[0] == "systemctl"]
-    assert started == ["z8-cold-scan@sata0.service", "z8-cold-scan@sata1.service"], started
-    state = json.loads((tmp / "state" / "state.json").read_text())
-    assert state["sata1"]["pending"] == 1 and "sata2" not in state
-    calls.clear()
-    fail_disk2 = False
-    journal = ""
-with mock.patch.object(health.subprocess, "run", side_effect=run), \
-        mock.patch.object(health.subprocess, "check_output", return_value=""), \
-        mock.patch.object(health.os.path, "realpath", side_effect=names.__getitem__):
-    assert health.check(devices) == 0
-    assert not [command for command in calls if command[0] == "systemctl"]
-    calls.clear()
+fail_disk2, fail_start = True, False
+assert check("critical medium error, dev sdc, sector 8 op 0x0:(READ)\nI/O error, dev sdd, sector 1\n") == (
+    1, ["sata0", "sata1"], ["sata0", "sata1"])
+state = json.loads((tmp / "state" / "state.json").read_text())
+assert state["sata1"]["pending"] == 1 and "sata2" not in state
+
+# The evidence is spent, but a request stays open until z8-cold-scan has covered the disk.
+fail_disk2 = False
+assert check() == (0, ["sata0", "sata1"], ["sata0", "sata1"])
+health.scan_request("sata0").unlink()
+health.scan_request("sata1").unlink()
+assert check() == (0, [], [])
+
+# journalctl has already moved its cursor, so a kernel error survives an unreadable SMART report
+# and a scan that systemd refused to queue.
+fail_disk2 = fail_start = True
+assert check("critical medium error, dev sde, sector 8 op 0x0:(READ)\n") == (1, ["sata2"], ["sata2"])
+fail_disk2 = fail_start = False
+assert check() == (0, ["sata2"], ["sata2"])
+
+# A replacement disk is a first run: its pending sectors count even below the old disk's baseline,
+# and the old disk's open request is dropped.
+health.scan_request("sata0").write_text("old disk\n")
+reports["/dev/disk/by-id/ata-disk0"] = {**report(), "serial_number": "NEW0"}
+reports["/dev/disk/by-id/ata-disk1"] = {**report(pending=1), "serial_number": "NEW1"}
+assert check() == (0, ["sata1", "sata2"], ["sata1", "sata2"])
+assert json.loads((tmp / "state" / "state.json").read_text())["sata1"]["serial"] == "NEW1"
+
+calls.clear()
+with mock.patch.object(health.subprocess, "run", side_effect=run):
     assert health.selftest(devices) == 0
-    tests = [command[-1] for command in calls if "-t" in command]
-    assert tests == [f"/dev/disk/by-id/ata-disk{i}" for i in range(3)], tests
-print("Cold health tests passed: evidence-triggered scans, first-run baseline, and self-test start.")
+tests = [command[-1] for command in calls if "-t" in command]
+assert tests == [f"/dev/disk/by-id/ata-disk{i}" for i in range(3)], tests
+print("Cold health tests passed: evidence-triggered scans, open scan requests, first-run baseline and self-test start.")

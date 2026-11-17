@@ -37,11 +37,11 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 
 | 顺序 | 这一步接什么 | 做到什么再继续 |
 |---|---|---|
-| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P1000、显示器、网线（无线过渡时加槽 7 AX210 和天线）、Ventoy 与可清空的 SanDisk | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 先接板载有线，缺网线时用 AX210，核 DHCP、DNS 和 APT，再准备临时系统。双路 CPU 依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-联网与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
+| **T1 · CPU、BIOS 与联网** | 双 8269CY、散热器和风道、12 条 DDR4、槽 4 P1000、显示器、网线（无线过渡时加槽 7 AX210 和天线）、Ventoy 与可清空的 SanDisk | F10 设纯 UEFI、NUMA、AHCI、虚拟化等。Live 先接板载有线，缺网线时用 AX210，核 DHCP、DNS 和 APT，再准备临时系统并装 R580 显卡驱动。双路 CPU 先过半载温度检查，再依次跑通用压力和 AVX-512 VNNI，记录满载频率、温度与降频事件。 [首次 Live 联网](z8-kit/host/BURN-IN.md#首次-live-联网与临时验机系统) · [CPU 拷机](z8-kit/host/BURN-IN.md#cpu-拷机) |
 | **T2 · DDR4** | 沿用 T1 硬件，从 Ventoy 启动 Memtest86+，再回 SanDisk 上的临时 Linux | 每路 96 GiB、共 192 GiB。Memtest86+ 默认测试集四个完整 pass，跳过 Rowhammer。再跑 Linux 144 GiB、4 小时，比较前后的 ECC 与 CPU 硬件事件。 [怎么读硬件错误](z8-kit/host/BURN-IN.md#怎么读硬件错误) |
 | **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。复测混插 DDR4，再验 DAX 与裸 devdax。两路 devdax 转 kmem 后，逐路确认 DDR4 到慢节点的下沉并记录 kmem 冷启上线时间。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [kmem 冷启计时](z8-kit/host/PMEM.md#t3-记录-kmem-冷启动时间) |
 | **T4 · 存储** | 槽 1 加 P4618，确认 Gen3 x8 上行、两个 x4 下行和两个各约 3.2 TB 的 NVMe 端点，再加槽 5 的 D4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验当前网络与七盘同跑。 [P4618 链路检查](z8-kit/host/BURN-IN.md#p4618-链路与双控制器) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
-| **T5 · 算力坞** | 临时 Linux 先装 NVIDIA 显卡驱动。主机硬件通过后断电，槽 2/3 装直通卡，接 V100 | 逐卡 → 每槽两卡 → 四卡，验 Gen3 x8、六对 NVLink P2P、NCCL、单卡/四卡拷机、pinned H→D。最后跑 1017 冒烟，再关机断开 V100，转正式安装。 [T5 推理冒烟](z8-kit/host/BURN-IN.md#t5-末的-1017-推理冒烟) |
+| **T5 · 算力坞** | 复核 T1 已装的 R580 显卡驱动。主机硬件通过后断电，槽 2/3 装直通卡，接 V100 | 逐卡 → 每槽两卡 → 四卡，验 Gen3 x8、六对 NVLink P2P、NCCL、单卡/四卡拷机、pinned H→D。最后跑 1017 冒烟，再关机断开 V100，转正式安装。 [T5 推理冒烟](z8-kit/host/BURN-IN.md#t5-末的-1017-推理冒烟) |
 
 ### 第二阶段 · 正式安装和上线
 

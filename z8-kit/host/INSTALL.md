@@ -182,7 +182,7 @@ findmnt -T /srv/buildbarn -o SOURCE,TARGET,FSTYPE
 
 ## 安装并锁定 NVIDIA 显卡驱动
 
-T5 在临时系统执行本节的 APT 和重启核验，完成后回拷机手册接坞。I3 在正式系统重新执行本节，再做下面的 Sunshine 和复接验证。两次开始时都只有槽 4 的 P1000。**R580 是 NVIDIA Linux 显卡驱动的 580.x 分支**，也是 NVIDIA 最后一条同时支持 V100（Volta）和 P1000（Pascal）的驱动分支。这台机安装 Ubuntu 的专有驱动包 `nvidia-driver-580`，并接受该分支的补丁更新。2026 年 11 月 13 日核对的 APT 组合为 `580.178.04-0ubuntu0.26.04.1` 和 `linux-modules-nvidia-580-generic 7.0.0-43.43`。第三方 CUDA 构建留在独立用户空间，目标 `sm_70` 用 CUDA 12.x。 [NVIDIA 驱动支持矩阵](https://docs.nvidia.com/datacenter/tesla/drivers/cuda-toolkit-driver-and-architecture-matrix.html) · [580.x 支持的 GPU](https://download.nvidia.com/XFree86/Linux-x86_64/580.159.03/README/supportedchips.html) · [Ubuntu 驱动包](https://packages.ubuntu.com/resolute-updates/nvidia-driver-580) · [Ubuntu 驱动安装](https://ubuntu.com/server/docs/how-to/graphics/install-nvidia-drivers/)
+T1 装好临时系统后就执行本节的 APT 和重启核验，再回拷机手册压 CPU；T5 接坞前只复核。I3 在正式系统重新执行本节，再做下面的 Sunshine 和复接验证。两次安装开始时都只有槽 4 的 P1000。**R580 是 NVIDIA Linux 显卡驱动的 580.x 分支**，也是 NVIDIA 最后一条同时支持 V100（Volta）和 P1000（Pascal）的驱动分支。这台机安装 Ubuntu 的专有驱动包 `nvidia-driver-580`，并接受该分支的补丁更新。2026 年 11 月 13 日核对的 APT 组合为 `580.178.04-0ubuntu0.26.04.1` 和 `linux-modules-nvidia-580-generic 7.0.0-43.43`。第三方 CUDA 构建留在独立用户空间，目标 `sm_70` 用 CUDA 12.x。 [NVIDIA 驱动支持矩阵](https://docs.nvidia.com/datacenter/tesla/drivers/cuda-toolkit-driver-and-architecture-matrix.html) · [580.x 支持的 GPU](https://download.nvidia.com/XFree86/Linux-x86_64/580.159.03/README/supportedchips.html) · [Ubuntu 驱动包](https://packages.ubuntu.com/resolute-updates/nvidia-driver-580) · [Ubuntu 驱动安装](https://ubuntu.com/server/docs/how-to/graphics/install-nvidia-drivers/)
 
 ```bash
 sudo install -m 0644 host/z8-nvidia-580.pref.example /etc/apt/preferences.d/z8-nvidia-580
@@ -206,7 +206,7 @@ nvidia-smi --query-gpu=name,pci.bus_id,driver_version --format=csv
 sudo journalctl -k -b -g 'NVRM|Xid'
 ```
 
-在 T5 核 P1000 与 R580 后，返回 [算力坞测试](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机)。下文用于 I3 正式系统。确认 P1000 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与[快速 CUDA/NCCL](#算力坞验收)，并在 Moonlight 串流时再核一次捕获的显示接口和 P1000 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
+T1 核 P1000 与 R580 后，返回 [CPU 拷机](BURN-IN.md#cpu-拷机)；T5 复核后返回 [算力坞测试](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机)。下文用于 I3 正式系统。确认 P1000 正常、R580 已加载、SSH 仍能登录，按 [远程手册](../remote/README.md#sunshine) 验 Sunshine/NVENC。关机断电后接回通过 T5 的四张 V100。再开机，复查四张 V100 的 UUID、拓扑与[快速 CUDA/NCCL](#算力坞验收)，并在 Moonlight 串流时再核一次捕获的显示接口和 P1000 的编码会话，然后进入 I4。今后更新内核或驱动前先模拟升级，保留上一版已知可启动的内核，并在重启后查 NVIDIA、ZFS 与 dm-zoned。
 
 ## 固定 GA 轨道并试启新内核
 

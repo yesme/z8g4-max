@@ -62,7 +62,8 @@ esac
     fixture = fixture_host / script.name
     diskdir = root / "dev/disk/by-id"
     diskdir.mkdir(parents=True)
-    fixture.write_text(script.read_text().replace("/dev/disk/by-id/", f"{diskdir}/").replace(" -b ", " -f "))
+    fixture.write_text(script.read_text().replace("/dev/disk/by-id/", f"{diskdir}/").replace(" -b ", " -f ")
+                       .replace("/sys/class/hwmon/", f"{root}/hwmon/"))
     disks = [diskdir / f"nvme-{name}" for name in ("P4618-a", "P4618-b", "D4800X")]
     for disk in disks:
         disk.touch()
@@ -97,41 +98,108 @@ esac
     assert "driver=e1000e" in result.stdout and "negotiated speed=1000 Mb/s" in result.stdout
     assert "Supported link modes: 100baseT/Full" in result.stdout and "1000baseT/Full" in result.stdout
 
-    # Ctrl+C from a terminal signals every process in the foreground group.
+    # The CPU steps warm up at half load and go to full load only past the package temperature gate.
     workload = fake_bin / "stress-ng"
     workload.write_text("""#!/usr/bin/env python3
 from pathlib import Path
 import os
+import sys
 from time import sleep
-Path(os.environ["Z8_FIXTURE"], "under-load").touch()
-sleep(30)
+room = Path(os.environ["Z8_FIXTURE"])
+stage = "warm-up" if "--cpu-load" in sys.argv else "full"
+with (room / "stress.log").open("a") as log:
+    print(stage, *sys.argv[1:], file=log)
+if os.environ.get("Z8_HOLD") == stage:
+    (room / "under-load").touch()
+    sleep(30)
+if stage == "warm-up" and "Z8_HEAT" in os.environ:
+    # Hot only while the load runs; the reading is back to normal when the workers stop.
+    sensor = room / "hwmon/hwmon0/temp1_input"
+    sensor.write_text(os.environ["Z8_HEAT"] + "000\\n")
+    sleep(3)
+    sensor.write_text("64000\\n")
 """)
     workload.chmod(0o755)
-    with (root / "terminal.log").open("w+") as terminal:
-        process = subprocess.Popen(
-            ["bash", str(script), "t1-cpu"], env=env, stdout=terminal, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        try:
-            until = time.monotonic() + 10
-            while not (root / "under-load").exists() and time.monotonic() < until:
-                if process.poll() is not None:
-                    break
-                time.sleep(0.05)
-            assert (root / "under-load").exists(), "test did not reach the workload"
-            os.killpg(process.pid, signal.SIGINT)
-            status = process.wait(timeout=10)
-        finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-        terminal.seek(0)
-        output = terminal.read()
-    saved = next(logs.glob("t1-cpu-*.log")).read_text()
-    assert status == 130, output
-    for transcript in (output, saved):
-        assert "\n[RAS after stress]\n" in transcript, transcript
-        assert "RAS --error-count" in transcript.split("\n[RAS after stress]\n")[1], transcript
-        assert "Finished t1-cpu: exit 130, logger exit 0" in transcript, transcript
+    stress_log = root / "stress.log"
 
-print("Step runner tests passed: GPU arguments, SMART errors, Ethernet-only setup and Ctrl+C with post-stress RAS.")
+    def packages(*temperatures):
+        for index, temperature in enumerate(temperatures):
+            sensor = root / f"hwmon/hwmon{index}"
+            sensor.mkdir(parents=True, exist_ok=True)
+            (sensor / "temp1_label").write_text(f"Package id {index}\n")
+            (sensor / "temp1_input").write_text(f"{temperature}000\n")
+            (sensor / "temp1_crit").write_text("93000\n")
+            (sensor / "temp2_label").write_text("Core 0\n")
+            (sensor / "temp2_input").write_text("99000\n")
+
+    def cpu_step(*temperatures, **extra):
+        packages(*temperatures)
+        stress_log.unlink(missing_ok=True)
+        env.update(extra)
+        try:
+            result = run("t1-cpu", target=fixture)
+        finally:
+            for name in extra:
+                del env[name]
+        return result, [line.split()[0] for line in stress_log.read_text().splitlines()]
+
+    result, stages = cpu_step(64, 60)
+    assert result.returncode == 0 and stages == ["warm-up", "full"], result.stdout + result.stderr
+    assert "--cpu-load 50" in stress_log.read_text().splitlines()[0]
+    assert "Package id 0: peak 64 °C, limit 93 °C" in result.stdout and "\nCore 0: " not in result.stdout, result.stdout
+    for temperatures, problem in (((79, 76), "within 15 °C of its limit"), ((72, 60), "differ by 12 °C")):
+        result, stages = cpu_step(*temperatures)
+        assert result.returncode == 1 and stages == ["warm-up"], result.stdout + result.stderr
+        assert "Full load skipped: " in result.stdout and problem in result.stdout, result.stdout
+        assert "RAS --error-count" in result.stdout.split("\n[RAS after stress]\n")[1], result.stdout
+    result, stages = cpu_step(64, 60, Z8_HEAT="85")
+    assert result.returncode == 1 and stages == ["warm-up"], result.stdout + result.stderr
+    assert "Package id 0: peak 85 °C" in result.stdout, result.stdout
+    result, stages = cpu_step(72, 60, Z8_THERMAL_GATE="off")
+    assert result.returncode == 0 and stages == ["warm-up", "full"], result.stdout + result.stderr
+    assert "Thermal gate overridden" in result.stdout
+    for sensor in (root / "hwmon").glob("hwmon*/temp1_label"):
+        sensor.unlink()
+    result, stages = cpu_step()
+    assert result.returncode == 1 and stages == ["warm-up"] and "no coretemp package sensor" in result.stdout
+
+    # Ctrl+C from a terminal signals every process in the foreground group.
+    def interrupt(stage):
+        packages(64, 60)
+        stress_log.unlink(missing_ok=True)
+        (root / "under-load").unlink(missing_ok=True)
+        step_logs = logs / stage
+        with (root / "terminal.log").open("w+") as terminal:
+            process = subprocess.Popen(
+                ["bash", str(fixture), "t1-cpu"], env={**env, "Z8_HOLD": stage, "Z8_LOG_DIR": str(step_logs)},
+                stdout=terminal, stderr=subprocess.STDOUT, start_new_session=True,
+            )
+            try:
+                until = time.monotonic() + 10
+                while not (root / "under-load").exists() and time.monotonic() < until:
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.05)
+                assert (root / "under-load").exists(), "test did not reach the workload"
+                os.killpg(process.pid, signal.SIGINT)
+                status = process.wait(timeout=10)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+            terminal.seek(0)
+            output = terminal.read()
+        saved = next(step_logs.glob("t1-cpu-*.log")).read_text()
+        assert status == 130, output
+        for transcript in (output, saved):
+            assert "\n[RAS after stress]\n" in transcript, transcript
+            assert "RAS --error-count" in transcript.split("\n[RAS after stress]\n")[1], transcript
+            assert "Finished t1-cpu: exit 130, logger exit 0" in transcript, transcript
+        return [line.split()[0] for line in stress_log.read_text().splitlines()]
+
+    # An interrupted warm-up must not continue into full load.
+    assert interrupt("warm-up") == ["warm-up"]
+    assert interrupt("full") == ["warm-up", "full"]
+
+print("Step runner tests passed: GPU arguments, SMART errors, Ethernet-only setup, the CPU thermal gate "
+      "and Ctrl+C with post-stress RAS.")

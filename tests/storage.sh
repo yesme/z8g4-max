@@ -163,6 +163,8 @@ systemctl --root "$root" --quiet enable data-other.mount z8-cold.service z8-cold
 grep -Fxq 'ExecStart=/usr/bin/flock /run/lock/z8-cold-scan.lock /usr/local/sbin/z8-cold-scan %i' "$units/z8-cold-scan@.service"
 grep -Fxq 'RuntimeDirectory=z8-bb-cache' "$units/z8-buildbarn.service"
 grep -Fxq 'Wants=z8-pmem-model.service' "$units/z8-buildbarn.service"
+grep -Fxq 'PartOf=z8-pmem-model.service' "$units/z8-buildbarn.service"
+grep -Fxq 'Requisite=z8-cold.service' "$units/z8-cold-health.service"
 grep -Fxq 'After=docker.service z8-cold.service z8-pmem-model.service' "$units/z8-buildbarn.service"
 grep -Fxq 'BindsTo=z8-dmzoned.service' "$units/z8-cold.service"
 grep -Fxq 'BindsTo=z8-cold.service' "$units/z8-buildbarn.service"

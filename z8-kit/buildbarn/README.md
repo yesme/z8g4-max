@@ -43,7 +43,7 @@ sudo cat /run/z8-cold/cold-layout.json
 
 热 CS 的 `key_location_map` 默认在 `/srv/pmem-model/bb-hot-index`，容器内固定为 `/hot-index`。bb-storage 读走 mmap、写走 `pwrite`，放在 XFS DAX 上后读写都直达 PMem，不占页缓存。Linux 7.0 的 XFS 对 DAX 写和缓冲写取同一把独占 `XFS_IOLOCK_EXCL`，迁移不新增锁竞争。每条记录带校验和并按 epoch 过滤，掉电语义不变。AC 和 CMS 的索引仍在各自的 P4618 目录。 [分层依据](../host/TIERING.md#pmem-的三种用途) · [bb-storage 读写路径](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/memory_mapped_block_device_unix.go) · [XFS DAX 写](https://github.com/torvalds/linux/blob/v7.0/fs/xfs/xfs_file.c#L950-L1010)
 
-索引重置时 bb-storage 把文件截断再拉长，成为稀疏文件。目录上的 2 MiB extent 提示让后续分配保持对齐，启动守卫会检查该提示和 `dax=always`。`z8-buildbarn.service` 排在 `z8-pmem-model.service` 之后启动。首次上线后核对索引未进页缓存：
+索引重置时 bb-storage 把文件截断再拉长，成为稀疏文件。目录上的 2 MiB extent 提示让后续分配保持对齐，启动守卫会检查该提示和 `dax=always`。`z8-buildbarn.service` 排在 `z8-pmem-model.service` 之后启动，并用 `PartOf=` 跟随它停止和重启：cache 映射着卷上的索引，停模型卷时先停 cache 和 worker，卸载才不会报 busy。对模型卷先 `stop` 再 `start` 后，要手动 `sudo systemctl start z8-buildbarn.service z8-buildbarn-worker.service`；用 `restart` 时两者自动跟着重启。模型卷没起来而索引已指回 P4618 时，cache 仍可启动。首次上线后核对索引未进页缓存：
 
 ```bash
 sudo xfs_io -r -c 'statx -r' /srv/pmem-model/bb-hot-index/key_location_map | grep -E 'stat.attributes|stat.size'

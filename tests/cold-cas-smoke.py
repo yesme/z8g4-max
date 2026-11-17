@@ -158,6 +158,9 @@ def lab():
         for directory in ("cs-hot", "cms", "ac", "cold/sata0-0"):
             (work / "store" / directory / "persistent_state").mkdir(parents=True)
         (work / "hot-index").mkdir()
+        # The image also listens on the UNIX socket that the worker and scheduler use.
+        unix_socket = work / "bb-cache/cache.sock"
+        unix_socket.parent.mkdir()
         (config / "test.json").write_text(json.dumps(conf))
 
         run("docker", "run", "-d", "--name", name, "--network", "host", "--pull", "never",
@@ -165,15 +168,18 @@ def lab():
             "--device", f"{devices[1]}:/dev/z8-index-sata0-0:rw",
             "-v", f"{config}:/config:ro", "-v", f"{work / 'store'}:/store",
             "-v", f"{work / 'hot-index'}:/hot-index",
+            "-v", f"{unix_socket.parent}:/run/bb-cache",
             image, "/config/test.json")
         cleanup.callback(run, "docker", "rm", "-f", name)
         try:
             for attempt in range(50):
                 try:
                     with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                        break
+                        if unix_socket.is_socket():
+                            break
                 except OSError:
-                    time.sleep(0.1)
+                    pass
+                time.sleep(0.1)
             else:
                 raise RuntimeError("Disposable cache did not start.")
 
