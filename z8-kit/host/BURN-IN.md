@@ -68,7 +68,7 @@ stress-ng --cpu "$(nproc)" --cpu-method matrixprod --timeout 60s --metrics-brief
 bash host/run-step.sh t1-cpu
 ```
 
-这一步记录双路 CPU、微码和 DDR4 NUMA 节点，先跑 5 分钟全核 50% 的半载，再跑 30 分钟 `matrixprod`，比较前后的 RAS。半载期间脚本每 2 秒读一次两路的 Package 温度并取各自的峰值；停载后芯片一秒内就降温，所以在负载中采样。任何一路的峰值离 crit 不到 15 °C，两路峰值相差超过 10 °C，或读不到温度，就不进满载，步骤记为失败并照常留下 RAS 记录。满载阶段脚本不再检查，头几分钟仍要看着温度。两个阈值是按热阻估的，第一次正常跑完后拿日志里的半载读数校对；确认散热无误而被拦下时，用 `Z8_THERMAL_GATE=off bash host/run-step.sh t1-cpu` 放行。
+这一步记录双路 CPU、微码和 DDR4 NUMA 节点，先跑 5 分钟全核 50% 的半载，再跑 30 分钟 `matrixprod`，比较前后的 RAS。半载期间脚本每 2 秒读一次两路的 Package 温度并取各自的峰值；停载后芯片一秒内就降温，所以在负载中采样。任何一路的峰值离 crit 不到 15 °C，两路峰值相差超过 10 °C，或任一实际物理 socket 缺少半载期间有效的 Package 温度和 crit 读数，就不进满载，步骤记为失败并照常留下 RAS 记录。满载阶段脚本不再检查，头几分钟仍要看着温度。两个阈值是按热阻估的，第一次正常跑完后拿日志里的半载读数校对；缺读数时日志会点名缺少的 Package；先用 `lscpu --online --physical --parse=SOCKET` 和 `sensors` 核对两路。只有读数齐全、确认散热无误而被温度阈值拦下时，用 `Z8_THERMAL_GATE=off bash host/run-step.sh t1-cpu` 放行。
 
 保留 `matrixprod` 作为通用负载，再单独跑 30 分钟 **AVX-512 VNNI**。Xubuntu 26.04 的 stress-ng 0.20.01 提供 `vpdpbusd512` intrinsic。8269CY 启动后应枚举 Linux 标志 `avx512f` 和 `avx512_vnni`。先跑 5 秒确认确有 bogo ops 且压力项通过，再跑双路全核。 [Ubuntu stress-ng VNNI 参数](https://manpages.ubuntu.com/manpages/resolute/man1/stress-ng.1.html) · [Cascade Lake AVX 频率实测](https://www.nas.nasa.gov/hecc/support/kb/cascade-lake-processors_579.html)
 
@@ -279,7 +279,7 @@ bash host/run-step.sh t4-inventory
 
 ## T5. 算力坞 V100 与 PCIe 拷机
 
-- T4 通过后，先在临时系统复核 T1 已装的 R580 和 P1000；T1 没装的按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 补装。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`，四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，分别施压 15 或 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。GPU Burn 开跑就是满载，`-m` 只调显存占用，没有降载档；热负荷的分级靠逐卡、每槽两卡、四卡这个顺序。每一级开跑的头两分钟另开终端运行 `watch -n 2 nvidia-smi --query-gpu=index,temperature.gpu,power.draw --format=csv`，温度一直上升不收敛就按 Ctrl+C，先查泵、水路里的气和冷头贴合。 [GPU Burn](https://github.com/wilicc/gpu-burn)
+- T4 通过后，先在临时系统复核 T1 已装的 R580 和 P1000；T1 没装的按 [NVIDIA 显卡驱动安装步骤](INSTALL.md#安装并锁定-nvidia-显卡驱动) 补装。关机断电接坞。逐卡、每槽两卡、四卡依次冷启动。按实际 V100 UUID 选择测试设备，脚本保存压测前后的 ECC、温度、功耗、退休页和 PCIe 查询结果。提前在临时系统按 [CUDA 工具构建步骤](INSTALL.md#算力坞验收)准备 GPU Burn、P2P、NCCL 和 pinned DMA。用 `nvidia-smi -L` 抄 UUID。单卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0`。双卡轮在每个槽分别执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1`，两处 UUID 填该槽的两张卡。四卡轮执行 `bash host/run-step.sh t5-gpu-burn GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3`。脚本验证输入确为 V100，配好库和 `compare.fatbin` 路径，单卡和同槽双卡各施压 15 分钟，四卡施压 60 分钟，记录前后的 ECC、温度、功耗和链路。机旁继续看泵、VRM/HBM 与接头热浸。GPU Burn 开跑就是满载，`-m` 只调显存占用，没有降载档；热负荷的分级靠逐卡、每槽两卡、四卡这个顺序。每一级开跑的头两分钟另开终端运行 `watch -n 2 nvidia-smi --query-gpu=index,temperature.gpu,power.draw --format=csv`，温度一直上升不收敛就按 Ctrl+C，先查泵、水路里的气和冷头贴合。 [GPU Burn](https://github.com/wilicc/gpu-burn)
 - 正常关机再换线。每次检查新增 Xid、AER、GPU ECC、PCIe 降宽，对照无坞基线核存储设备枚举。四卡通过后执行 [P2P/NCCL](INSTALL.md#算力坞验收)，再按 [pinned DMA 命令](PMEM.md#四卡-pinned-dma-验收) 验证双路 DDR4 交错下四卡能同时传输。然后做 1017 冒烟。
 
 ### T5 末的 1017 推理冒烟

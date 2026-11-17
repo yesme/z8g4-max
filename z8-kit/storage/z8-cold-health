@@ -6,8 +6,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 CONFIG = Path(os.environ.get("Z8_STORAGE_CONFIG", "/etc/z8-storage"))
 STATE = Path(os.environ.get("STATE_DIRECTORY", "/var/lib/z8-cold-health"))
@@ -75,39 +77,113 @@ def scan_request(disk):
     return STATE / f"scan-owed-{disk}"
 
 
-def kernel_medium_errors():
-    """Return kernel device names with medium errors logged since the previous check."""
-    output = subprocess.check_output(
-        ["journalctl", "-k", "-q", "--no-pager", "-o", "cat", f"--cursor-file={STATE / 'journal.cursor'}"],
-        text=True)
-    return {match.group(1) for line in output.splitlines() if (match := MEDIUM_ERROR.search(line))}
+def publish(path, content):
+    """A power loss must not leave a partial baseline, request or journal cursor."""
+    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as f:
+        tmp = Path(f.name)
+        try:
+            f.write(content.encode())
+            f.flush()
+            os.fsync(f.fileno())
+            tmp.replace(path)
+            directory = os.open(path.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+
+def remember(devices):
+    """Record this boot's kernel names against ATA by-id, including the drive serial."""
+    boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip().replace("-", "")
+    path = STATE / f"devices-{boot}.json"
+    names = json.loads(path.read_text()) if path.exists() else {}
+    for device in devices.values():
+        name = os.path.basename(os.path.realpath(device))
+        if re.fullmatch(r"sd[a-z]+", name):
+            # If a name was reused within this boot, it cannot identify either disk by itself.
+            names[name] = device if names.get(name, device) == device else None
+    publish(path, json.dumps(names, sort_keys=True))
+
+
+def kernel_medium_errors(candidate):
+    """Read all retained boots; journalctl advances only a private copy of the cursor."""
+    cursor = STATE / "journal.cursor"
+    if cursor.exists():
+        shutil.copyfile(cursor, candidate)
+    args = ["journalctl", "_TRANSPORT=kernel", "-q", "--no-pager", "-o", "json",
+            "--output-fields=MESSAGE", f"--cursor-file={candidate}"]
+    errors = set()
+    with tempfile.TemporaryFile(mode="w+") as journal:
+        subprocess.run(args, stdout=journal, check=True)
+        journal.seek(0)
+        for line in journal:
+            entry = json.loads(line)
+            message = entry.get("MESSAGE")
+            if isinstance(message, str) and (match := MEDIUM_ERROR.search(message)):
+                errors.add((entry["_BOOT_ID"], match[1]))
+    bad_devices = set()
+    for boot, name in sorted(errors):
+        if not re.fullmatch(r"[0-9a-f]{32}", boot):
+            raise ValueError(f"Invalid journal boot ID: {boot!r}")
+        path = STATE / f"devices-{boot}.json"
+        device = json.loads(path.read_text()).get(name) if path.exists() else None
+        if device:
+            bad_devices.add(device)
+        else:
+            print(f"Unattributed medium error: boot={boot} dev={name}; check this boot's journal.",
+                  file=sys.stderr, flush=True)
+    return bad_devices
 
 
 def check(devices):
+    remember(devices)
+    with tempfile.TemporaryDirectory(dir=STATE) as tmp:
+        candidate = Path(tmp) / "cursor"
+        bad_devices = kernel_medium_errors(candidate)
+        status = check_reports(devices, bad_devices)
+        if candidate.exists():
+            publish(STATE / "journal.cursor", candidate.read_text())
+        return status
+
+
+def check_reports(devices, bad_devices):
     state_path = STATE / "state.json"
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    bad_devices = kernel_medium_errors()
     status = 0
     for disk, device in devices.items():
-        medium_error = os.path.basename(os.path.realpath(device)) in bad_devices
+        medium_error = device in bad_devices
+        request = scan_request(disk)
+        owner = ""
+        try:
+            with request.open() as marker:
+                owner = marker.readline().strip()
+        except FileNotFoundError:
+            pass
+        if owner.startswith("/dev/disk/by-id/") and owner != device:
+            request.unlink(missing_ok=True)
         try:
             report = smart(device)
         except (OSError, ValueError) as error:
             print(f"{disk}: {error}", file=sys.stderr, flush=True)
             status = 1
-            # The journal cursor has moved on, so a kernel error cannot wait for a readable SMART report.
+            # Kernel evidence alone is enough to open a durable scan request.
             report, found = None, ["kernel medium error"] if medium_error else []
         else:
             previous = state.get(disk)
             if previous and previous.get("serial") != report.get("serial_number"):
                 # A replaced disk starts over: the old baseline and open request belong to the old disk.
                 previous = None
-                scan_request(disk).unlink(missing_ok=True)
+                # New markers carry their by-id even when SMART was unreadable.
+                # A first readable report must not cancel a request for this disk.
+                if owner != device:
+                    request.unlink(missing_ok=True)
             found, state[disk] = reasons(report, previous, medium_error)
             state[disk]["serial"] = report.get("serial_number")
-        request = scan_request(disk)
         if found:
-            request.write_text(", ".join(found) + "\n")
+            publish(request, device + "\n" + ", ".join(found) + "\n")
         if request.exists():
             # A scan that was stopped, rejected or never started is requested again every day.
             why = ", ".join(found) or "earlier request not finished"
@@ -116,9 +192,7 @@ def check(devices):
                 status = 1
         elif report:
             print(f"{disk}: no new media evidence", flush=True)
-    temporary = state_path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(state, indent=2) + "\n")
-    temporary.replace(state_path)
+    publish(state_path, json.dumps(state, indent=2) + "\n")
     return status
 
 
@@ -139,10 +213,10 @@ def selftest(devices):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["check", "selftest"])
+    parser.add_argument("action", choices=["check", "selftest", "remember"])
     args = parser.parse_args()
     try:
         STATE.mkdir(parents=True, exist_ok=True)
-        sys.exit({"check": check, "selftest": selftest}[args.action](cold_devices()))
+        sys.exit({"check": check, "selftest": selftest, "remember": remember}[args.action](cold_devices()))
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         sys.exit(f"z8-cold-health: {error}")

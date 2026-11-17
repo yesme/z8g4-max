@@ -41,7 +41,7 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 | **T2 · DDR4** | 沿用 T1 硬件，从 Ventoy 启动 Memtest86+，再回 SanDisk 上的临时 Linux | 每路 96 GiB、共 192 GiB。Memtest86+ 默认测试集四个完整 pass，跳过 Rowhammer。再跑 Linux 144 GiB、4 小时，比较前后的 ECC 与 CPU 硬件事件。 [怎么读硬件错误](z8-kit/host/BURN-IN.md#怎么读硬件错误) |
 | **T3 · PMem** | DDR4 原位，CPU0/CPU1 各往六个空槽加 PMem | F10 查条和临时解冻。由 Xubuntu 的 `ipmctl` 提交 App Direct goal，BIOS 在重启时应用。复测混插 DDR4，再验 DAX 与裸 devdax。两路 devdax 转 kmem 后，逐路确认 DDR4 到慢节点的下沉并记录 kmem 冷启上线时间。 [PMem 配置](z8-kit/host/PMEM.md#t3-配置-app-direct) · [kmem 冷启计时](z8-kit/host/PMEM.md#t3-记录-kmem-冷启动时间) |
 | **T4 · 存储** | 槽 1 加 P4618，确认 Gen3 x8 上行、两个 x4 下行和两个各约 3.2 TB 的 NVMe 端点，再加槽 5 的 D4800X。HC620 分 1 → 4 → 7 块接 SATA0–6，光驱接 SATA7 | 查 NVMe 健康、SATA 冷启、每盘 `host-managed` 与 zone 类型。七盘并行 SMART 长自检，复验当前网络与七盘同跑。 [P4618 链路检查](z8-kit/host/BURN-IN.md#p4618-链路与双控制器) · [七盘慢扫](z8-kit/host/BURN-IN.md#七块-hc620-并行慢扫) |
-| **T5 · 算力坞** | 复核 T1 已装的 R580 显卡驱动。主机硬件通过后断电，槽 2/3 装直通卡，接 V100 | 逐卡 → 每槽两卡 → 四卡，验 Gen3 x8、六对 NVLink P2P、NCCL、单卡/四卡拷机、pinned H→D。最后跑 1017 冒烟，再关机断开 V100，转正式安装。 [T5 推理冒烟](z8-kit/host/BURN-IN.md#t5-末的-1017-推理冒烟) |
+| **T5 · 算力坞** | 复核 T1 已装的 R580 显卡驱动。主机硬件通过后断电，槽 2/3 装直通卡，接 V100 | 逐卡 → 每槽两卡 → 四卡，验 Gen3 x8、六对 NVLink P2P、NCCL、单卡/同槽双卡/四卡拷机、pinned H→D。最后跑 1017 冒烟，再关机断开 V100，转正式安装。 [T5 推理冒烟](z8-kit/host/BURN-IN.md#t5-末的-1017-推理冒烟) |
 
 ### 第二阶段 · 正式安装和上线
 
@@ -202,7 +202,7 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 
 1. **T1–T3 主机。** 两颗 CPU 都跑负载。DDR4-only 用 Memtest86+ 四个 pass 和 Linux 144 GiB、4 小时压力测试。随后插 PMem，应用 App Direct goal，重跑一轮混插内存测试。正式条带写一份 400 GiB 文件并在切 AC 后复核 SHA-256。devdax 每路先测 8 GiB，再测约 448 GiB 并验 CRC32C。留独立日志，再转 kmem。
 2. **T4 裸盘。** 七块 HC620 冷启稳定后并行跑 SMART 长检。按每盘报告的 ETA 预留一晚到一天以上，每块都要有最新的成功结果。
-3. **T5 算力坞。** GPU Burn 先单卡 15 分钟、再四卡 60 分钟。测每对 NVLink P2P、NCCL、PCIe Gen3 x8，查 Xid/ECC/AER，最后跑 1017 冒烟。
+3. **T5 算力坞。** GPU Burn 依次跑单卡 15 分钟、每槽双卡 15 分钟、四卡 60 分钟。测每对 NVLink P2P、NCCL、PCIe Gen3 x8，查 Xid/ECC/AER，最后跑 1017 冒烟。
 4. **I4–I5 正式存储和服务。** 四盘各写 128 GiB 并原址覆盖三遍，采样回收水位；对三盘池单做同步写与 scrub。分别演练冷盘、ZFS 盘和整卡 D4800X 缺席。I5 再验边缘冷/热读、两平台远程执行以及 24 分片下的服务。
 5. **I7 整机。** 8 小时内轮流发 Buck2 冷读、热读和新上传，同时运行指向本机 1017 的探针或 OMP 本地 profile，并使用 SSH 和 RDP。保存启动期和混合负载的 kernel、RAS、NVMe/SMART、ZFS、NUMA 与 TTFT 记录。 [逐条命令与结果判读](z8-kit/host/BURN-IN.md)
 

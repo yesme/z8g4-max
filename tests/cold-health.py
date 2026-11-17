@@ -56,11 +56,27 @@ def run(command, **kwargs):
     return subprocess.CompletedProcess(command, int(command[0] == "systemctl" and fail_start), "", "")
 
 
-def check(journal=""):
+boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip().replace("-", "")
+cursor = tmp / "state/journal.cursor"
+
+
+def check(journal="", boot=None, next_cursor="next"):
     """Run one daily check and return its status, the scans it requested and the open requests."""
     calls.clear()
-    with mock.patch.object(health.subprocess, "run", side_effect=run), \
-            mock.patch.object(health.subprocess, "check_output", return_value=journal), \
+    def run_with_journal(command, **kwargs):
+        if command[0] != "journalctl":
+            return run(command, **kwargs)
+        assert "_TRANSPORT=kernel" in command and "-k" not in command and "-b" not in command
+        candidate = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--cursor-file=")))
+        assert candidate != cursor
+        if cursor.exists():
+            assert candidate.read_text() == cursor.read_text()
+        candidate.write_text(next_cursor)
+        for message in journal.splitlines():
+            print(json.dumps({"MESSAGE": message, "_BOOT_ID": boot or boot_id}), file=kwargs["stdout"])
+        return subprocess.CompletedProcess(command, 0)
+
+    with mock.patch.object(health.subprocess, "run", side_effect=run_with_journal), \
             mock.patch.object(health.os.path, "realpath", side_effect=names.__getitem__):
         status = health.check(devices)
     started = [command[-1].removeprefix("z8-cold-scan@").removesuffix(".service")
@@ -82,8 +98,7 @@ health.scan_request("sata0").unlink()
 health.scan_request("sata1").unlink()
 assert check() == (0, [], [])
 
-# journalctl has already moved its cursor, so a kernel error survives an unreadable SMART report
-# and a scan that systemd refused to queue.
+# A durable marker survives an unreadable SMART report and a scan that systemd refused to queue.
 fail_disk2 = fail_start = True
 assert check("critical medium error, dev sde, sector 8 op 0x0:(READ)\n") == (1, ["sata2"], ["sata2"])
 fail_disk2 = fail_start = False
@@ -91,11 +106,42 @@ assert check() == (0, ["sata2"], ["sata2"])
 
 # A replacement disk is a first run: its pending sectors count even below the old disk's baseline,
 # and the old disk's open request is dropped.
-health.scan_request("sata0").write_text("old disk\n")
+health.scan_request("sata0").write_text("old disk\n")  # Legacy marker with no by-id.
 reports["/dev/disk/by-id/ata-disk0"] = {**report(), "serial_number": "NEW0"}
 reports["/dev/disk/by-id/ata-disk1"] = {**report(pending=1), "serial_number": "NEW1"}
 assert check() == (0, ["sata1", "sata2"], ["sata1", "sata2"])
 assert json.loads((tmp / "state" / "state.json").read_text())["sata1"]["serial"] == "NEW1"
+
+# Yesterday's sdc was sata3. Today it is sata0. A failed marker write must leave the cursor intact.
+old_boot = "1" * 32
+(health.STATE / f"devices-{old_boot}.json").write_text(json.dumps({"sdc": devices["sata3"]}))
+previous_cursor = cursor.read_text()
+disk_error = "critical medium error, dev sdc, sector 8"
+publish = health.publish
+
+
+def full_disk(path, content):
+    if path == health.scan_request("sata3"):
+        raise OSError("fixture disk full")
+    publish(path, content)
+
+
+with mock.patch.object(health, "publish", side_effect=full_disk):
+    try:
+        check(disk_error, old_boot, "later")
+    except OSError as error:
+        assert "fixture disk full" in str(error)
+    else:
+        raise AssertionError("Expected failed marker write")
+assert cursor.read_text() == previous_cursor
+assert check(disk_error, old_boot, "later") == (0, ["sata1", "sata2", "sata3"], ["sata1", "sata2", "sata3"])
+assert cursor.read_text() == "later"
+assert "sata0" not in check(disk_error, "2" * 32)[1]
+
+# A new disk can report a kernel error while SMART is unavailable. When its new
+# serial first becomes readable, preserve the pending request for that same by-id.
+reports[devices["sata2"]]["serial_number"] = "NEW2"
+assert "sata2" in check()[1]
 
 calls.clear()
 with mock.patch.object(health.subprocess, "run", side_effect=run):

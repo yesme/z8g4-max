@@ -39,7 +39,12 @@ case "${index_mount:-} ${index_fs:-}" in
             exit 1
         }
         ;;
-    '/ xfs') ;;
+    '/ xfs')
+        [[ "$index_dir" == "$BB_DATA_DIR/cs-hot-index" ]] || {
+            echo "Model volume missing or unexpected index path. The P4618 fallback requires BB_HOT_INDEX_DIR=$BB_DATA_DIR/cs-hot-index." >&2
+            exit 1
+        }
+        ;;
     *)
         echo "$index_dir must be on the PMem model volume or the P4618 XFS." >&2
         exit 1

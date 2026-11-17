@@ -51,6 +51,10 @@ esac
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Burn: GPU-abcd -m 80% -tc 900" in result.stdout
     assert result.stdout.count("\ngpu-snapshot\n") == result.stdout.count("\npcie-link\n") == 2
+    result = run("t5-gpu-burn", "GPU-abcd,GPU-ef01")
+    assert result.returncode == 0 and "Burn: GPU-abcd,GPU-ef01 -m 80% -tc 900" in result.stdout
+    result = run("t5-gpu-burn", "GPU-abcd,GPU-ef01,GPU-2345")
+    assert result.returncode == 2 and "\nBurn:" not in result.stdout
     result = run("t5-gpu-burn", "GPU-abcd,GPU-ef01,GPU-2345,GPU-6789")
     assert result.returncode == 0 and "-tc 3600" in result.stdout, result.stdout
     result = run("t5-gpu-burn", "GPU-abcd,GPU-abcd,GPU-2345,GPU-6789")
@@ -100,6 +104,9 @@ esac
 
     # The CPU steps warm up at half load and go to full load only past the package temperature gate.
     workload = fake_bin / "stress-ng"
+    stub(fake_bin / "lscpu", 'if [[ "$*" == "--online --physical --parse=SOCKET" ]]; then printf "# Socket\\n0\\n1\\n0\\n"; fi')
+    # Speed up the periodic sampler, keeping the first sample inside the workload.
+    stub(fake_bin / "sleep", 'exec /bin/sleep 0.05')
     workload.write_text("""#!/usr/bin/env python3
 from pathlib import Path
 import os
@@ -118,6 +125,8 @@ if stage == "warm-up" and "Z8_HEAT" in os.environ:
     sensor.write_text(os.environ["Z8_HEAT"] + "000\\n")
     sleep(3)
     sensor.write_text("64000\\n")
+elif stage == "warm-up":
+    sleep(0.4)
 """)
     workload.chmod(0o755)
     stress_log = root / "stress.log"
@@ -160,8 +169,11 @@ if stage == "warm-up" and "Z8_HEAT" in os.environ:
     assert "Thermal gate overridden" in result.stdout
     for sensor in (root / "hwmon").glob("hwmon*/temp1_label"):
         sensor.unlink()
+    result, stages = cpu_step(63, Z8_THERMAL_GATE="off")
+    assert result.returncode == 1 and stages == ["warm-up"] and "no warm-up sample for Package id 1" in result.stdout
+    (root / "hwmon/hwmon0/temp1_label").unlink()
     result, stages = cpu_step()
-    assert result.returncode == 1 and stages == ["warm-up"] and "no coretemp package sensor" in result.stdout
+    assert result.returncode == 1 and stages == ["warm-up"] and "no warm-up sample for Package id 0" in result.stdout
 
     # Ctrl+C from a terminal signals every process in the foreground group.
     def interrupt(stage):

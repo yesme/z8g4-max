@@ -66,6 +66,10 @@ rm -- "$BB_DATA_DIR/cs-hot/key_location_map"
 # The P4618 fallback needs neither DAX nor the hint.
 echo '/ xfs rw,noatime' > "$tmp/index-mount"
 echo 0 > "$tmp/extsize"
+reject 'Accepted an unmounted PMem directory on the root filesystem'
+BB_HOT_INDEX_DIR="$BB_DATA_DIR/cs-hot-index"
+mkdir -p "$BB_HOT_INDEX_DIR"
+echo 27917287424 > "$BB_HOT_INDEX_DIR/key_location_map"
 bash "$tmp/check"
 touch "$BB_DATA_DIR/cms/blocks"
 bash "$tmp/check" --prepare

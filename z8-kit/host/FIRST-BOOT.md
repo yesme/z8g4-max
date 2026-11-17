@@ -48,7 +48,7 @@
 ## 2. T5 验算力坞
 
 1. 保持坞断开，复核 T1 已在临时 Xubuntu 装好的 R580 和 P1000 枚举，并在 SanDisk 上[准备 CUDA 验机工具](INSTALL.md#算力坞验收)。按 [R580 包与安装模拟](INSTALL.md#安装并锁定-nvidia-显卡驱动) 操作。关机断电，按 [槽位表](BIOS.md#板上槽位) 接槽 2/3 的 x8/x8 直通板。按底板供电方式确认坞的端点、电源和冷却能在主机 POST 时就绪，核四套水路和泵。若坞为独立手动供电，第一轮上机前核供应商启停顺序并记录。
-2. 按 **单卡 → 每槽各验两卡 → 四卡** 冷启。每轮保存 GPU UUID、BDF、NUMA 归属和负载下 PCIe 速率/宽度。四卡再测六对 NVLink P2P、NCCL、四卡 1 小时 GPU Burn 和交错 DDR4 的 pinned H→D。检查新增 Xid、AER、ECC，并与 T4 比对存储枚举。 [T5 拷机](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机) · [CUDA/NCCL](INSTALL.md#算力坞验收) · [pinned DMA](PMEM.md#四卡-pinned-dma-验收)
+2. 按 **单卡 → 每槽各验两卡 → 四卡** 冷启。单卡、同槽双卡各跑 15 分钟 GPU Burn。每轮保存 GPU UUID、BDF、NUMA 归属和负载下 PCIe 速率/宽度。四卡再测六对 NVLink P2P、NCCL、四卡 1 小时 GPU Burn 和交错 DDR4 的 pinned H→D。检查新增 Xid、AER、ECC，并与 T4 比对存储枚举。 [T5 拷机](BURN-IN.md#t5-算力坞-v100-与-pcie-拷机) · [CUDA/NCCL](INSTALL.md#算力坞验收) · [pinned DMA](PMEM.md#四卡-pinned-dma-验收)
 3. 可从 T5 开始安排约 **232 GiB** 的权重下载，直接写已核实挂载的 PMem 模型卷。四卡硬件过关后做 1017 冒烟。按 T5 手册的速度档判断是否进 I1，从单槽 128K 起步，记录实际使用档、引擎、权重 revision、四卡 UUID、显存与工具来回结果。T5 的源码与编译产物在 SanDisk 上的临时系统。权重留在 PMem 给 I6 复用。 [T5 推理冒烟](BURN-IN.md#t5-末的-1017-推理冒烟)
 4. 停模型和测试服务。把保存在其他目录的验机记录一起收进 SanDisk 的 `~/z8-burnin`，确认日志、磁盘清单及两份 PMem env 都可读。正常关机，拔下并留存 SanDisk，I1 安装期间用不到它。
 

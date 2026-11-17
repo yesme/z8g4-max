@@ -20,7 +20,7 @@ Usage: bash host/run-step.sh STEP [ARGS...]
   t4-hdd-status BY_ID...        Print SMART self-test status for seven confirmed drives
   t4-hdd-start BY_ID...         Start background Extended SMART tests on those drives
   t5-cuda-build                Build the CUDA test utilities on the SanDisk system
-  t5-gpu-burn GPU-UUID[,GPU-UUID...]   Burn one V100 for 15 min or four for 60 min
+  t5-gpu-burn GPU-UUID[,GPU-UUID...]   Burn one or two V100s for 15 min, or four for 60 min
   t5-pinned NODE0,NODE1 GPU-UUID,...   Run interleaved DDR4 H-to-D on four V100s
   i1-disks FIT_BY_ID NVME_BY_ID NVME_BY_ID [--imported]   Print the installer matching IDs
   i1-boot                      Collect FIT, md, XFS and Dracut boot evidence
@@ -34,7 +34,7 @@ Usage: bash host/run-step.sh STEP [ARGS...]
   i7-snapshot [PID]            Capture NUMA, memory, CPU and hardware counter evidence
 
 Default logs: ~/z8-burnin/steps. Override the directory with Z8_LOG_DIR.
-Z8_THERMAL_GATE=off lets t1-cpu and t1-avx go to full load after a failed package temperature check.
+Z8_THERMAL_GATE=off overrides temperature thresholds only after both packages have valid readings.
 EOF
 }
 
@@ -57,11 +57,14 @@ ras() {
 
 # One "label<TAB>temperature<TAB>limit" line per CPU package, in whole degrees Celsius.
 package_temperatures() {
-    local label sensor
+    local label sensor input crit
     for label in /sys/class/hwmon/hwmon*/temp*_label; do
         [[ -r "$label" && $(<"$label") == Package\ id\ * ]] || continue
         sensor=${label%_label}
-        printf '%s\t%s\t%s\n' "$(<"$label")" "$(($(<"${sensor}_input") / 1000))" "$(($(<"${sensor}_crit") / 1000))"
+        read -r input < "${sensor}_input" || continue
+        read -r crit < "${sensor}_crit" || continue
+        [[ $input =~ ^[0-9]+$ && $crit =~ ^[1-9][0-9]*$ ]] || continue
+        printf '%s\t%s\t%s\n' "$(<"$label")" "$((input / 1000))" "$((crit / 1000))"
     done
 }
 
@@ -69,17 +72,31 @@ package_temperatures() {
 # package of this machine to its limit within a minute of full load, and the 30-minute run hung the host.
 thermal_gate() {
     local samples=$1 label peak limit hottest='' coolest='' problem=''
+    local -A observed=()
+    local -a packages
+    mapfile -t packages < <(LC_ALL=C lscpu --online --physical --parse=SOCKET | awk '/^[0-9]+$/' | sort -nu)
+    if (( ${#packages[@]} != 2 )); then
+        echo 'Full load skipped: expected two online CPU packages.' >&2
+        return 1
+    fi
     printf '\n[Peak package temperature during half-load warm-up]\n'
     while IFS=$'\t' read -r label peak limit; do
         printf '%s: peak %s °C, limit %s °C\n' "$label" "$peak" "$limit"
+        observed["$label"]=1
         if (( peak > limit - 15 )); then problem='a package came within 15 °C of its limit at half load'; fi
         if [[ -z "$hottest" ]] || (( peak > hottest )); then hottest=$peak; fi
         if [[ -z "$coolest" ]] || (( peak < coolest )); then coolest=$peak; fi
     done < <(awk -F'\t' '{ if (!($1 in peak) || $2 > peak[$1]) peak[$1] = $2; limit[$1] = $3 }
         END { for (label in peak) print label FS peak[label] FS limit[label] }' "$samples" | sort)
-    if [[ -z "$hottest" ]]; then
-        problem='no coretemp package sensor is readable'
-    elif (( hottest - coolest > 10 )); then
+    local missing=0
+    for label in "${packages[@]}"; do
+        if [[ ! ${observed["Package id $label"]+set} ]]; then
+            echo "Full load skipped: no warm-up sample for Package id $label." >&2
+            missing=1
+        fi
+    done
+    (( !missing )) || return 1
+    if (( hottest - coolest > 10 )); then
         problem="the packages differ by $((hottest - coolest)) °C"
     fi
     [[ -n "$problem" ]] || return 0
@@ -96,7 +113,6 @@ cpu_warmup() {
     local cpu_count samples sampler status=0
     cpu_count=$(nproc)
     samples=$(mktemp)
-    package_temperatures > "$samples"
     # Sample under load: the die cools within a second once the workers stop.
     (set +x; while sleep 2; do package_temperatures; done) >> "$samples" 2>/dev/null &
     sampler=$!
@@ -291,9 +307,15 @@ run_step() {
             ;;
         t5-cuda-build) bash host/build-cuda-checks.sh ;;
         t5-gpu-burn)
-            [[ $# == 1 ]] || fail 'Supply one or four V100 UUIDs.'
-            count=1; duration=900
-            if [[ "$1" == *,* ]]; then count=4; duration=3600; fi
+            [[ $# == 1 ]] || fail 'Supply one, two or four V100 UUIDs.'
+            local -a burn_ids
+            IFS=, read -ra burn_ids <<< "$1"
+            count=${#burn_ids[@]}
+            case "$count" in
+                1|2) duration=900 ;;
+                4) duration=3600 ;;
+                *) fail 'Supply one, two or four V100 UUIDs.' ;;
+            esac
             select_v100s "$1" "$count"
             gpu_snapshot
             ./gpu_burn -m 80% -tc "$duration" || result=$?

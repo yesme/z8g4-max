@@ -165,6 +165,30 @@ grep -Fxq 'RuntimeDirectory=z8-bb-cache' "$units/z8-buildbarn.service"
 grep -Fxq 'Wants=z8-pmem-model.service' "$units/z8-buildbarn.service"
 grep -Fxq 'PartOf=z8-pmem-model.service' "$units/z8-buildbarn.service"
 grep -Fxq 'Requisite=z8-cold.service' "$units/z8-cold-health.service"
+grep -Fxq 'ExecStartPost=/usr/local/sbin/z8-cold-health remember' "$units/z8-cold.service"
+# Migrate the old installation, then run the same entry point on the resulting layout.
+cp "$units/z8-cold-selftest.timer" "$units/z8-cold-scan.timer"
+systemctl --root "$root" --quiet enable z8-cold-scan.timer
+mkdir -p "$tmp/migrate"
+cat > "$tmp/migrate/systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+case "$1" in
+    disable|enable)
+        [[ "$2" == --now ]]
+        action=$1
+        shift 2
+        exec /usr/bin/systemctl --root "$Z8_TEST/systemd" --quiet "$action" "$@" ;;
+    daemon-reload) [[ ! -e "$Z8_TEST/systemd/etc/systemd/system/z8-cold-scan.timer" ]] ;;
+    *) exit 2 ;;
+esac
+EOF
+chmod +x "$tmp/migrate/systemctl"
+sed -e "s|legacy=/etc/systemd/system/|legacy=$units/|" -e 's|/usr/local/sbin/z8-cold-health remember|:|' \
+    z8-kit/storage/enable-cold-maintenance.sh > "$tmp/migrate.sh"
+for _ in 1 2; do PATH="$tmp/migrate:$PATH" bash "$tmp/migrate.sh"; done
+[[ ! -L "$units/timers.target.wants/z8-cold-scan.timer" && -f "$units/z8-cold-scan.service" &&
+    -L "$units/timers.target.wants/z8-cold-health.timer" && -L "$units/timers.target.wants/z8-cold-selftest.timer" ]]
 grep -Fxq 'After=docker.service z8-cold.service z8-pmem-model.service' "$units/z8-buildbarn.service"
 grep -Fxq 'BindsTo=z8-dmzoned.service' "$units/z8-cold.service"
 grep -Fxq 'BindsTo=z8-cold.service' "$units/z8-buildbarn.service"
