@@ -15,13 +15,13 @@ F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT�
 
 Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对取编号较小的 CPU 作“主线程”，每路按这个编号排序取最后 K 对。这样 CPU0 所在物理核留给普通任务和系统。cgroup 的 CPU 集合约束其中的进程。硬件 IRQ 与内核线程有自己的亲和性，用 `/proc/interrupts` 和 `ps -eLo pid,tid,psr,comm` 核正在跑的网卡、存储和推理负载。CPU 核的执行资源分开，socket 的 Turbo、功耗、末级缓存、DDR4、PMem 和 UPI 仍然共享。 [Linux CPU 拓扑](https://docs.kernel.org/admin-guide/cputopology.html) · [Linux cgroup v2 cpuset](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpuset) · [Linux IRQ 亲和性](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
-**llama.cpp 首装每路 2 核，共 4 个工作线程。** I6 用同一真实工单生成时执行 `pidstat -t -p PID 1`。只有已有推理工作线程持续接近满载，且按每路 2 → 4 → 6 核增加后同一工单的生成速度确实提高，才保留更高档。改核数前停服务，按本页重生成，保持同一推理档再验证。
+**llama.cpp 首装每路 2 核，共 4 个工作线程。** 专家未命中默认全部上传显卡，CPU 份额为 0 时这些线程大多空闲，看线程是否跑满判断不了该不该加核。I6 用[上游调参脚本](../inference/README.md#i6-推理放行)在 4 线程和 12 线程各测一次，12 线程的推荐速度高出 5% 以上才改成每路 6 核，并保存推荐的 CPU 份额。改核数前停服务，按本页重生成，保持同一推理档再验证。
 
 `z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，推理主线程和同核 HT 伙伴全部归还。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。服务常驻时即使暂时没有 API 请求也保留核心。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
 `AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。默认推理运行时普通任务共享 96 个逻辑 CPU。runner 配 88 个活动 action，不设 CPU 时间配额：配额用尽时整个 runner cgroup 在该周期剩余时间停转，多线程的链接和编译最先受影响。系统、存储和协调进程靠同级 slice 的权重取得份额。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
 
-推理 slice 与 service 都设 `MemoryLow=160G`。两条是父子层级的同一尽力保护，按实际用量生效，降低它会改变回收次序。CUDA 长期 pin 的页本身不可回收。两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
+推理 slice 与 service 都设 `MemoryLow=160G`。两条是父子层级的同一尽力保护，按实际用量生效，降低它会改变回收次序。CUDA 长期 pin 的页本身不可回收。llama.cpp 把约 123 GiB 专家读进 CUDA 的锁页主机内存，按交错策略两路各约 62 GiB；服务运行期间这部分既不回收也不下沉，其余任务每路能用的 DDR4 约 30 GiB，更多内存落在 kmem。两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
 
 如果 I7 的多个采样窗口里 `allocstall_normal` 持续增长，同时可见 `Normal` 水位紧张、PSI 或推理尾延迟抬升，在 `/etc/sysctl.d/90-z8-tiering.conf` 加入 `vm.watermark_scale_factor = 100`，执行 `sudo sysctl -p /etc/sysctl.d/90-z8-tiering.conf` 后重复同一负载。只有直接回收或尾延迟改善且构建吞吐可接受时保留该值。无改善时从配置移除该项并执行 `sudo sysctl -w vm.watermark_scale_factor=10` 恢复运行值。服务的 `OOMScoreAdjust=-900` 降低被选作 OOM victim 的优先级。 [Linux cgroup v2 memory.low](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) · [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable) · [Linux 7.0 水位与直接回收计数](https://github.com/torvalds/linux/blob/v7.0/Documentation/admin-guide/sysctl/vm.rst#L1096-L1111)
 
@@ -92,7 +92,7 @@ I5 先完成 [Buildbarn 的软件、目录与单元准备](../storage/README.md#
 
 ## 启停本地模型
 
-以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。只有六对 NVLink 与 NCCL 已在正式默认内核参数下验过才保存 `export Z8_NVLINK_P2P=1`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`KV_TYPE`、`KV_OFFLOAD`、`MOE_CACHE_MIB` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
+以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。只有六对 NVLink 与 NCCL 已在正式默认内核参数下验过才保存 `export Z8_NVLINK_P2P=1`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`KV_TYPE`、`KV_OFFLOAD`、`MOE_CACHE_MIB`、`MOE_CACHE_CPU_SHARE` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
 
 **llama.cpp 的 `launch.sh`**
 

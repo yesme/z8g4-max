@@ -15,9 +15,19 @@ slot_ctx=$(((slot_ctx + 255) / 256 * 256))
 threads=${Z8_INFER_THREADS:-4}
 threads_batch=${Z8_INFER_THREADS_BATCH:-$threads}
 batch=${BATCH_SIZE:-512}
-ubatch=${UBATCH_SIZE:-32}
+# Microbatches above 32 tokens only read the expert cache, so reading a prompt keeps the experts of
+# generation in it and uploads each expert once per microbatch.
+ubatch=${UBATCH_SIZE:-512}
 cpu_share=${MOE_CACHE_CPU_SHARE:-0}
-cache_mib=${MOE_CACHE_MIB:-8192}
+cache_mib=${MOE_CACHE_MIB:-24576}
+# dio and none read the routed experts into pinned DDR4, from where a cache miss uploads at link
+# speed. The Engram is read by row from its mapping in every mode. With mmap the experts would be
+# the PMem pages of the DAX file, which cannot be pinned.
+load_mode=${LOAD_MODE:-dio}
+case "$load_mode" in
+    dio|none|mmap) ;;
+    *) echo 'LOAD_MODE must be dio, none or mmap' >&2; exit 2 ;;
+esac
 kv_type=${KV_TYPE:-f16}
 attention=()
 case "$kv_type" in
@@ -63,13 +73,22 @@ case ${Z8_NVLINK_P2P:-0} in
     *) echo 'Z8_NVLINK_P2P must be 0 or 1' >&2; exit 2 ;;
 esac
 
-exec numactl --interleave="$Z8_DRAM_INTERLEAVE" "$LLAMA_BUILD/bin/llama-server" \
-    --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017 \
-    --load-mode mmap --lazy-mode on --split-mode layer --tensor-split 1,1,1,1 \
-    --n-gpu-layers all --cpu-moe --fit off --no-mmproj \
-    --moe-cache-mib "$cache_mib" --moe-cache-cpu-share "$cpu_share" \
-    --threads "$threads" --threads-batch "$threads_batch" --batch-size "$batch" --ubatch-size "$ubatch" \
-    --parallel "$slots" --ctx-size "$((slots * slot_ctx))" --no-kv-unified \
-    -ctk "$kv_type" -ctv "$kv_type" "$kv_offload" "${attention[@]}" \
-    --cont-batching --cache-ram 0 --no-cache-idle-slots "$cache_prompt" \
-    --spec-type none --reasoning off --jinja --metrics --slots
+server=(numactl --interleave="$Z8_DRAM_INTERLEAVE" "$LLAMA_BUILD/bin/llama-server"
+    --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017
+    --load-mode "$load_mode" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1'
+    --n-gpu-layers all --cpu-moe --fit off --no-mmproj
+    --moe-cache-mib "$cache_mib" --moe-cache-cpu-share "$cpu_share"
+    --threads "$threads" --threads-batch "$threads_batch" --batch-size "$batch" --ubatch-size "$ubatch"
+    --parallel "$slots" --ctx-size "$((slots * slot_ctx))" --no-kv-unified
+    -ctk "$kv_type" -ctv "$kv_type" "$kv_offload" "${attention[@]}"
+    --cont-batching --cache-ram 0 --no-cache-idle-slots "$cache_prompt"
+    --spec-type none --reasoning off --jinja --metrics --slots)
+case ${1:-} in
+    '') exec "${server[@]}" ;;
+    --tune)
+        # The upstream tuner starts this same command several times with its own cache size and CPU share.
+        shift
+        exec python3 "$(dirname -- "$LLAMA_BUILD")/scripts/moe-cache-tune.py" "$@" -- "${server[@]}"
+        ;;
+    *) echo 'Usage: serve-llama.sh [--tune [TUNER_OPTIONS]]' >&2; exit 2 ;;
+esac
