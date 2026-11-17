@@ -303,7 +303,7 @@ if read_user_file "$infer" "$work/infer-env"; then
         case "$name" in
             LLAMA_BUILD|DS41_GGUF|CUDA_VISIBLE_DEVICES|Z8_DRAM_INTERLEAVE|Z8_CUDA_RUNTIME|Z8_NVLINK_P2P|\
             SLOTS|SLOT_CTX|KV_TYPE|KV_OFFLOAD|MOE_CACHE_MIB|CACHE_PROMPT|Z8_INFER_THREADS|\
-            MOE_CACHE_CPU_SHARE|UBATCH_SIZE|BATCH_SIZE|Z8_INFER_THREADS_BATCH|LOAD_MODE) ;;
+            MOE_CACHE_CPU_SHARE|UBATCH_SIZE|BATCH_SIZE|Z8_INFER_THREADS_BATCH|EXPERT_MEMORY) ;;
             *) continue ;;
         esac
         [[ "$value" =~ $literal ]] || continue

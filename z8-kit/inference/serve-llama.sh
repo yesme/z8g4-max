@@ -20,13 +20,18 @@ batch=${BATCH_SIZE:-512}
 ubatch=${UBATCH_SIZE:-512}
 cpu_share=${MOE_CACHE_CPU_SHARE:-0}
 cache_mib=${MOE_CACHE_MIB:-36864}
-# dio and none read the routed experts into pinned DDR4, from where a cache miss uploads at link
-# speed. The Engram is read by row from its mapping in every mode. With mmap the experts would be
-# the PMem pages of the DAX file, which cannot be pinned.
-load_mode=${LOAD_MODE:-dio}
-case "$load_mode" in
-    dio|none|mmap) ;;
-    *) echo 'LOAD_MODE must be dio, none or mmap' >&2; exit 2 ;;
+# Where the 123 GiB of routed experts live on the host. The Engram is read by row from its mapping
+# on the PMem volume in every mode.
+#   tiered  ordinary memory: DDR4 first, and the kernel moves copies that are not read, such as
+#           experts held in the GPU cache or an idle model, to PMem. Uploads are not pinned.
+#   pinned  CUDA pinned memory: fastest uploads, but 123 GiB of DDR4 stay taken while it runs.
+#   pmem    mapped from the DAX file: no DDR4, every upload is copied from PMem by one thread.
+expert_memory=${EXPERT_MEMORY:-tiered}
+case "$expert_memory" in
+    tiered) placement=(--load-mode dio --no-host) ;;
+    pinned) placement=(--load-mode dio) ;;
+    pmem) placement=(--load-mode mmap) ;;
+    *) echo 'EXPERT_MEMORY must be tiered, pinned or pmem' >&2; exit 2 ;;
 esac
 kv_type=${KV_TYPE:-f16}
 attention=()
@@ -75,7 +80,7 @@ esac
 
 server=(numactl --interleave="$Z8_DRAM_INTERLEAVE" "$LLAMA_BUILD/bin/llama-server"
     --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017
-    --load-mode "$load_mode" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1'
+    "${placement[@]}" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1'
     --n-gpu-layers all --cpu-moe --fit off --no-mmproj
     --moe-cache-mib "$cache_mib" --moe-cache-cpu-share "$cpu_share"
     --threads "$threads" --threads-batch "$threads_batch" --batch-size "$batch" --ubatch-size "$ubatch"
@@ -94,7 +99,7 @@ case ${1:-} in
         # Simulated allocation from the file headers: for each card the model, context (KV and expert
         # cache) and compute buffers in MiB. Nothing is loaded.
         exec "$LLAMA_BUILD/bin/llama-fit-params" -m "$model" --fit off --fit-print on \
-            --load-mode "$load_mode" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1' \
+            "${placement[@]}" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1' \
             --n-gpu-layers all --cpu-moe --moe-cache-mib "$cache_mib" --moe-cache-cpu-share "$cpu_share" \
             --batch-size "$batch" --ubatch-size "$ubatch" --ctx-size "$((slots * slot_ctx))" \
             -ctk "$kv_type" -ctv "$kv_type" "$kv_offload" "${attention[@]}"
