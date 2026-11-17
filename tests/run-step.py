@@ -104,7 +104,7 @@ esac
 
     # The CPU steps warm up at half load and go to full load only past the package temperature gate.
     workload = fake_bin / "stress-ng"
-    stub(fake_bin / "lscpu", 'if [[ "$*" == "--online --physical --parse=SOCKET" ]]; then printf "# Socket\\n0\\n1\\n0\\n"; fi')
+    stub(fake_bin / "lscpu", 'if [[ "$*" == "--online --parse=SOCKET" ]]; then printf "# Socket\\n0\\n1\\n0\\n"; fi')
     # Speed up the periodic sampler, keeping the first sample inside the workload.
     stub(fake_bin / "sleep", 'exec /bin/sleep 0.05')
     workload.write_text("""#!/usr/bin/env python3

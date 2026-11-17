@@ -165,7 +165,8 @@ grep -Fxq 'RuntimeDirectory=z8-bb-cache' "$units/z8-buildbarn.service"
 grep -Fxq 'Wants=z8-pmem-model.service' "$units/z8-buildbarn.service"
 grep -Fxq 'PartOf=z8-pmem-model.service' "$units/z8-buildbarn.service"
 grep -Fxq 'Requisite=z8-cold.service' "$units/z8-cold-health.service"
-grep -Fxq 'ExecStartPost=/usr/local/sbin/z8-cold-health remember' "$units/z8-cold.service"
+# A failed device-name record must not take the cold CAS down with it.
+grep -Fxq 'ExecStartPost=-/usr/local/sbin/z8-cold-health remember' "$units/z8-cold.service"
 # Migrate the old installation, then run the same entry point on the resulting layout.
 cp "$units/z8-cold-selftest.timer" "$units/z8-cold-scan.timer"
 systemctl --root "$root" --quiet enable z8-cold-scan.timer

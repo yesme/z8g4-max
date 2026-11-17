@@ -74,7 +74,8 @@ thermal_gate() {
     local samples=$1 label peak limit hottest='' coolest='' problem=''
     local -A observed=()
     local -a packages
-    mapfile -t packages < <(LC_ALL=C lscpu --online --physical --parse=SOCKET | awk '/^[0-9]+$/' | sort -nu)
+    # coretemp numbers its labels 0, 1, ... like lscpu's logical socket index; physical IDs come from the APIC ID.
+    mapfile -t packages < <(LC_ALL=C lscpu --online --parse=SOCKET | awk '/^[0-9]+$/' | sort -nu)
     if (( ${#packages[@]} != 2 )); then
         echo 'Full load skipped: expected two online CPU packages.' >&2
         return 1
