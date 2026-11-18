@@ -80,7 +80,7 @@ def main():
             ("z8build-remote", "Buildbarn remote execution", None, 100),
         ):
             allowed = f"AllowedCPUs={cpu_list(mask)}\n" if mask is not None else ""
-            memory = "MemoryLow=160G\n" if name == "z8infer" else ""
+            memory = "MemoryLow=90G\n" if name == "z8infer" else ""
             (args.output / f"{name}.slice").write_text(
                 f"[Unit]\nDescription={desc}\n\n[Slice]\n{allowed}"
                 f"CPUWeight={weight}\n{memory}",

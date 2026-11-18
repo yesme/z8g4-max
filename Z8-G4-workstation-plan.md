@@ -22,7 +22,7 @@
 | 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，默认每路 2 核，运行时 HT 伙伴留空，停服后全部归还 |
 | 存储 | SATA0–3 各用 24 GiB 写缓存，裸冷 CS 共 32 片、约 50.9 TiB；p5 是 848 GiB 裸索引。SATA4–6 各用 80 GiB 写缓存，组成约 25 TiB RAIDZ1；p9 约 213 GiB special，承载元数据、小块与 ZIL |
 | 构建 | max 热 CS 1,638 GiB 在 P4618，其 26 GiB 索引在 PMem 模型卷；冷分片 checkpoint 在 P4618。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 提供权威 AC/CAS 和唯一调度器，Linux 与 Darwin 由平台属性分流 |
-| 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、36 GiB GPU 专家缓存，其余专家在锁页 DDR4，按显存与工具闭环结果降档 |
+| 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、36 GiB GPU 专家缓存，全部专家另在主机内存留一份，按显存与工具闭环结果降档 |
 | 远程 | 板载有线为主，AX210 Wi-Fi 过渡，DHCP 保留、SSH/tmux，独立图形用 xrdp/Xfce，控制本机桌面用 P1000 的 X11/NVENC + Sunshine/Moonlight |
 
 T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确认 1017 能在四卡加载并完成工具往返。I1 确认 FIT 冷启动可找到 RAID0，I4 确认裸冷库覆写、ZFS 同步写和两组缺盘行为，I5 确认 Buck2 缓存与物化，I6–I7 确认推理显存、工具闭环和实际混合负载。只有未通过的项目进入对应排查或回退。
@@ -127,15 +127,15 @@ bash host/run-step.sh i4-status
 | 层 | 放置 |
 |---|---|
 | 四卡 HBM（64 GiB 标称） | dense、attention、活跃 KV 和 36 GiB 合计热专家缓存 |
-| 两路 DDR4（192 GiB） | 各 96 GiB。推理从两个 DDR4 节点交错分配；llama.cpp 的约 123 GiB routed expert 常驻锁页内存。系统、Buck2 保留本地优先 |
+| 两路 DDR4（192 GiB） | 各 96 GiB。推理从两个 DDR4 节点交错分配；llama.cpp 的约 123 GiB routed expert 是普通内存，先占 DDR4，没在读的下沉到 kmem。系统、Buck2 保留本地优先 |
 | App Direct fsdax（2×258 GiB） | 2 MiB dm-stripe，约 508 GiB 块设备容量，XFS DAX，挂 `/srv/pmem-model`。存一套 GGUF、Engram 与 tokenizer，另放 26 GiB 的 Buildbarn 热 CS 索引 |
 | 两路剩余 App Direct | 各自以可迁移 kmem 上线，启用 memmap on memory 和冷页下沉。活跃推理 KV 由引擎分配 |
 
-**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。共享 arena 交错避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进锁页 DDR4。默认每路留最后 2 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 96 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
+**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。共享 arena 交错避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进主机内存。默认每路留最后 2 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 96 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
 
 ### 推理上线顺序
 
-1. **部署 llama.cpp v1.0.0。** CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、单槽 128K f16 GPU KV、专家读进锁页 DDR4、专家缓存 36864 MiB、ubatch 512，CPU miss share 0。默认启用槽内前缀复用，以真实工具往返、前缀命中 token 和输出验证。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
+1. **部署 llama.cpp v1.0.0。** CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、单槽 128K f16 GPU KV、专家读进主机内存、专家缓存 36864 MiB、ubatch 512，CPU miss share 0。默认启用槽内前缀复用，以真实工具往返、前缀命中 token 和输出验证。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
 2. **显存压力按阶梯降档。** 依次试 q8 KV、24 GiB 专家缓存、q4 KV、64K 和主机 KV。128K 目标仍达不到再评估 1Cat。Xolotl Buster 留作短上下文单用户回退，使用每路 6 核。 [上下文降档](z8-kit/inference/README.md#上下文降档与验收)
 3. **1Cat 只用于有明确需求的长上下文。** #1277 的 512K 成绩用 4×32 GiB，和本机 4×16 GiB 的预算不同。原版 Strata 的 1017 包未列 SM70，Xolotl 提供 Buster 构建路径。upstream vLLM 1017 公版配方需至少 8×80 GB。 [1Cat 上游实测](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Strata 1017 支持](https://github.com/Niko1221/Strata/blob/main/docs/DEEPSEEK41.md) · [vLLM 1017 配方](https://github.com/vllm-project/vllm/blob/main/recipes/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml)
 

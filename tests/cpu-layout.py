@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as temp:
         assert idle - build == reserved | siblings
         assert workers == reserved - {26 - count, 52 - count}
         assert f"AllowedCPUs={layout.cpu_list(reserved)}" in (output / "z8infer.slice").read_text(encoding="utf-8")
-        assert "MemoryLow=160G\n" in (output / "z8infer.slice").read_text(encoding="utf-8")
+        assert "MemoryLow=90G\n" in (output / "z8infer.slice").read_text(encoding="utf-8")
         assert (output / "10-z8-cpu.conf").read_text(encoding="utf-8") == f"[Slice]\nAllowedCPUs={layout.cpu_list(idle)}\n"
 
 
