@@ -15,6 +15,11 @@ cat > "$tmp/bin/numactl" <<'EOF'
 printf 'p2p=%s ' "${GGML_CUDA_P2P:-unset}"
 printf '%s ' "$@"
 EOF
+cat > "$tmp/bin/nvidia-smi" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == '--id=GPU-0,GPU-1,GPU-2,GPU-3 --query-gpu=uuid,memory.total,memory.free --format=csv,noheader,nounits' ]]
+printf 'GPU-%s, 16160, %s\n' 0 2400 1 2300 2 2500 3 "${Z8_TEST_FREE:-1900}"
+EOF
 cat > "$tmp/bin/python3" <<'EOF'
 #!/usr/bin/env bash
 printf 'tuner '
@@ -30,7 +35,7 @@ default=$(GGML_CUDA_P2P=1 bash "$tmp/serve.sh")
 [[ "$default" == *' --cache-prompt '* && "$default" == *' --parallel 1 --ctx-size 131072 '* ]]
 [[ "$default" == *' --threads 4 --threads-batch 4 '* && "$default" == *' -ctk f16 -ctv f16 --kv-offload '* ]]
 [[ "$default" != *' --flash-attn '* ]]
-[[ "$default" == *' --moe-cache-mib 24576 --moe-cache-cpu-share 0 '* ]]
+[[ "$default" == *' --moe-cache-mib 36864 --moe-cache-cpu-share 0 '* ]]
 [[ "$default" == *' --batch-size 512 --ubatch-size 512 '* && "$default" == *' --load-mode dio --lazy-mode on '* ]]
 [[ $(LOAD_MODE=mmap bash "$tmp/serve.sh") == *' --load-mode mmap --lazy-mode on '* ]]
 
@@ -65,6 +70,26 @@ reject() {
 }
 reject 'Total context exceeds' SLOTS=2 SLOT_CTX=600000
 reject 'Total context exceeds' SLOTS=3 SLOT_CTX=349525
+
+# The fullest card has 1900 MiB free: every card can give 1900 - 1024 MiB more to the cache.
+fitted=$(bash "$tmp/serve.sh" --fit-cache)
+[[ "$fitted" == *'GPU-3: 1900 MiB free'* && "$fitted" == *'MOE_CACHE_MIB=40320 keeps 1024 MiB free'* ]]
+[[ $(VRAM_MARGIN_MIB=2048 bash "$tmp/serve.sh" --fit-cache) == *'MOE_CACHE_MIB=36224 keeps 2048 MiB free'* ]]
+[[ $(Z8_TEST_FREE=512 bash "$tmp/serve.sh" --fit-cache) == *'MOE_CACHE_MIB=34816 keeps 1024 MiB free'* ]]
+
+# The plan uses the same placement, cache and context as the server.
+mkdir "$tmp/build" "$tmp/build/bin"
+cat > "$tmp/build/bin/llama-fit-params" <<'EOF'
+#!/usr/bin/env bash
+printf 'plan '
+printf '%s ' "$@"
+EOF
+chmod +x "$tmp/build/bin/llama-fit-params"
+plan=$(SLOT_CTX=65536 KV_TYPE=q8_0 bash "$tmp/serve.sh" --plan)
+[[ "$plan" == "plan -m $tmp/model/model.gguf --fit off --fit-print on --load-mode dio "* ]]
+[[ "$plan" == *' --cpu-moe --moe-cache-mib 36864 '* && "$plan" == *' --ubatch-size 512 --ctx-size 65536 -ctk q8_0 -ctv q8_0 --kv-offload --flash-attn on '* ]]
+if Z8_TEST_FREE=12000 bash "$tmp/serve.sh" --fit-cache > "$tmp/unloaded.log" 2>&1; then exit 1; fi
+grep -Fq 'No server with a 36864 MiB cache is loaded on GPU-3' "$tmp/unloaded.log"
 reject 'LOAD_MODE must be' LOAD_MODE=mlock
 reject 'positive SLOTS' SLOTS=0
 reject 'positive SLOTS' SLOTS=18446744073709551616
@@ -75,4 +100,4 @@ reject 'between 0 and 1' MOE_CACHE_CPU_SHARE=1.1
 reject 'positive BATCH_SIZE' BATCH_SIZE=0
 reject 'must not exceed' UBATCH_SIZE=513
 reject 'positive Z8_INFER_THREADS_BATCH' Z8_INFER_THREADS_BATCH=-1
-echo 'llama.cpp launcher tests passed: 128K single-slot default, pinned experts, tuner command, optional slots, KV placement, and context bounds.'
+echo 'llama.cpp launcher tests passed: 128K single-slot default, pinned experts, tuner command, memory plan, cache fit, optional slots, KV placement, and context bounds.'

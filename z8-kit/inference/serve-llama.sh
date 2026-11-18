@@ -19,7 +19,7 @@ batch=${BATCH_SIZE:-512}
 # generation in it and uploads each expert once per microbatch.
 ubatch=${UBATCH_SIZE:-512}
 cpu_share=${MOE_CACHE_CPU_SHARE:-0}
-cache_mib=${MOE_CACHE_MIB:-24576}
+cache_mib=${MOE_CACHE_MIB:-36864}
 # dio and none read the routed experts into pinned DDR4, from where a cache miss uploads at link
 # speed. The Engram is read by row from its mapping in every mode. With mmap the experts would be
 # the PMem pages of the DAX file, which cannot be pinned.
@@ -90,5 +90,33 @@ case ${1:-} in
         shift
         exec python3 "$(dirname -- "$LLAMA_BUILD")/scripts/moe-cache-tune.py" "$@" -- "${server[@]}"
         ;;
-    *) echo 'Usage: serve-llama.sh [--tune [TUNER_OPTIONS]]' >&2; exit 2 ;;
+    --plan)
+        # Simulated allocation from the file headers: for each card the model, context (KV and expert
+        # cache) and compute buffers in MiB. Nothing is loaded.
+        exec "$LLAMA_BUILD/bin/llama-fit-params" -m "$model" --fit off --fit-print on \
+            --load-mode "$load_mode" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1' \
+            --n-gpu-layers all --cpu-moe --moe-cache-mib "$cache_mib" --moe-cache-cpu-share "$cpu_share" \
+            --batch-size "$batch" --ubatch-size "$ubatch" --ctx-size "$((slots * slot_ctx))" \
+            -ctk "$kv_type" -ctv "$kv_type" "$kv_offload" "${attention[@]}"
+        ;;
+    --fit-cache)
+        # Run while the server is loaded and has read a near-full context: the cache is split evenly,
+        # so the card with the least free memory decides how much every card can still take.
+        margin=${VRAM_MARGIN_MIB:-1024}
+        [[ "$margin" =~ ^[0-9]{1,5}$ ]] || { echo 'Expected VRAM_MARGIN_MIB in MiB' >&2; exit 2; }
+        cards=0 room=
+        while IFS=', ' read -r uuid total free; do
+            (( total - free >= cache_mib / 4 )) || {
+                echo "No server with a $cache_mib MiB cache is loaded on $uuid" >&2; exit 1;
+            }
+            printf '%s: %s MiB free\n' "$uuid" "$free"
+            if [[ -z "$room" ]] || (( free < room )); then room=$free; fi
+            cards=$((cards + 1))
+        done < <(nvidia-smi --id="$CUDA_VISIBLE_DEVICES" --query-gpu=uuid,memory.total,memory.free \
+            --format=csv,noheader,nounits)
+        (( cards == 4 )) || { echo 'Expected four cards from nvidia-smi' >&2; exit 1; }
+        printf 'MOE_CACHE_MIB=%s keeps %s MiB free on the fullest card\n' \
+            "$(( (cache_mib + cards * (room - margin)) / 64 * 64 ))" "$margin"
+        ;;
+    *) echo 'Usage: serve-llama.sh [--plan | --fit-cache | --tune [TUNER_OPTIONS]]' >&2; exit 2 ;;
 esac
