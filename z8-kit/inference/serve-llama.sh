@@ -28,11 +28,14 @@ cache_mib=${MOE_CACHE_MIB:-36864}
 #           experts held in the GPU cache or an idle model, to PMem. Uploads are not pinned.
 #   pinned  CUDA pinned memory: fastest uploads, but 123 GiB of DDR4 stay taken while it runs.
 #   pmem    mapped from the DAX file: no DDR4, every upload is copied from PMem by one thread.
+# The kernel promotes a page back from PMem only under a policy that carries the NUMA balancing
+# flag, which Linux accepts for a bind but not for interleaving. Demotion ignores the policy, so
+# tiered binds to the DDR4 nodes; interleaving is kept where the host memory cannot move.
 expert_memory=${EXPERT_MEMORY:-tiered}
 case "$expert_memory" in
-    tiered) placement=(--load-mode dio --no-host) ;;
-    pinned) placement=(--load-mode dio) ;;
-    pmem) placement=(--load-mode mmap) ;;
+    tiered) placement=(--load-mode dio --no-host) policy=(--balancing --membind="$Z8_DRAM_INTERLEAVE") ;;
+    pinned) placement=(--load-mode dio) policy=(--interleave="$Z8_DRAM_INTERLEAVE") ;;
+    pmem) placement=(--load-mode mmap) policy=(--interleave="$Z8_DRAM_INTERLEAVE") ;;
     *) echo 'EXPERT_MEMORY must be tiered, pinned or pmem' >&2; exit 2 ;;
 esac
 kv_type=${KV_TYPE:-f16}
@@ -80,7 +83,7 @@ case ${Z8_NVLINK_P2P:-0} in
     *) echo 'Z8_NVLINK_P2P must be 0 or 1' >&2; exit 2 ;;
 esac
 
-server=(numactl --interleave="$Z8_DRAM_INTERLEAVE" "$LLAMA_BUILD/bin/llama-server"
+server=(numactl "${policy[@]}" "$LLAMA_BUILD/bin/llama-server"
     --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017
     "${placement[@]}" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1'
     --n-gpu-layers all --cpu-moe --fit off --no-mmproj
