@@ -12,13 +12,15 @@ slot_ctx=${SLOT_CTX:-$((131072 / slots))}
 # Non-unified llama.cpp aligns each slot to 256 tokens. Bound the actual allocation.
 slot_ctx=$(((slot_ctx + 255) / 256 * 256))
 (( slot_ctx <= 1048576 / slots )) || { echo 'Total context exceeds the 1017 limit of 1048576 tokens' >&2; exit 2; }
-threads=${Z8_INFER_THREADS:-4}
+threads=${Z8_INFER_THREADS:-12}
 threads_batch=${Z8_INFER_THREADS_BATCH:-$threads}
 batch=${BATCH_SIZE:-512}
 # Microbatches above 32 tokens only read the expert cache, so reading a prompt keeps the experts of
 # generation in it and uploads each expert once per microbatch.
 ubatch=${UBATCH_SIZE:-512}
-cpu_share=${MOE_CACHE_CPU_SHARE:-0}
+# Once the cache is full, the CPU computes this share of the misses from host memory instead of
+# waiting for an upload. Reading the host experts scales with threads up to the memory bandwidth.
+cpu_share=${MOE_CACHE_CPU_SHARE:-0.9}
 cache_mib=${MOE_CACHE_MIB:-36864}
 # Where the 123 GiB of routed experts live on the host. The Engram is read by row from its mapping
 # on the PMem volume in every mode.

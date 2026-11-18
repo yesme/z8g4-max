@@ -77,7 +77,7 @@ DS41_ENGRAM="$DS41_MODEL_DIR/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf"
 )
 ```
 
-**首装目标为单槽 128K。** 四卡 layer split、f16 GPU KV（`SLOTS=1 SLOT_CTX=131072 KV_TYPE=f16 KV_OFFLOAD=1`）。启动器始终显式给 `--ctx-size`，总和计入每槽的 256-token 对齐并设上限 1,048,576。热点专家用 36864 MiB 合计 GPU 缓存，只在 T5/I3 用正式内核默认参数确认六对都走 NVLink且通过数据校验后，才 `export Z8_NVLINK_P2P=1`。未通过时沿用启动器默认关闭。CPU miss share 默认 0，batch/microbatch 默认 512/512，batch 线程沿用推理线程数。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md)
+**首装目标为单槽 128K。** 四卡 layer split、f16 GPU KV（`SLOTS=1 SLOT_CTX=131072 KV_TYPE=f16 KV_OFFLOAD=1`）。启动器始终显式给 `--ctx-size`，总和计入每槽的 256-token 对齐并设上限 1,048,576。热点专家用 36864 MiB 合计 GPU 缓存，只在 T5/I3 用正式内核默认参数确认六对都走 NVLink且通过数据校验后，才 `export Z8_NVLINK_P2P=1`。未通过时沿用启动器默认关闭。CPU miss share 默认 0.9，推理线程默认 12 个，batch/microbatch 默认 512/512，batch 线程沿用推理线程数。默认开启槽内前缀复用，标准 OpenAI 请求即可使用。 [专家缓存参数](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md)
 
 **专家放主机内存，Engram 留在 PMem。** 1017 有 40 层，每层 384 个 routed expert，每个 token 每层选 6 个。IQ2_XXS 这套的专家平均 8.2 MiB、共约 123 GiB，其余权重约 5.7 GiB，Engram 约 103 GiB。每生成一个 token 要用到约 2 GiB 专家权重，显存缓存之外的专家从哪里取决定了速度。Engram 是按行按需读的张量，任何加载模式下都走文件映射，留在 PMem。显存缓存里的专家是副本，被换出的专家要能从主机重新上传，所以主机这边始终要有全部 123 GiB；`EXPERT_MEMORY` 决定这 123 GiB 放在哪。
 
@@ -193,7 +193,7 @@ Niko1221/Strata 的 1017 官方包未列 V100 的 SM70 运行支持。本机用 
 
 ## Xolotl Buster 单用户回退
 
-使用主服务已经下载的 GGUF 和 Engram。直接四卡切层 `10,20,30`，每 stage 24 GiB pinned arena 上限、8K 上下文和一个活动请求。按 [CPU 分核服务](../host/CPU-PLACEMENT.md#启停本地模型) 将预留提高到每路 6 核后，再保存回退启动器。此档供短上下文任务使用。
+使用主服务已经下载的 GGUF 和 Engram。直接四卡切层 `10,20,30`，每 stage 24 GiB pinned arena 上限、8K 上下文和一个活动请求。按 [CPU 分核服务](../host/CPU-PLACEMENT.md#启停本地模型) 沿用默认的每路 6 核，保存回退启动器。此档供短上下文任务使用。
 
 在 CUDA 12.9.1 / GCC 兼容用户空间执行。固定到下面的 commit。把 `--model` 指向主服务的第一个分片，把 `--engram` 显式指向真实的 IQ4_NL Engram GGUF。该版本的 dense loader 识别 upstream 命名，独立 Engram loader 识别相应张量，读取时走 `pread`。`$XOL_TOKENIZER_DIR` 指向 PMem 上 1017 对应的 tokenizer 文件目录，实测时核两个引擎的 token 与模板。使用配方默认 expert 排序。 [Xolotl upstream GGUF 支持](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/docs/xolotl/CHANGELOG.md#upstream-llamacpp-and-unsloth-deepseek-v41-ggufs-82-84-85) · [Engram loader](https://github.com/Indras-Mirror/Xolotl/blob/db25febda3e2869333d72eca6b17296142916a9b/tools/v41/engine/ds41_engram.cpp#L263)
 
@@ -270,10 +270,10 @@ bash host/run-step.sh i6-probe --base http://127.0.0.1:18000/v1 --usage \
 **选定上下文档后，用上游调参脚本定专家缓存和 CPU 份额。** 先停掉正在跑的服务，确认没有构建在跑，在同一组环境变量下执行下面两条；测试时不必先改分核。脚本用启动器的同一条 `llama-server` 命令起六次服务，各生成几千 token，按空闲显存给出缓存上限，打印拟合出的上传速度、CPU 速度和推荐的 `--moe-cache-mib`、`--moe-cache-cpu-share`。
 
 ```bash
-bash "$kit/inference/serve-llama.sh" --tune --out "$PWD/moe-tune-4"
-Z8_INFER_THREADS=12 bash "$kit/inference/serve-llama.sh" --tune --out "$PWD/moe-tune-12"
+bash "$kit/inference/serve-llama.sh" --tune --out "$PWD/moe-tune-12"
+Z8_INFER_THREADS=4 bash "$kit/inference/serve-llama.sh" --tune --out "$PWD/moe-tune-4"
 ```
 
-输出里的 `uploads` 是实测的上传速度：`pinned` 应接近单卡链路速度，Gen3 x8 约 6 GiB/s；`tiered` 和 `pmem` 会低，按上面的表对照。想比较三种模式，各加上 `EXPERT_MEMORY=…` 和不同的 `--out` 再跑一次。把推荐值写成 `MOE_CACHE_MIB` 和 `MOE_CACHE_CPU_SHARE`。专家不在锁页内存时，让 CPU 算一部分未命中往往更快，所以要看 12 线程的结果：它的推荐速度比 4 线程高不到 5% 就保持每路 2 核，否则按[每路 6 核](../host/CPU-PLACEMENT.md)重新生成分核。脚本只测生成，提示词处理另用上面探针的长提示记录 `prompt_ms`。允许覆写 `UBATCH_SIZE`、`BATCH_SIZE` 和 `Z8_INFER_THREADS_BATCH`，改后同样核长提示 TTFT、显存和工具往返。 [上游调优说明](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md#picking-the-arguments)
+输出里的 `uploads` 是实测的上传速度：`pinned` 应接近单卡链路速度，Gen3 x8 约 6 GiB/s；`tiered` 和 `pmem` 会低，按上面的表对照。想比较三种模式，各加上 `EXPERT_MEMORY=…` 和不同的 `--out` 再跑一次。把推荐值写成 `MOE_CACHE_MIB` 和 `MOE_CACHE_CPU_SHARE`。脚本自己会试 0、0.5 和 0.95 三种份额，启动器默认的 0.9 只是起点。默认是每路 6 核、12 线程；4 线程的推荐速度不低于 12 线程的 95% 时，按[每路 2 核](../host/CPU-PLACEMENT.md)重新生成分核，把核还给编译。脚本只测生成，提示词处理另用上面探针的长提示记录 `prompt_ms`。允许覆写 `UBATCH_SIZE`、`BATCH_SIZE` 和 `Z8_INFER_THREADS_BATCH`，改后同样核长提示 TTFT、显存和工具往返。 [上游调优说明](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/docs/moe-cache.md#picking-the-arguments)
 
 选定档位后把 OMP 的 `contextWindow` 与实际每槽一致，按[正式服务启停](../host/CPU-PLACEMENT.md#启停本地模型)保存参数。核启动日志的 `n_ctx_seq` / `n_ctx_slot` 和 API 就绪，再进入 [I7](../host/BURN-IN.md#i7-正式安装后的整机混合负载)。 [llama-server timings / usage](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/README.md#timings-and-context-usage)
