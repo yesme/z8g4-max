@@ -19,7 +19,7 @@
 |---|---|
 | 操作系统 | 从现有 Ventoy 的 Xubuntu 26.04.1 Desktop ISO 导入本地 YAML，直接安装桌面和 md RAID0。FIT 1 GiB ESP、8 GiB `/boot`、24 GiB `Z8TOOLS`、8 GiB `Z8RECOVERY`，其余约 78 GiB 留空。P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
 | 主板与驱动 | 纯 UEFI，Secure Boot、SNC、ASPM 和 SATA 电源管理关，NUMA、HT、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P1000 显示，四张 V100 计算 |
-| 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，默认每路 2 核，运行时 HT 伙伴留空，停服后全部归还 |
+| 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。推理在两路 DDR4 交错，默认每路 6 核，运行时 HT 伙伴留空，停服后全部归还 |
 | 存储 | SATA0–3 各用 24 GiB 写缓存，裸冷 CS 共 32 片、约 50.9 TiB；p5 是 848 GiB 裸索引。SATA4–6 各用 80 GiB 写缓存，组成约 25 TiB RAIDZ1；p9 约 213 GiB special，承载元数据、小块与 ZIL |
 | 构建 | max 热 CS 1,638 GiB 在 P4618，其 26 GiB 索引在 PMem 模型卷；冷分片 checkpoint 在 P4618。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 提供权威 AC/CAS 和唯一调度器，Linux 与 Darwin 由平台属性分流 |
 | 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、36 GiB GPU 专家缓存，全部专家另在主机内存留一份，按显存与工具闭环结果降档 |
@@ -51,7 +51,7 @@ T1–T5 确认二手硬件、实际枚举、起转和四卡 peer，T5 末再确�
 | **I2 · 远程入口** | 板载有线优先，缺网线时用 AX210。设开机自动联网和 DHCP 地址保留，再验 SSH 公钥、tmux 与 xrdp/Xfce。Sunshine 的 P1000 硬件编码放 I3。 [远程入口](z8-kit/remote/README.md) |
 | **I3 · NVIDIA 显卡驱动与复接 V100** | V100 仍断开，在 Xubuntu 装 `nvidia-driver-580`。这是本方案为 P1000 和 V100 选用的 NVIDIA Linux 显卡驱动。重启后用 P1000 验桌面、Sunshine/NVENC 和 SSH，再关机接回 V100，核四卡枚举、NVLink 与快速 CUDA/NCCL。 [驱动安装和锁分支](z8-kit/host/INSTALL.md#安装并锁定-nvidia-显卡驱动) |
 | **I4 · 存储与 PMem** | 接回已慢扫的盘，首次划 D4800X 九分区，建七个 dm-zoned target、32 个冷分片和三盘 RAIDZ1。跑冷库覆写、ZFS scrub、三种缺盘冷启和恢复。按 T3 留下的 namespace UUID 恢复 DAX 模型卷和 kmem。 [存储](z8-kit/storage/README.md) · [PMem](z8-kit/host/PMEM.md) |
-| **I5 · Buildbarn 与 Buck2** | max 按每路预留 2 核安装 CPU slice 和 88 并发 runner 配置，依次启动 AC/CAS、调度器和 Linux worker。接入 mini 及 Mac 的边缘存储与 worker，验证一次 Linux/Darwin 跨平台构建、单测及按需物化。 [CPU 分核安装](z8-kit/host/CPU-PLACEMENT.md#生成并安装) · [Buildbarn](z8-kit/buildbarn/README.md) |
+| **I5 · Buildbarn 与 Buck2** | max 按每路预留 6 核安装 CPU slice 和 72 并发 runner 配置，依次启动 AC/CAS、调度器和 Linux worker。接入 mini 及 Mac 的边缘存储与 worker，验证一次 Linux/Darwin 跨平台构建、单测及按需物化。 [CPU 分核安装](z8-kit/host/CPU-PLACEMENT.md#生成并安装) · [Buildbarn](z8-kit/buildbarn/README.md) |
 | **I6 · 推理与 harness** | 用 llama.cpp v1.0.0、四张 V100 和一套 PMem 上的 1017 权重，验 128K 单槽目标、工具闭环和实际 harness，再保存参数并启动推理服务。OMP、Pi、DSH 可用已有密钥直连 DeepSeek 官方 API。各 CLI 验证账号、模型和工作树。 [推理](z8-kit/inference/README.md) · [服务配置](z8-kit/host/CPU-PLACEMENT.md#启停本地模型) · [CLI](z8-kit/harness/README.md) |
 | **I7 · 正式联调与恢复** | 冷启动检查 SSH、存储链和远程显示。验证本地 DeepSeek 启停时让出和归还 I5 已配置的核心，然后做一次 8 小时的编译、推理和 I/O 混合负载。保存引导、盘表、GUID、驱动/内核版本、服务配置及项目数据的独立副本。 [CPU 分核与启停](z8-kit/host/CPU-PLACEMENT.md) · [整机拷机](z8-kit/host/BURN-IN.md) |
 
@@ -131,12 +131,12 @@ bash host/run-step.sh i4-status
 | App Direct fsdax（2×258 GiB） | 2 MiB dm-stripe，约 508 GiB 块设备容量，XFS DAX，挂 `/srv/pmem-model`。存一套 GGUF、Engram 与 tokenizer，另放 26 GiB 的 Buildbarn 热 CS 索引 |
 | 两路剩余 App Direct | 各自以可迁移 kmem 上线，启用 memmap on memory 和冷页下沉。活跃推理 KV 由引擎分配 |
 
-**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。共享 arena 交错避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进主机内存。默认每路留最后 2 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 96 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
+**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。共享 arena 交错避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进主机内存。默认每路留最后 6 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 80 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
 
 ### 推理上线顺序
 
-1. **部署 llama.cpp v1.0.0。** CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、单槽 128K f16 GPU KV、专家读进主机内存、专家缓存 36864 MiB、ubatch 512，CPU miss share 0。默认启用槽内前缀复用，以真实工具往返、前缀命中 token 和输出验证。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
-2. **显存压力按阶梯降档。** 依次试 q8 KV、24 GiB 专家缓存、q4 KV、64K 和主机 KV。128K 目标仍达不到再评估 1Cat。Xolotl Buster 留作短上下文单用户回退，使用每路 6 核。 [上下文降档](z8-kit/inference/README.md#上下文降档与验收)
+1. **部署 llama.cpp v1.0.0。** CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、单槽 128K f16 GPU KV、专家读进主机内存、专家缓存 36864 MiB、ubatch 512，CPU miss share 0.9，12 个推理线程。默认启用槽内前缀复用，以真实工具往返、前缀命中 token 和输出验证。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
+2. **显存压力按阶梯降档。** 依次试 q8 KV、24 GiB 专家缓存、q4 KV、64K 和主机 KV。128K 目标仍达不到再评估 1Cat。Xolotl Buster 留作短上下文单用户回退，同样使用默认的每路 6 核。 [上下文降档](z8-kit/inference/README.md#上下文降档与验收)
 3. **1Cat 只用于有明确需求的长上下文。** #1277 的 512K 成绩用 4×32 GiB，和本机 4×16 GiB 的预算不同。原版 Strata 的 1017 包未列 SM70，Xolotl 提供 Buster 构建路径。upstream vLLM 1017 公版配方需至少 8×80 GB。 [1Cat 上游实测](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Strata 1017 支持](https://github.com/Niko1221/Strata/blob/main/docs/DEEPSEEK41.md) · [vLLM 1017 配方](https://github.com/vllm-project/vllm/blob/main/recipes/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml)
 
 I6 放行看近满上下文时每卡至少余 1 GiB、20 次连续工具往返、完整 SSE 和零 OOM/Xid。记录首次填充时间和同前缀第二轮首字延迟。双槽是可选项，每槽默认 64K。I7 跑一次正式配置的 8 小时混合负载并记录 p95 TTFT、decode 和构建完成时间。 [推理放行](z8-kit/inference/README.md#i6-推理放行)
@@ -174,7 +174,7 @@ I6 放行看近满上下文时每卡至少余 1 GiB、20 次连续工具往返�
 
 Buildbarn `readCaching` 将首次冷读回填 P4618，重复读直接走热层。上传由 Buildbarn 写冷 CS，D4800X 先吸收下层写入。冷块轮转由 Buildbarn 管，ZFS 回收由 `autotrim` 通知 mapper。 [Buildbarn readCaching 实现](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
-I5 默认启用 max 的 Linux worker，首装 88 并发、512 GiB runner 上限，CPU 由 cpuset 和 slice 权重约束，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。本机 worker 与 scheduler 经 UNIX socket 访问 cache，各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
+I5 默认启用 max 的 Linux worker，首装 72 并发、512 GiB runner 上限，CPU 由 cpuset 和 slice 权重约束，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。本机 worker 与 scheduler 经 UNIX socket 访问 cache，各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
 
 Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 状态独立。P4618 XFS 支持 reflink，本地已有的产物在同一文件系统内可以共享区段。需要共享区段时，对已物化的产物用 `cp --reflink=always` 显式导出，再用 `filefrag -sv` 确认。跨树复用构建结果走 Buildbarn，同一 blob 各次 RPC 下载分别写入各自工作树。 [Git 与 reflink 操作](z8-kit/buildbarn/README.md#git-worktree-与-xfs-reflink) · [Buck2 CAS 下载实现](https://github.com/facebook/buck2/blob/main/app/buck2_execute_impl/src/materializers/deferred/io_handler.rs#L199)
 

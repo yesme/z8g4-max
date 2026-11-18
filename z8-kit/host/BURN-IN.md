@@ -309,7 +309,7 @@ bash host/run-step.sh i6-probe --usage --repeats 1 --tools
 
 ## I7. 正式安装后的整机混合负载
 
-按 [CPU 分核手册](CPU-PLACEMENT.md) 从每路 2 核起步，核启停时普通任务 CPU 集合的变化。随后以这套正式配置跑一次 8 小时混合负载，涵盖 Buck2 上传与回读、1017 的实际工具请求、SSH/RDP。主方案覆盖冷读和热读，全 XFS 回退覆盖其本地 CAS 写入与回读。默认单槽串行使用 harness。明确选用双槽且已通过 I6 时，才用两个并发 harness。全程要求无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。出现错误回到相关硬件阶段复现。
+按 [CPU 分核手册](CPU-PLACEMENT.md) 从每路 6 核起步，核启停时普通任务 CPU 集合的变化。随后以这套正式配置跑一次 8 小时混合负载，涵盖 Buck2 上传与回读、1017 的实际工具请求、SSH/RDP。主方案覆盖冷读和热读，全 XFS 回退覆盖其本地 CAS 写入与回读。默认单槽串行使用 harness。明确选用双槽且已通过 I6 时，才用两个并发 harness。全程要求无新增 Xid、AER、MCE、不可解释的 CE、SMART/NVMe 介质错误、ZFS 校验错误或 OOM。出现错误回到相关硬件阶段复现。
 
 ```bash
 # 分开终端运行，日志落 P4618。先确认 log 与测试进程都能在当前用户运行。

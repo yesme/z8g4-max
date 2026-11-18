@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as temp:
     for count in (2, 4, 6, 8):
         output = root / f"generated-{count}"
         args = [str(script), str(output)]
-        if count != 2:
+        if count != 6:
             args += ["--infer-per-socket", str(count)]
         with (
             patch.object(layout, "read_cores", return_value=cores),
@@ -59,7 +59,7 @@ with tempfile.TemporaryDirectory() as temp:
 
 
     # Exercise the same reserve/restore entry points used by the service.
-    defaults = root / "generated-2/z8-infer-cpu.env"
+    defaults = root / "generated-6/z8-infer-cpu.env"
     mode = root / "cpu-mode.sh"
     source = Path("z8-kit/host/cpu-mode.sh").read_text(encoding="utf-8")
     mode.write_text(source.replace("/etc/z8-infer-cpu.env", str(defaults)), encoding="utf-8")
@@ -72,7 +72,7 @@ with tempfile.TemporaryDirectory() as temp:
     masks = dict(line.split("=", 1) for line in defaults.read_text().splitlines())
     for state, key in ((running, "Z8_BUILD_CPUS"), (stopped, "Z8_IDLE_CPUS")):
         assert [line.rsplit("=", 1)[-1] for line in state.splitlines()] == [masks[key]] * 4
-    assert len(layout.parse_cpu_list(masks["Z8_BUILD_CPUS"])) == 96
+    assert len(layout.parse_cpu_list(masks["Z8_BUILD_CPUS"])) == 80
     assert len(layout.parse_cpu_list(masks["Z8_IDLE_CPUS"])) == 104
 
     (cpus / "cpu52/topology/thread_siblings_list").write_text("1,52\n", encoding="utf-8")
@@ -83,4 +83,4 @@ with tempfile.TemporaryDirectory() as temp:
     else:
         raise AssertionError("accepted inconsistent siblings")
 
-print("CPU layout tests passed: dual-socket topology, 2/4/6/8-core masks, and 96/104 lifecycle restoration.")
+print("CPU layout tests passed: dual-socket topology, 2/4/6/8-core masks, and 80/104 lifecycle restoration.")

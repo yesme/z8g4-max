@@ -47,7 +47,7 @@ def cpu_list(cpus):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="new directory for the preview files")
-    parser.add_argument("--infer-per-socket", type=int, default=2)
+    parser.add_argument("--infer-per-socket", type=int, default=6)
     args = parser.parse_args()
 
     try:
