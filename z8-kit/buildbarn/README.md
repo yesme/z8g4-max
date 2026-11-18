@@ -17,6 +17,28 @@ P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS�
 
 三个 new block 按 4:2:1 的分配次数推进，分散同一批对象的老化。old 块查到的对象会复制保活，查缺走冷层。每块恰好 70 个区，轮转区边界不跨块。写到一半、空闲回收或随机覆盖仍可能触发 dm-zoned 合并。 [Buildbarn 分配权重](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L263-L273)
 
+### 冷库只写三个 new 块
+
+**max 的缓存跑带一处补丁的 bb-storage，每片任何时候都只写 3 个 new 块，每盘 24 个追加位置。** 上游的 CS 在 current 块不足时把缺的全部开成可写块，每片最多 68 个，八片同盘是 544 个。dm-zoned 上每个追加位置占一个没写满的缓存区，每盘只有 92 个可用。上游这样做的三种情况：
+
+| 情况 | 上游每片的可写块 | 补丁后 |
+|---|---:|---:|
+| 空库首次填库，持续到写满前 65 个块 | 68 | 3 |
+| 填库中途重启，例如已有 30 个块 | 再开 38 个，共 41 | 3 |
+| 第 51 个块校验失败，释放 22 个 old 和 29 个 current | 再开 29 个，共 32 | 3 |
+
+补丁后 current 块随 new 块写满逐个增加。库填满后两种策略给出相同的判断，轮转方式不变。 [上游的增长策略](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_list_growth_policy.go#L11-L38) · [上游的理由](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L86-L92) · [补丁](storage-sequential-fill.patch) · [取舍记录](../../discussion/cold-cas-sequential-fill.md)
+
+代价是首批对象不再均匀撒进 65 个 current 块。同一时期上传的对象落在相邻的块里，一起变成 old，被查到时集中复制保活，每次复制是一次 HDD 随机读。总的复制量不变。库填满后上游也只写 3 个 new 块，所以多出来的只是首次填库那一批。
+
+镜像 `z8/bb-storage:ca3d8b4-sequential-fill` 由 `Dockerfile.storage` 在本机构建，只有 `compose.tiered.yaml` 使用。全 XFS 回退和边缘节点没有 dm-zoned，沿用上游镜像。构建步骤：
+
+1. 取固定提交 `ca3d8b49a5`。
+2. 套用上游 Bazel 构建给三个 Go 依赖打的补丁，补丁文件取自同一提交的 `patches/`。直接 `go build` 缺了 bytestream 那个会编译失败。 [上游的依赖补丁清单](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/MODULE.bazel#L99-L128)
+3. 套用 `storage-sequential-fill.patch`，运行 `storage-sequential-fill_test.go`，通过后才编译。测试用冷分片的 22/65/3 几何核对上表的每一行，并确认上游策略仍是表中的行为。
+
+升级 bb-storage 时改 `Dockerfile.storage` 的提交与基础镜像、`compose.tiered.yaml` 的标签。上游 `patches/` 目录有增减时，构建会在套依赖补丁之前停下，对照 `MODULE.bazel` 的 `module_override` 重新核对三行 `dep`。`TestUpstreamFirstFillOpensEveryCurrentBlock` 失败说明上游改了首次填库的行为，先重新评估补丁是否还需要。
+
 P4618 按热 CS **1,638 GiB**、CMS 64 GiB、AC 216 GiB、AC 与 CMS 两份索引合计 8 GiB、worker 输入缓存 128 GiB 预算，合计 **2,054 GiB**。标称 6.4 TB 约余 **3.81 TiB** 给系统、工作树和 `buck-out`，另扣 XFS 元数据。热 CS 的 26 GiB 索引在 PMem 模型卷。边缘的热 CS 保持 256 GiB 配 4 GiB 索引；全 XFS 回退保持 64 GiB 配 1 GiB 索引。
 
 排查过早淘汰时在 max 看 `TooManyAttempts` 和 `put_too_many_iterations_total`。CS 标签汇总冷热层，编码后独立 chunk 大小和 blob 上报的未压缩大小分别计量。 [计数定义](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/lossymap/hash_map.go)

@@ -275,7 +275,7 @@ for path in /etc/fstab /etc/mdadm/mdadm.conf /etc/default/grub \
     /etc/z8-storage/{hybrid.tsv,storage.env,pmem-model.env,pmem-kmem.env,recovery-notes.txt,model-manifest.txt,cold-layout.json} \
     /etc/systemd/system/{z8-*.service,z8-*.timer,z8*.slice,data-other.mount} \
     /etc/systemd/system/{z8-*.service,z8*.slice,data-other.mount}.d/*.conf \
-    /opt/z8-kit/buildbarn/{*.jsonnet,disk.libsonnet,compose*.yaml,Dockerfile.scheduler,scheduler-command-platform.patch,buck2-shared-worker.buckconfig}
+    /opt/z8-kit/buildbarn/{*.jsonnet,disk.libsonnet,compose*.yaml,Dockerfile.scheduler,scheduler-command-platform.patch,Dockerfile.storage,storage-sequential-fill.patch,storage-sequential-fill_test.go,buck2-shared-worker.buckconfig}
 do
     if [[ "$path" == /opt/z8-kit/buildbarn/* ]]; then
         if read_user_file "$path" "$work/deployment-config"; then

@@ -2,6 +2,7 @@
 """Exercise the pinned cache on disposable bare devices or probe I5 degradation."""
 
 import argparse
+from collections import Counter
 from contextlib import ExitStack
 from hashlib import sha256
 import json
@@ -183,15 +184,28 @@ def lab():
             else:
                 raise RuntimeError("Disposable cache did not start.")
 
+            def index_records():
+                # Blocks from last, blob offset and blob length of every record written so far.
+                with open(devices[1], "rb", buffering=0) as index:
+                    records = index.read(8 << 20)
+                return {struct.unpack_from("<H36xQQ", records, off + 4)
+                        for off in range(0, len(records) - 65, 66)
+                        if records[off + 58:off + 66] != bytes(8)}
+
+            # An empty shard takes its first seven objects in three new blocks, 4:2:1.
+            # The unpatched image puts all seven in the first of its 68 writable blocks.
+            update(port, [f"z8 first fill object {i}".encode() * 9 for i in range(7)])
+            first_fill = index_records()
+            spread = sorted(Counter(block for block, _, _ in first_fill).values())
+            assert spread == [1, 2, 4], f"First seven cold objects were spread {spread} over the blocks."
+
+            # The eighth object starts the next round in the oldest new block, at the start of the device.
             blob = b"z8 isolated corrupt object test" * 73
             update(port, [blob])
-            with open(devices[1], "rb", buffering=0) as index:
-                records = index.read(8 << 20)
-            locations = [struct.unpack_from("<QQ", records, off + 42)
-                         for off in range(0, len(records) - 65, 66)
-                         if records[off + 58:off + 66] != bytes(8)]
+            locations = index_records() - first_fill
             assert len(locations) == 1, locations
-            offset, length = locations[0]
+            block, offset, length = next(iter(locations))
+            assert block == 2, locations
             assert 0 < length <= (32 << 20) - offset
             with open(devices[0], "r+b", buffering=0) as device:
                 assert os.pwrite(device.fileno(), bytes(length), offset) == length
@@ -202,7 +216,8 @@ def lab():
             read(port, blob, 0)
             logs = subprocess.run(["docker", "logs", name], text=True, capture_output=True, check=True)
             assert "blocks due to a data integrity error" in logs.stdout + logs.stderr
-            print(f"PASS: spoiled cold blob at {offset}+{length}, returned NotFound, refilled and read back.")
+            print(f"PASS: first fill used three blocks, spoiled cold blob at {offset}+{length} "
+                  "returned NotFound, was refilled and read back.")
         except (AssertionError, OSError, RuntimeError, subprocess.CalledProcessError):
             subprocess.run(["docker", "logs", name], check=False)
             raise

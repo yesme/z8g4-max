@@ -1,0 +1,53 @@
+diff --git a/pkg/blobstore/configuration/cs_blob_access_creator.go b/pkg/blobstore/configuration/cs_blob_access_creator.go
+index 14d27f7..3f0e1be 100644
+--- a/pkg/blobstore/configuration/cs_blob_access_creator.go
++++ b/pkg/blobstore/configuration/cs_blob_access_creator.go
+@@ -67,7 +67,7 @@ func (csBlobAccessCreator) GetBinaryCoder() coder.Coder[*chunk.Chunk, []byte] {
+ }
+ 
+ func (csBlobAccessCreator) NewBlockListGrowthPolicy(currentBlocks, newBlocks int) (local.BlockListGrowthPolicy, error) {
+-	return local.NewImmutableBlockListGrowthPolicy(currentBlocks, newBlocks), nil
++	return local.NewSequentialBlockListGrowthPolicy(currentBlocks, newBlocks), nil
+ }
+ 
+ func (bac *csBlobAccessCreator) NewHierarchicalInstanceNamesLocalBlobAccess(keyLocationMap local.KeyLocationMap, blockReferenceResolver local.BlockReferenceResolver, locationBlobMap local.LocationBlobMap, globalLock *sync.RWMutex, capabilitiesProvider capabilities.Provider) (blobstore.BlobAccess[*chunk.Chunk], error) {
+diff --git a/pkg/blobstore/local/block_list_growth_policy.go b/pkg/blobstore/local/block_list_growth_policy.go
+index f7ace14..1368ca4 100644
+--- a/pkg/blobstore/local/block_list_growth_policy.go
++++ b/pkg/blobstore/local/block_list_growth_policy.go
+@@ -62,3 +62,35 @@ func (mutableBlockListGrowthPolicy) ShouldGrowNewBlocks(currentBlocks, newBlocks
+ func (gp mutableBlockListGrowthPolicy) ShouldGrowCurrentBlocks(currentBlocks int) bool {
+ 	return currentBlocks < gp.desiredCurrentBlocks
+ }
++
++type sequentialBlockListGrowthPolicy struct {
++	desiredCurrentBlocks int
++	desiredNewBlocks     int
++}
++
++// NewSequentialBlockListGrowthPolicy creates a BlockListGrowthPolicy
++// for immutable objects that never writes to more than the configured
++// number of "new" blocks.
++//
++// NewImmutableBlockListGrowthPolicy opens all "current" blocks for
++// writing while the store has fewer of them than configured. On
++// host-managed SMR media behind dm-zoned every block that is written
++// to keeps a partially filled zone in the cache device, so a store
++// with many "current" blocks thrashes the cache until the first fill
++// completes. This policy fills an empty store through the "new" blocks
++// only, the same way a full store is written. "Current" blocks are
++// gained one at a time as "new" blocks fill up.
++func NewSequentialBlockListGrowthPolicy(currentBlocks, newBlocks int) BlockListGrowthPolicy {
++	return sequentialBlockListGrowthPolicy{
++		desiredCurrentBlocks: currentBlocks,
++		desiredNewBlocks:     newBlocks,
++	}
++}
++
++func (gp sequentialBlockListGrowthPolicy) ShouldGrowNewBlocks(currentBlocks, newBlocks int) bool {
++	return newBlocks < gp.desiredNewBlocks
++}
++
++func (gp sequentialBlockListGrowthPolicy) ShouldGrowCurrentBlocks(currentBlocks int) bool {
++	return currentBlocks < gp.desiredCurrentBlocks
++}

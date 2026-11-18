@@ -146,6 +146,14 @@ mkdir -p ~/z8-burnin
 bash host/run-step.sh i4-cold-aging "$HOME/z8-burnin"
 ```
 
+再测 Buildbarn 实际的写入形态。带补丁的 bb-storage 每片只写 3 个 new 块，每盘 8 片共 24 个追加位置，按 4:2:1 推进。下面的命令在 32 个分片的第 8–12 块上做两段缓冲写，每段每盘 224 GiB：先逐片顺序写作基线，再 24 路同时追加。这段范围避开了上一步覆写过的 128 GiB。每段开始前等缓存区回收完，测试前后各对这段范围发一次 discard，把区交还成未写状态，重跑不受上次残留影响。 [dm-zoned 的 discard 处理](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L357-L390)
+
+```bash
+bash host/run-step.sh i4-cold-interleaved "$HOME/z8-burnin"
+```
+
+结果在日志目录的 `interleaved-summary.tsv`，每盘一行：两段的吞吐、比值和各自采到的最低空闲缓存区。门槛是每盘交错吞吐不低于同盘顺序写的 70%。这个比例是起点，没有实测依据，首次跑完按结果用 `Z8_INTERLEAVED_MIN_RATIO` 调整并回写到这里。两段都写满过缓存，测的是回收跟得上的持续吞吐。 [bb-storage 的补丁](../buildbarn/README.md#冷库只写三个-new-块)
+
 通过后清零索引、建立空 checkpoint、启用已初始化分片。`reset all` 只用于首次或全量重建，整张索引分区约 848 GiB 会被清零，终端逐个报告。未达到门槛时先按盘看 `watermark.tsv` 与 NVMe 温控，必要时走[全 XFS 回退](../buildbarn/README.md#全-xfs-回退)。该回退和 `/data/other` 可以同时运行。
 
 ```bash
@@ -251,9 +259,12 @@ sudo install -m 0644 storage/systemd/{z8-buildbarn.service,z8-buildbarn-worker.s
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/z8-buildbarn{,-worker}.service
 cd /opt/z8-kit/buildbarn
-sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml build scheduler
-sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml pull cache runner-installer runner worker
+sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml build cache scheduler
+sudo docker compose -f compose.tiered.yaml -f compose.worker.yaml pull runner-installer runner worker
+sudo docker compose -f compose.yaml pull cache
 ```
+
+`build cache` 在本机构建[带顺序填库补丁的 bb-storage](../buildbarn/README.md#冷库只写三个-new-块)，构建中先跑补丁的验收测试，需要几分钟。最后一行取上游镜像，留给全 XFS 回退。
 
 主方案在 P4618 上创建热存储目录，在 PMem 模型卷上创建热 CS 索引目录并设 2 MiB extent 提示。固定镜像默认 UID 0，使用 rootful Docker 默认用户映射。Compose 由 `z8-cold.service` 生成 `devices` 列表及容器可见的固定路径，启动前守卫核对所有可用切片的表和大小、活动分片的 checkpoint、热层 XFS 路径、热索引目录的 DAX 挂载与 extent 提示，以及既有文件几何。模型卷暂不可用时按 [热 CS 索引的位置](../buildbarn/README.md#热-cs-索引的位置)把索引放回 P4618。
 
@@ -281,7 +292,7 @@ ss -ltn 'sport = :8980'
 
 ### I5.3 损坏对象、24 分片降级和定时扫描
 
-先从仓库根运行隔离演练。脚本用已拉取的固定版 bb-storage 和两个临时 loop 设备，写坏单个测试对象，核 `NotFound`、重传读回与淘汰日志。全 XFS 回退跳过本节。
+先从仓库根运行隔离演练。脚本用 I5.1 构建的 bb-storage 镜像和两个临时 loop 设备。它先核空分片的前七个对象按 4:2:1 落在三个块里，确认运行的是带补丁的镜像；上游镜像会把七个都写进同一个块。再写坏单个测试对象，核 `NotFound`、重传读回与淘汰日志。全 XFS 回退跳过本节。
 
 ```bash
 sudo python3 -B tests/cold-cas-smoke.py

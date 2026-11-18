@@ -10,6 +10,8 @@ python3 -B tests/cold-layout.py
 python3 -B tests/cold-scan.py
 python3 -B tests/cold-health.py
 python3 -B tests/cold-cas-smoke.py --help >/dev/null
+python3 -B tests/cold-sequential-fill.py
+bash tests/cas-aging.sh
 bash tests/buildbarn-jsonnet.sh
 bash tests/pmem.sh
 bash tests/serve-llama.sh
