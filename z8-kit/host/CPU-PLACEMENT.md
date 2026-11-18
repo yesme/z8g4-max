@@ -21,7 +21,7 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 
 `AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。默认推理运行时普通任务共享 80 个逻辑 CPU。runner 配 72 个活动 action，不设 CPU 时间配额：配额用尽时整个 runner cgroup 在该周期剩余时间停转，多线程的链接和编译最先受影响。系统、存储和协调进程靠同级 slice 的权重取得份额。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
 
-推理 slice 与 service 都设 `MemoryLow=90G`，等于不在显存里的专家加引擎自己的工作内存。专家共 123 GiB，默认 36 GiB 的显存缓存里那部分在主机上的副本不会被读，剩下约 87 GiB 才需要留在 DDR4，另留约 3 GiB 给引擎。用 `--fit-cache` 调大缓存后按“123 GiB 减缓存加 3 GiB”重算，用 `sudo systemctl set-property z8infer.slice z8-infer.service MemoryLow=…` 改。`MemoryLow` 按服务的内存总量计，不分 DDR4 和 PMem，也不是下限：占用约 126 GiB、保护 90G 时，内核对这个服务的回收力度降到约 29%，被挪走的先是最久没读的页，也就是显存里已有的那些专家的副本。llama.cpp 的专家默认是普通内存，按交错策略先落在两路 DDR4。 [按比例减轻回收](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L2458-L2520)`EXPERT_MEMORY=pinned` 时这 123 GiB 是 CUDA 锁页内存，不回收也不下沉，其余任务每路能用的 DDR4 约 30 GiB。 [三种放法](../inference/README.md#llamacpp-v100-主服务) 两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
+推理 slice 与 service 都设 `MemoryLow=90G`，等于不在显存里的专家加引擎自己的工作内存。专家共 123 GiB，默认 36 GiB 的显存缓存里那部分在主机上的副本不会被读，剩下约 87 GiB 才需要留在 DDR4，另留约 3 GiB 给引擎。这是给常驻服务挑的起点，之后调显存缓存时不跟着逐 GiB 重算；要改时对 `z8infer.slice` 和 `z8-infer.service` 各执行一次 `sudo systemctl set-property 单元名 MemoryLow=…`。`MemoryLow` 按服务的内存总量计，不分 DDR4 和 PMem，也不是下限：占用约 126 GiB、保护 90G 时，内核对这个服务的回收力度降到约 29%，被挪走的先是最久没读的页，也就是显存里已有的那些专家的副本。llama.cpp 的专家默认是普通内存，绑定在两路 DDR4 上分配，之后可以下沉，也可以被提升回来。 [按比例减轻回收](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L2458-L2520)`EXPERT_MEMORY=pinned` 时这 123 GiB 是 CUDA 锁页内存，不回收也不下沉，其余任务每路能用的 DDR4 约 30 GiB。 [三种放法](../inference/README.md#llamacpp-v100-主服务) 两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
 
 如果 I7 的多个采样窗口里 `allocstall_normal` 持续增长，同时可见 `Normal` 水位紧张、PSI 或推理尾延迟抬升，在 `/etc/sysctl.d/90-z8-tiering.conf` 加入 `vm.watermark_scale_factor = 100`，执行 `sudo sysctl -p /etc/sysctl.d/90-z8-tiering.conf` 后重复同一负载。只有直接回收或尾延迟改善且构建吞吐可接受时保留该值。无改善时从配置移除该项并执行 `sudo sysctl -w vm.watermark_scale_factor=10` 恢复运行值。服务的 `OOMScoreAdjust=-900` 降低被选作 OOM victim 的优先级。 [Linux cgroup v2 memory.low](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) · [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable) · [Linux 7.0 水位与直接回收计数](https://github.com/torvalds/linux/blob/v7.0/Documentation/admin-guide/sysctl/vm.rst#L1096-L1111)
 
@@ -32,7 +32,7 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 | 工作负载 | 起步配置 | 怎样看分配结果 |
 |---|---|---|
 | 系统、SSH、Xfce、harness 与 Buck2 | 使用两路对称 CPU 集合，Linux 默认本地优先。冷页可下沉到对应 PMem 慢节点 | 查实际构建或服务 cgroup 的 `memory.numa_stat` |
-| llama.cpp 或 Xolotl 四卡 | 固定在两个 DDR4 节点之间交错，按 T3 填 `Z8_DRAM_INTERLEAVE`。模型文件统一在 PMem 条带 | 查实际进程的 `numastat -p PID`、`numa_maps` 和 `VmPin/VmLck`，与节点预算核对 |
+| llama.cpp 或 Xolotl 四卡 | 按 T3 填 `Z8_DRAM_INTERLEAVE`。llama.cpp 默认的 `tiered` 用 `--balancing --membind` 绑定这两个 DDR4 节点，被挤到 PMem 的页才能提升回来；锁页的 `pinned`、`pmem` 和 Xolotl 在两个节点之间交错。模型文件统一在 PMem 条带 | 查实际进程的 `numastat -p PID`、`numa_maps` 和 `VmPin/VmLck`，与节点预算核对 |
 
 顶层 slice 的 `AllowedMemoryNodes` 维持默认，构建页可正常回退和下沉。进程级交错申请的页按照应用和驱动实际分配行为核对。只有看到持续的单节点 DRAM 压力或 UPI 饱和时，才检查该 worker 的 first-touch 或 staging。 [Linux 7.0 下沉掩码](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L978)
 
@@ -180,6 +180,6 @@ cat /proc/pressure/memory
 bash host/run-step.sh i5-worker tiered
 ```
 
-I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU。停止推理后应还到 104 个。
+I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。另跑一轮“模型预热、并行编译、回到同一段工具对话”，在三个时点各执行一次 `sudo bash host/pmem-numa-report.sh "$(systemctl show -p MainPID --value z8-infer.service)"`，按推理 cgroup 的 `memory.numa_stat` 里 `anon` 一项记两路 DDR4 和两个 kmem 节点的字节数：编译期间 DDR4 上的专家页应让出，回到对话后应回升，同时记同一工具前缀的首字延迟。装载后两路 DDR4 的偏斜也在第一个时点读出。运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU。停止推理后应还到 104 个。
 
 平时停 `z8-infer.service` 即归还推理主线程和 HT 伙伴。若日志报告恢复失败，停服务后手动执行 `sudo /usr/local/libexec/z8-cpu-mode restore` 再核 CPU mask。完全撤销时，先停推理以及已启用的 worker，删除本节安装的 slice、服务与专用 drop-in，执行 `sudo systemctl daemon-reload` 后重启主机。普通任务恢复使用 104 个逻辑 CPU，已启用的 Buildbarn worker 按原 I5 配置启动。

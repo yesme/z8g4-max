@@ -31,18 +31,19 @@ export LLAMA_BUILD="$tmp/build" DS41_GGUF="$tmp/model/model.gguf"
 export CUDA_VISIBLE_DEVICES=GPU-0,GPU-1,GPU-2,GPU-3 Z8_DRAM_INTERLEAVE=0,1
 
 default=$(GGML_CUDA_P2P=1 bash "$tmp/serve.sh")
-[[ "$default" == 'p2p=unset '* ]]
+[[ "$default" == "p2p=unset --balancing --membind=0,1 $tmp/build/bin/llama-server "* ]]
 [[ "$default" == *' --cache-prompt '* && "$default" == *' --parallel 1 --ctx-size 131072 '* ]]
 [[ "$default" == *' --threads 12 --threads-batch 12 '* && "$default" == *' -ctk f16 -ctv f16 --kv-offload '* ]]
 [[ "$default" != *' --flash-attn '* ]]
 [[ "$default" == *' --moe-cache-mib 36864 --moe-cache-cpu-share 0.9 '* ]]
 [[ "$default" == *' --batch-size 512 --ubatch-size 512 '* && "$default" == *' --load-mode dio --no-host --lazy-mode on '* ]]
-[[ $(EXPERT_MEMORY=pinned bash "$tmp/serve.sh") == *' --load-mode dio --lazy-mode on '* ]]
-[[ $(EXPERT_MEMORY=pmem bash "$tmp/serve.sh") == *' --load-mode mmap --lazy-mode on '* ]]
+# Only the movable placement needs promotion; the other two keep interleaving.
+[[ $(EXPERT_MEMORY=pinned bash "$tmp/serve.sh") == "p2p=unset --interleave=0,1 $tmp/build/bin/llama-server "*' --load-mode dio --lazy-mode on '* ]]
+[[ $(EXPERT_MEMORY=pmem bash "$tmp/serve.sh") == "p2p=unset --interleave=0,1 $tmp/build/bin/llama-server "*' --load-mode mmap --lazy-mode on '* ]]
 
 # The tuner receives the unchanged server command after its own options.
 tuner=$(Z8_INFER_THREADS=4 bash "$tmp/serve.sh" --tune --max-mib 16384)
-[[ "$tuner" == "tuner $tmp/scripts/moe-cache-tune.py --max-mib 16384 -- numactl --interleave=0,1 $tmp/build/bin/llama-server "* ]]
+[[ "$tuner" == "tuner $tmp/scripts/moe-cache-tune.py --max-mib 16384 -- numactl --balancing --membind=0,1 $tmp/build/bin/llama-server "* ]]
 [[ "$tuner" == *' --threads 4 --threads-batch 4 '* && "$tuner" == *' --load-mode dio --no-host '* ]]
 
 tuned=$(MOE_CACHE_CPU_SHARE=0.25 BATCH_SIZE=1024 UBATCH_SIZE=256 Z8_INFER_THREADS_BATCH=8 bash "$tmp/serve.sh")
