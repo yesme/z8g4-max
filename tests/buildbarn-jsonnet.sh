@@ -43,7 +43,8 @@ jq -e '
           .blocksOnBlockDevice.source == {devicePath:("/dev/z8-cold-" + $name)}
           and .keyLocationMap.onBlockDevice == {devicePath:("/dev/z8-index-" + $name)}
           and .persistent.stateDirectoryPath == ("/store/cold/" + $name + "/persistent_state")
-          and .oldBlocks == 22 and .currentBlocks == 65 and .newBlocks == 3
+          and .oldBlocks == 14 + 2 * ($name | split("-")[1] | tonumber)
+          and .oldBlocks + .currentBlocks == 87 and .newBlocks == 3
           and .blocksOnBlockDevice.spareBlocks == 3))))
 ' "$tmp/config/tiered-cache.rendered.json" >/dev/null
 # Same-host services use the cache socket; clients and edge tunnels keep TCP.

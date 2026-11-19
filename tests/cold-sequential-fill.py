@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Check the patched bb-storage image wiring and the I4 interleaved-append plan against the cold shard geometry."""
+"""Check the patched bb-storage image, the staggered old blocks and the I4 interleaved-append plan against the cold shards."""
 
 from collections import defaultdict
+import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = ROOT / "z8-kit/buildbarn"
@@ -12,22 +15,52 @@ ZONE = 256 << 20
 GIB = 1 << 30
 
 
+def cold_shards():
+    """Render the tiered cache for all 32 shards and return their old, current, new and spare block counts."""
+    cold = (ROOT / "z8-kit/storage/z8-cold").read_text()
+    shards_per_disk = int(re.search(r"SHARDS_PER_DISK = (\d+)", cold).group(1))
+    names = [f"sata{disk}-{shard}" for disk in range(4) for shard in range(shards_per_disk)]
+    with tempfile.TemporaryDirectory() as tmp:
+        config = Path(tmp) / "config"
+        config.mkdir()
+        for source in ("tiered-cache.jsonnet", "cache.jsonnet", "disk.libsonnet"):
+            shutil.copy(BASE / source, config)
+        (Path(tmp) / "cold-layout.json").write_text(json.dumps({"active": names}))
+        rendered = json.loads(subprocess.check_output(["jsonnet", config / "tiered-cache.jsonnet"]))
+    shards = rendered["contentAddressableStorageServer"]["contentAddressableStorage"]["chunkStorage"][
+        "readCaching"]["slow"]["sharding"]["shards"]
+    assert list(shards) == names
+    return {name: (local["oldBlocks"], local["currentBlocks"], local["newBlocks"],
+                   local["blocksOnBlockDevice"]["spareBlocks"])
+            for name, local in ((name, shard["backend"]["local"]) for name, shard in shards.items())}
+
+
 def cold_geometry():
-    """Return blocks old/current/new/spare of a cold shard and the size of a shard and a block."""
-    jsonnet = (BASE / "tiered-cache.jsonnet").read_text()
-    new, old, current = map(int, re.search(
-        r"disk\('/store/cold/' \+ name,[^)]*?,\s*(\d+), chunking, (\d+), (\d+),", jsonnet, re.S).groups())
-    spare = int(re.search(r"spareBlocks: (\d+)", (BASE / "disk.libsonnet").read_text()).group(1))
+    """Return the new block count, shards per disk, and the size of a shard and of a block."""
+    shards = cold_shards()
     cold = (ROOT / "z8-kit/storage/z8-cold").read_text()
     zones, shards_per_disk = (int(re.search(pattern, cold).group(1)) for pattern in (
         r"DATA_BYTES = (\d+) \* 256 \* 1024\*\*2", r"SHARDS_PER_DISK = (\d+)"))
-    blocks = old + current + new + spare
+    # Every shard has the same number of blocks, so blocks and append positions are the same everywhere.
+    assert {old + current for old, current, _, _ in shards.values()} == {87}
+    assert {(new, spare) for _, _, new, spare in shards.values()} == {(3, 3)}
+    blocks = 87 + 3 + 3
     assert zones % blocks == 0, "A block must be a whole number of zones."
-    return old, current, new, shards_per_disk, zones * ZONE, zones // blocks * ZONE
+    return 3, shards_per_disk, zones * ZONE, zones // blocks * ZONE
+
+
+def staggered_old():
+    shards = cold_shards()
+    for disk in range(4):
+        splits = [shards[f"sata{disk}-{shard}"][:2] for shard in range(8)]
+        # The eight shards of a disk turn the same batch old at eight different times, two rotations apart.
+        assert [current for _, current in splits] == [73, 71, 69, 67, 65, 63, 61, 59], splits
+        # Upstream wants current to be two to three times old, and old not too small.
+        assert all(old >= 14 and current >= 2 * old for old, current in splits), splits
 
 
 def image():
-    old, current, new, _, _, _ = cold_geometry()
+    shards = cold_shards()
     compose = (BASE / "compose.tiered.yaml").read_text()
     tag = re.search(r"^    image: (\S+)$", compose, re.M).group(1)
     commit = re.fullmatch(r"z8/bb-storage:([0-9a-f]{7})-sequential-fill", tag).group(1)
@@ -54,12 +87,16 @@ def image():
 
     test = (BASE / "storage-sequential-fill_test.go").read_text()
     constants = dict(re.findall(r"^\t(oldBlocks|currentBlocks|newBlocks)\s+= (\d+)$", test, re.M))
-    assert {name: int(value) for name, value in constants.items()} == {
-        "oldBlocks": old, "currentBlocks": current, "newBlocks": new}
+    # The acceptance test runs the geometry of the middle shard of every disk.
+    tested = {name: int(value) for name, value in constants.items()}
+    assert (tested["oldBlocks"], tested["currentBlocks"], tested["newBlocks"], 3) == shards["sata0-4"]
+    # It also runs every split that the configuration gives to a shard.
+    staggered = re.search(r"^var staggeredOldBlocks = \[\]int\{([\d, ]+)\}$", test, re.M).group(1)
+    assert {int(value) for value in staggered.split(",")} == {old for old, _, _, _ in shards.values()}
 
 
 def interleaved_plan():
-    _, _, new, shards_per_disk, shard_bytes, block = cold_geometry()
+    new, shards_per_disk, shard_bytes, block = cold_geometry()
     plan = subprocess.check_output(["bash", ROOT / "z8-kit/storage/cas-aging.sh", "plan"], text=True)
     jobs = defaultdict(list)
     for line in plan.splitlines():
@@ -96,5 +133,6 @@ def interleaved_plan():
 
 if __name__ == "__main__":
     image()
+    staggered_old()
     interleaved_plan()
     print("Cold sequential-fill tests passed.")

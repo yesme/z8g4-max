@@ -5,6 +5,7 @@
 package z8_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/buildbarn/bb-storage/pkg/blobstore/configuration"
@@ -12,8 +13,9 @@ import (
 	"github.com/buildbarn/bb-storage/pkg/digest"
 )
 
-// Geometry of one cold shard, as set in tiered-cache.jsonnet. Blobs in
-// this test are one byte, so a block holds blockSize of them.
+// Geometry of the middle cold shard of a disk, as set in
+// tiered-cache.jsonnet. Blobs in this test are one byte, so a block
+// holds blockSize of them.
 const (
 	oldBlocks     = 22
 	currentBlocks = 65
@@ -21,6 +23,11 @@ const (
 	ringBlocks    = oldBlocks + currentBlocks + newBlocks
 	blockSize     = 56
 )
+
+// The eight shards of a disk split the same 87 blocks differently
+// between old and current, so that they refresh a batch of objects at
+// different times.
+var staggeredOldBlocks = []int{14, 16, 18, 20, 22, 24, 26, 28}
 
 // blockList is a BlockList that only tracks how full every block is.
 type blockList struct {
@@ -292,4 +299,37 @@ func TestCorruptCurrentBlockDoesNotReopenCurrentBlocks(t *testing.T) {
 	u.reportCorruption(corrupt)
 	u.put()
 	u.expect("blocks opened by upstream", u.blocks.pushed-opened, lostCurrent)
+}
+
+func TestEveryConfiguredSplitWritesThreeBlocks(t *testing.T) {
+	for _, old := range staggeredOldBlocks {
+		current := ringBlocks - newBlocks - old
+		policy, err := configuration.NewCSBlobAccessCreator(nil, 0).NewBlockListGrowthPolicy(current, newBlocks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		open := func(name string, restored ...int64) *store {
+			s := &store{t: t, blocks: &blockList{used: restored}}
+			s.lbm = local.NewOldCurrentNewLocationBlobMap(s.blocks, policy, s, fmt.Sprintf("%s/%d/%s", t.Name(), old, name), blockSize, old, newBlocks, len(restored))
+			return s
+		}
+		atOld := func(s *store) bool { return s.needsRefresh(old-1) && !s.needsRefresh(old) }
+
+		s := open("empty")
+		s.fill(2*ringBlocks, newBlocks)
+		s.expect("blocks in the full store", len(s.blocks.used), ringBlocks)
+		if !atOld(s) {
+			t.Errorf("old=%d: refresh boundary is not at block %d after the first fill", old, old)
+		}
+
+		r := open("restart", restoredBlocks(ringBlocks-newBlocks)...)
+		if !atOld(r) {
+			t.Errorf("old=%d: refresh boundary is not at block %d after a restart", old, old)
+		}
+		r.put()
+		r.expect("blocks released by a restart", r.blocks.popped, 0)
+		r.expect("blocks opened by a restart", r.blocks.pushed, 0)
+		r.fill(ringBlocks, newBlocks)
+		r.expect("blocks in the restarted store", len(r.blocks.used), ringBlocks)
+	}
 }

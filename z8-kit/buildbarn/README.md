@@ -10,7 +10,7 @@ P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS�
 |---|---:|---:|
 | 冷数据 dm-linear | 6,510 个 256 MiB 区，1,747,514,818,560 B | 32 片约 50.86 TiB |
 | 冷索引 dm-linear | 26.5 GiB，最多约 4.31 亿个 66 B 槽 | 848 GiB，约 16.65 GiB/TiB |
-| 分片块 | 22 old、65 current、3 new、3 spare | 每块 17.5 GiB，扣 spare 后约 49.22 TiB |
+| 分片块 | old 与 current 共 87 块，同盘八片从 14 / 73 到 28 / 59 错开；3 new、3 spare | 每块 17.5 GiB，扣 spare 后约 49.22 TiB |
 | 持久状态 | `/srv/buildbarn/tiered/cold/sataN-S/persistent_state` | P4618 上 32 个独立目录 |
 
 初始按约 10 KiB 编码均值估算，投入活跃块后索引装载约 38%，约 7.7 KiB 时达 50%。按全部几何算则分别约 40% 和 7.9 KiB。质数取整使实际槽数略少。读取走 mmap，索引关闭块设备预读，66 B 更新走缓冲 pwrite。旧记录以 epoch、块引用与摘要过滤；重建先清零索引，再清对应 checkpoint。 [块计算](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/configuration/new_blob_access.go#L189-L210) · [索引格式](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_location_record_array.go#L12-L95) · [裸设备打开](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blockdevice/new_block_device_from_device_linux.go#L22-L47)
@@ -31,11 +31,16 @@ P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS�
 
 代价是首批对象不再均匀撒进 65 个 current 块。同一时期上传的对象落在相邻的块里，一起变成 old，被查到时集中复制保活，每次复制是一次 HDD 随机读。总的复制量不变。库填满后上游也只写 3 个 new 块，所以多出来的只是首次填库那一批。
 
+**同盘八片的 old 错开，把集中的保活摊开。** 片 `sataN-K` 的 old 取 `14 + 2K`，current 取 `87 − old`，每片的总块数和追加位置不变。一批对象在各片同时落进 new 块，在每片要等后面再排进 `current` 个块才变老，所以它在同盘八片里变老的时刻依次相差两次轮转。仿真里一次构建最多要复制这批对象的比例从 57% 降到约 7%，对首批和之后的每一批都有效。 [几种摊平做法的仿真](../../discussion/cold-cas-spread-options.md#错开-old)
+
+- **代价**：`K = 0` 的片 old 只有 14 块，保活窗口最短。隔很久才被查到一次的对象在那片先被淘汰，连带整条 AC 记录失效。
+- **以后可以调**：持久状态只记每个块的位置和写入偏移，old 与 current 的划分每次启动时按配置重算。只要每片仍是 93 块，改这组数不需要重建冷库。这一点按源码判断，没有实测。 [持久状态的内容](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/proto/blobstore/local/local.proto) · [启动时的划分](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L151-L173)
+
 镜像 `z8/bb-storage:ca3d8b4-sequential-fill` 由 `Dockerfile.storage` 在本机构建，只有 `compose.tiered.yaml` 使用。全 XFS 回退和边缘节点没有 dm-zoned，沿用上游镜像。构建步骤：
 
 1. 取固定提交 `ca3d8b49a5`。
 2. 套用上游 Bazel 构建给三个 Go 依赖打的补丁，补丁文件取自同一提交的 `patches/`。直接 `go build` 缺了 bytestream 那个会编译失败。 [上游的依赖补丁清单](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/MODULE.bazel#L99-L128)
-3. 套用 `storage-sequential-fill.patch`，运行 `storage-sequential-fill_test.go`，通过后才编译。测试用冷分片的 22/65/3 几何核对上表的每一行，并确认上游策略仍是表中的行为。
+3. 套用 `storage-sequential-fill.patch`，运行 `storage-sequential-fill_test.go`，通过后才编译。测试用每盘中间那片的 22/65/3 几何核对上表的每一行，确认上游策略仍是表中的行为，并对八种 old 与 current 的划分逐一核对首次填库和重启。
 
 升级 bb-storage 时改 `Dockerfile.storage` 的提交与基础镜像、`compose.tiered.yaml` 的标签。上游 `patches/` 目录有增减时，构建会在套依赖补丁之前停下，对照 `MODULE.bazel` 的 `module_override` 重新核对三行 `dep`。`TestUpstreamFirstFillOpensEveryCurrentBlock` 失败说明上游改了首次填库的行为，先重新评估补丁是否还需要。
 
