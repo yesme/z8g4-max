@@ -90,7 +90,7 @@ AC 用的增长策略本来就是顺序填：只写 new 块，current 随 new �
 
 代价是 old 最小的那片保活窗口最短，隔很久才被查到一次的对象在那一片更容易先被淘汰，连带整条 AC 记录失效。按源码，old 和 current 的划分在每次启动时按配置重新计算，可以在填库之后再改，这一点没有实测。
 
-**现在不加。** 首批对象变老之前有很长时间，届时看 `flat_blob_access_refreshes_*` 和查缺延迟再定。仿真代码在 [`cold-cas-refresh-sim_test.go`](cold-cas-refresh-sim_test.go)，放进打过补丁的 bb-storage 源码的 `z8/` 目录，与验收测试一起用 `go test ./z8/ -run TestSimulateRefresh -v` 运行。
+**现在不加。** 首批对象变老之前有很长时间，届时看 `flat_blob_access_refreshes_*` 和查缺延迟再定。另外几种摊平的改法和它们的仿真结果见[摊平保活的几种改法](cold-cas-spread-options.md)。仿真代码在 [`cold-cas-refresh-sim_test.go`](cold-cas-refresh-sim_test.go)，放进打过补丁的 bb-storage 源码的 `z8/` 目录，与验收测试一起用 `go test ./z8/ -run TestSimulateRefresh -v` 运行。
 
 ## 讨论中核对过的几件事
 
