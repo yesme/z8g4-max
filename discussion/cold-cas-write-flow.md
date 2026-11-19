@@ -66,6 +66,33 @@
 
 上游在第一行会一次开 68 个块一起写，补丁改的就是这一点；从第三行往后两者相同。
 
+### 上游首次填库怎么选块
+
+**上游在首次填库时不区分 current 和 new：68 个块全部算 new，current 是 0。** current 指“写满了、还没变老”的块，空库里没有这样的块。配置里的 65 和 3 是目标数；current 不足时，上游用多开 new 块来补。 [补块的条件](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_list_growth_policy.go#L32-L34)
+
+选块用的是同一套轮转，只是队列更长。前 65 个块每轮各拿 8 个对象，最后 3 个仍是 4、2、1，一轮 527 个对象： [轮转的次数](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L263-L273)
+
+```
+对象   1–8   → 块 0
+对象   9–16  → 块 1
+  …
+对象 513–520 → 块 64
+对象 521–524 → 块 65
+对象 525–526 → 块 66
+对象 527     → 块 67
+对象 528–535 → 块 0，从头再来
+```
+
+轮转按对象个数，不按字节。前 65 个块以同样的速度变满，在该片累计写入约 57 到 66 个块的量时相继写满。每当队首的块放不下当前对象，它被改标为 current，这时不开新块。65 个都改完之后是 current 65、new 3，最后三个块此时约 43%、21%、11% 满，之后与稳态相同。 [改标而不开新块](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L326-L335)
+
+| 该片累计写入 | 上游 current / new | 补丁 current / new |
+|---|---:|---:|
+| 0 | 0 / 68 | 0 / 3 |
+| 30 个块的量 | 0 / 68，每块约 45% 满 | 29 / 3 |
+| 约 66 个块的量 | 65 / 3 | 65 / 3 |
+
+以上序列用真实的轮转代码跑过：前 527 个对象的落点和 68 → 3 的过程与此一致。
+
 ## 读、查缺和保活
 
 - **读**：查索引，定位到块和偏移，读出来。对象在 old 块时，顺手复制到 new 块。
