@@ -153,6 +153,12 @@ sequential() {
         }
         END {for (i=0; i<4; i++) if (!seen[i]) printf "sata%d never sampled >=70%% cache\n", i}
     ' "$log_dir/watermark.tsv" | tee "$log_dir/watermark-summary.log"
+    # Hand the range back as unwritten zones. Left in place, every one of these zones would be read
+    # back from the HDD and merged the first time Buildbarn writes to it. The verdict does not depend on it.
+    for slot in {0..3}; do
+        blkdiscard --length "$((128 << 30))" "${devices[slot]}" ||
+            echo "sata$slot-0 still holds the test data; the first fill will overwrite it."
+    done
     (( passed )) || { echo 'FAIL: last two passes require 150 MB/s aggregate and live monitoring'; exit 1; }
     echo 'PASS: aggregate steady overwrite >= 150 MB/s'
 }

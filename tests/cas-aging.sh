@@ -47,13 +47,15 @@ EOF
 cat > "$tmp/bin/blkdiscard" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$Z8_TEST/discards"
+[[ ! -e "$Z8_TEST/no-discard" ]]
 EOF
 # The interleaved phase takes twice as long as the baseline and spans one 5 s sample of a busy cache.
 cat > "$tmp/bin/fio" <<'EOF'
 #!/usr/bin/env bash
 echo "$*" >> "$Z8_TEST/fio"
 touch "$Z8_TEST/writing"
-if [[ "$*" == *--flow=4* ]]; then sleep 8; else sleep 4; fi
+# The sequential mode writes directly and is judged on wall-clock time only, so it need not take any.
+if [[ "$*" == *--flow=4* ]]; then sleep 8; elif [[ "$*" != *--direct=1\ * ]]; then sleep 4; fi
 rm -f "$Z8_TEST/writing"
 EOF
 chmod +x "$tmp"/bin/*
@@ -96,10 +98,16 @@ rm -r "$tmp/fio" "$tmp/discards" "${logs[0]}"
 output=$(Z8_INTERLEAVED_MIN_RATIO=0.40 bash "$tmp/cas-aging.sh" interleaved "$tmp/logs" <<< EMPTY-COLD 2>&1)
 grep -q 'PASS: 24 interleaved appends per disk kept at least 0.40' <<< "$output"
 
-# The sequential mode still seeds and overwrites sataN-0 three times and leaves the shards alone.
+# The sequential mode seeds and overwrites sataN-0 three times, then hands those 128 GiB back.
 rm -r "$tmp/fio" "$tmp/discards"
 output=$(bash "$tmp/cas-aging.sh" sequential "$tmp/logs" <<< EMPTY-COLD 2>&1)
 grep -q 'PASS: aggregate steady overwrite >= 150 MB/s' <<< "$output"
-[[ $(wc -l < "$tmp/fio") == 4 && $(grep -c -- '--direct=1 ' "$tmp/fio") == 4 && ! -e "$tmp/discards" ]]
+[[ $(wc -l < "$tmp/fio") == 4 && $(grep -c -- '--direct=1 ' "$tmp/fio") == 4 ]]
 [[ $(grep -o -- "--filename=$tmp/dev/z8-cold-sata[0-3]-0" "$tmp/fio" | wc -l) == 16 ]]
+[[ $(cat "$tmp/discards") == "$(printf -- "--length 137438953472 $tmp/dev/z8-cold-sata%s-0\n" 0 1 2 3)" ]]
+# A device that refuses the discard leaves the verdict as it is and says what is left behind.
+touch "$tmp/no-discard"
+output=$(bash "$tmp/cas-aging.sh" sequential "$tmp/logs" <<< EMPTY-COLD 2>&1)
+grep -q 'PASS: aggregate steady overwrite >= 150 MB/s' <<< "$output"
+[[ $(grep -c 'still holds the test data' <<< "$output") == 4 ]]
 echo 'Cold aging tests passed: interleaved plan, discards, rate gate and the sequential mode.'
