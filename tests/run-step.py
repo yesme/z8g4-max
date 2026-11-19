@@ -44,8 +44,9 @@ esac
     dispatch, allowed = script.read_text().split('case "$step" in')[1:]
     steps = lambda body: set(re.findall(r"\b[ti]\d-[\w-]+(?=[|)])", body.split("\nesac")[0]))
     assert public == steps(dispatch) == steps(allowed)
-    invalid = run("i4-cold-aging")
-    assert invalid.returncode == 2 and "Supply an existing log directory" in invalid.stdout
+    for step in ("i4-cold-aging", "i4-cold-interleaved"):
+        invalid = run(step)
+        assert invalid.returncode == 2 and "Supply an existing log directory" in invalid.stdout
 
     result = run("t5-gpu-burn", "GPU-abcd")
     assert result.returncode == 0, result.stdout + result.stderr

@@ -76,10 +76,11 @@ ls -lh "$downloads/archives"/*.deb
 
 I3 从 SanDisk 取得并复验 CUDA 工具后，临时挂载 `Z8TOOLS`，执行 `sudo cp -a "$HOME/z8-burnin/cuda-check" /mnt/z8-tools/` 后 `sudo sync -f /mnt/z8-tools` 并卸载。重装时可从 FIT 取回同目录，再由已安装 R580 的正式系统运行。
 
-I5 构建调度器并通过 RE 后，可按上面的办法临时挂载 `Z8TOOLS`，将兼容镜像保存下来。重装用 `sudo docker load -i /mnt/z8-tools/z8-bb-scheduler.tar` 恢复该标签。
+I5 构建调度器和带补丁的 bb-storage 并通过 RE 后，可按上面的办法临时挂载 `Z8TOOLS`，将两个本机构建的镜像保存下来。重装用 `sudo docker load -i` 分别载入 `/mnt/z8-tools/z8-bb-scheduler.tar` 和 `/mnt/z8-tools/z8-bb-storage.tar`，恢复这两个标签。
 
 ```bash
 sudo docker image save -o /mnt/z8-tools/z8-bb-scheduler.tar z8/bb-scheduler:c9ba98c-command-platform
+sudo docker image save -o /mnt/z8-tools/z8-bb-storage.tar z8/bb-storage:ca3d8b4-sequential-fill
 sudo sync -f /mnt/z8-tools
 sudo umount /mnt/z8-tools
 ```

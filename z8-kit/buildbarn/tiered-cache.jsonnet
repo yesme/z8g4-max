@@ -3,6 +3,10 @@ local base = import 'cache.jsonnet';
 local GiB = 1024 * 1024 * 1024;
 local MiB = 1024 * 1024;
 local chunking = { minChunkSizeBytes: 256 * 1024, horizonSizeBytes: 2 * MiB };
+// A batch of objects lands in the new blocks of every shard at the same time and turns old once
+// `current` more blocks have followed. Giving the eight shards of a disk a different split makes
+// them refresh that batch at different times. Old and current always add up to 87 blocks.
+local coldOldBlocks(name) = 14 + 2 * std.parseInt(std.split(name, '-')[1]);
 
 base + {
   grpcServers: [base.grpcServers[0] { listenPaths: ['/run/bb-cache/cache.sock'] }],
@@ -29,7 +33,8 @@ base + {
                 [name]: {
                   weight: 1,
                   backend: disk('/store/cold/' + name, '/dev/z8-cold-' + name, 0, 0,
-                                3, chunking, 22, 65, '/dev/z8-index-' + name),
+                                3, chunking, coldOldBlocks(name), 87 - coldOldBlocks(name),
+                                '/dev/z8-index-' + name),
                 }
                 for name in cold.active
               },

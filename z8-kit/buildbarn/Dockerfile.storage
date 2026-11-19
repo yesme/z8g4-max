@@ -1,0 +1,29 @@
+FROM golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS build
+WORKDIR /src
+RUN git init && \
+    git fetch --depth=1 https://github.com/buildbarn/bb-storage.git ca3d8b49a5af52eb02ed473dd689d19b949c9e41 && \
+    git checkout --detach FETCH_HEAD
+COPY storage-sequential-fill.patch /tmp/
+COPY storage-sequential-fill_test.go z8/sequential_fill_test.go
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY} CGO_ENABLED=0 GOTOOLCHAIN=local
+# Upstream builds with Bazel, which patches three of the Go modules that end
+# up in a Linux binary. dep applies the same patches from the checked-out
+# tree. The first check stops the build when a new pin changes that set.
+RUN test "$(ls patches | tr '\n' ' ')" = "bazel_remote_apis cc_mvdan_gofumpt com_github_grpc_ecosystem_go_grpc_prometheus gazelle org_golang_google_genproto_googleapis_bytestream org_golang_x_lint org_golang_x_oauth2 org_golang_x_sys org_uber_go_mock " && \
+    dep() { \
+        go mod download "$1" && cp -r "$(go list -m -f '{{.Dir}}' "$1")" "/deps/$2" && chmod -R u+w "/deps/$2" && \
+        { [ -e "/deps/$2/go.mod" ] || echo "module $1" > "/deps/$2/go.mod"; } && \
+        (cd "/deps/$2" && git apply -p0 "/src/patches/$3") && go mod edit -replace "$1=/deps/$2"; \
+    } && \
+    mkdir /deps && \
+    dep google.golang.org/genproto/googleapis/bytestream bytestream org_golang_google_genproto_googleapis_bytestream/service-registrar.diff && \
+    dep github.com/grpc-ecosystem/go-grpc-prometheus go-grpc-prometheus com_github_grpc_ecosystem_go_grpc_prometheus/client-metrics-prevent-handled-twice.diff && \
+    dep golang.org/x/oauth2 oauth2 org_golang_x_oauth2/injectable-clock.diff && \
+    git apply /tmp/storage-sequential-fill.patch && \
+    go test ./z8/ && \
+    go build -trimpath -o /bb_storage ./cmd/bb_storage
+
+FROM ghcr.io/buildbarn/bb-storage:20261102T091443Z-ca3d8b4@sha256:fecab707a842ee1915f2eea06810a1eb2eacc876d498648c67ba32230717f212
+COPY --from=build /bb_storage /usr/local/bin/z8-bb-storage
+ENTRYPOINT ["/usr/local/bin/z8-bb-storage"]

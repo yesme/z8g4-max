@@ -1,0 +1,28 @@
+diff --git a/pkg/blobstore/local/old_current_new_location_blob_map.go b/pkg/blobstore/local/old_current_new_location_blob_map.go
+index 0e49bf7..46aca46 100644
+--- a/pkg/blobstore/local/old_current_new_location_blob_map.go
++++ b/pkg/blobstore/local/old_current_new_location_blob_map.go
+@@ -1,6 +1,7 @@
+ package local
+ 
+ import (
++	"os"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -265,6 +266,15 @@ func (lbm *OldCurrentNewLocationBlobMap) incrementAllocationBlockIndex() {
+ 	if lbm.allocationBlockIndex >= lbm.newBlocks-lbm.desiredNewBlocksCount {
+ 		// One of the actual "new" blocks.
+ 		lbm.allocationAttemptsRemaining = 1 << (lbm.newBlocks - lbm.allocationBlockIndex - 1)
++		switch os.Getenv("Z8_WEIGHTS") {
++		case "capped":
++			// Double from the newest block up to eight, then stay level.
++			if lbm.allocationAttemptsRemaining > 8 {
++				lbm.allocationAttemptsRemaining = 8
++			}
++		case "equal":
++			lbm.allocationAttemptsRemaining = 8
++		}
+ 	} else {
+ 		// One of the "current" blocks, while still in the
+ 		// initial phase where we populate all blocks.

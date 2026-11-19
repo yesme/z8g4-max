@@ -28,6 +28,7 @@ Usage: bash host/run-step.sh STEP [ARGS...]
   i3-cuda GPU-UUID,...          Run P2P and all-reduce on the four V100s (also used at T5)
   i4-status                    Collect pool, cold slices and boot journal, including failed units
   i4-cold-aging LOG_DIRECTORY  Test four empty cold disks with 128 GiB each and three overwrites
+  i4-cold-interleaved LOG_DIRECTORY  Compare 24 interleaved appends per cold disk with sequential writes
   i5-cold-watermark           Watch cold cache watermarks; Ctrl+C prints the minima (also used at I7)
   i5-worker tiered|xfs         Inspect the selected Buildbarn runner and CPU assignment
   i6-probe [PROBE_ARGS...]      Run the inference probe and print GPU/error evidence
@@ -402,6 +403,10 @@ run_step() {
             [[ $# == 1 ]] || fail 'Supply an existing log directory.'
             sudo bash storage/cas-aging.sh sequential "$1"
             ;;
+        i4-cold-interleaved)
+            [[ $# == 1 ]] || fail 'Supply an existing log directory.'
+            sudo bash storage/cas-aging.sh interleaved "$1"
+            ;;
         i5-cold-watermark)
             [[ $# == 0 ]] || fail 'This step takes no arguments.'
             sudo bash storage/cold-watermark.sh
@@ -449,7 +454,7 @@ case "$step" in
     --help|-h) usage; exit 0 ;;
     t1-network|t1-cpu-prepare|t1-cpu|t1-avx|t1-avx-temperature|t2-memory|t2-temperature|t2-ddr4|t3-pmem|\
     t4-inventory|t4-nvme-read|t4-hdd-status|t4-hdd-start|t5-cuda-build|t5-gpu-burn|t5-pinned|\
-    i1-disks|i1-boot|i2-remote|i3-cuda|i4-status|i4-cold-aging|i5-cold-watermark|i5-worker|i6-probe|i7-snapshot) ;;
+    i1-disks|i1-boot|i2-remote|i3-cuda|i4-status|i4-cold-aging|i4-cold-interleaved|i5-cold-watermark|i5-worker|i6-probe|i7-snapshot) ;;
     *) usage >&2; fail "Unknown step: $step" ;;
 esac
 shift
