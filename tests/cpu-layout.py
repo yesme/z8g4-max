@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory() as temp:
         assert shared == build | reserved and idle - shared == siblings
         slices = {name: (output / f"{name}.slice").read_text(encoding="utf-8")
                   for name in ("z8infer", "z8build", "z8build-local", "z8build-remote")}
-        assert [slice.split("CPUWeight=")[1].split()[0] for slice in slices.values()] == ["200", "idle", "200", "100"]
+        assert [slice.split("CPUWeight=")[1].split()[0] for slice in slices.values()] == ["200", "100", "200", "100"]
         assert "AllowedCPUs" not in slices["z8build"]
         assert workers == reserved - {26 - count, 52 - count}
         assert f"AllowedCPUs={layout.cpu_list(reserved)}" in (output / "z8infer.slice").read_text(encoding="utf-8")
@@ -86,14 +86,18 @@ with tempfile.TemporaryDirectory() as temp:
     masks = dict(line.split("=", 1) for line in defaults.read_text().splitlines())
     order = ["system.slice", "user.slice", "machine.slice", "z8build.slice"]
 
-    def applied(output):
+    def applied(output, build_weight):
         lines = [line.split() for line in output.splitlines()]
         assert [line[:3] for line in lines] == [["set-property", "--runtime", slice] for slice in order]
+        # Only the build slice changes its weight, in the same call that changes its CPUs.
+        assert [line[4:] for line in lines] == [[]] * 3 + [[f"CPUWeight={build_weight}"]]
         return [line[3].removeprefix("AllowedCPUs=") for line in lines]
 
-    assert applied(running) == [masks["Z8_BUILD_CPUS"]] * 3 + [masks["Z8_BUILD_SHARED_CPUS"]]
-    assert applied(stopped) == [masks["Z8_IDLE_CPUS"]] * 4
-    assert applied(dedicated) == [masks["Z8_BUILD_CPUS"]] * 4
+    unit_weight = (root / "generated-6/z8build.slice").read_text(encoding="utf-8").split("CPUWeight=")[1].split()[0]
+    # Builds are an idle group only while they share the inference CPUs.
+    assert applied(running, "idle") == [masks["Z8_BUILD_CPUS"]] * 3 + [masks["Z8_BUILD_SHARED_CPUS"]]
+    assert applied(stopped, unit_weight) == [masks["Z8_IDLE_CPUS"]] * 4
+    assert applied(dedicated, unit_weight) == [masks["Z8_BUILD_CPUS"]] * 4
     assert len(layout.parse_cpu_list(masks["Z8_BUILD_CPUS"])) == 80
     assert len(layout.parse_cpu_list(masks["Z8_BUILD_SHARED_CPUS"])) == 92
     assert len(layout.parse_cpu_list(masks["Z8_IDLE_CPUS"])) == 104
@@ -106,4 +110,4 @@ with tempfile.TemporaryDirectory() as temp:
     else:
         raise AssertionError("accepted inconsistent siblings")
 
-print("CPU layout tests passed: dual-socket topology, 2/4/6/8-core masks, the idle build group, and 80/92/104 lifecycle restoration.")
+print("CPU layout tests passed: dual-socket topology, 2/4/6/8-core masks, the build group that is idle only while it shares, and 80/92/104 lifecycle restoration.")

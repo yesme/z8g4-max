@@ -75,9 +75,8 @@ def main():
         args.output.mkdir()
         for name, desc, mask, weight in (
             ("z8infer", "DeepSeek inference", infer, 200),
-            # An idle group runs only while the CPU has nothing else to do and is preempted at once,
-            # so builds can also be allowed on the inference CPUs while the model runs.
-            ("z8build", "Buck2 and Buildbarn execution", None, "idle"),
+            # cpu-mode.sh turns this into an idle group for as long as builds share the inference CPUs.
+            ("z8build", "Buck2 and Buildbarn execution", None, 100),
             ("z8build-local", "Interactive Buck2 builds", None, 200),
             ("z8build-remote", "Buildbarn remote execution", None, 100),
         ):
