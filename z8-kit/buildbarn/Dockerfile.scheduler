@@ -5,9 +5,22 @@ RUN git init && \
     git checkout --detach FETCH_HEAD
 COPY scheduler-command-platform.patch /tmp/
 ARG GOPROXY=https://proxy.golang.org,direct
-ENV GOPROXY=${GOPROXY}
-RUN git apply /tmp/scheduler-command-platform.patch && \
-    CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -o /bb_scheduler ./cmd/bb_scheduler
+ENV GOPROXY=${GOPROXY} CGO_ENABLED=0 GOTOOLCHAIN=local
+# Upstream builds with Bazel, which patches one Go module that ends up in a Linux binary. The patch
+# comes from the bb-storage module that this commit depends on. The two checks stop the build when
+# a new pin changes the set of patched Go modules.
+RUN test "$(grep -c 'module_override(' MODULE.bazel)" = 5 && \
+    test "$(grep -o '@com_github_buildbarn_bb_storage//:patches/[^"]*' MODULE.bazel | sed 's|.*patches/||' | tr '\n' ' ')" = "com_github_grpc_ecosystem_go_grpc_prometheus/client-metrics-prevent-handled-twice.diff org_golang_x_lint/generic.diff org_golang_x_sys/o-search.diff cc_mvdan_gofumpt/unused-receiver-idents.diff org_uber_go_mock/generics.diff org_uber_go_mock/mocks-for-funcs.diff " && \
+    module=github.com/grpc-ecosystem/go-grpc-prometheus && \
+    go mod download github.com/buildbarn/bb-storage "$module" && \
+    patches=$(go list -m -f '{{.Dir}}' github.com/buildbarn/bb-storage)/patches && \
+    cp -r "$(go list -m -f '{{.Dir}}' "$module")" /deps && chmod -R u+w /deps && \
+    { [ -e /deps/go.mod ] || echo "module $module" > /deps/go.mod; } && \
+    (cd /deps && git apply -p0 "$patches/com_github_grpc_ecosystem_go_grpc_prometheus/client-metrics-prevent-handled-twice.diff") && \
+    go mod edit -replace "$module=/deps" && \
+    git apply /tmp/scheduler-command-platform.patch && \
+    go build -trimpath -o /bb_scheduler ./cmd/bb_scheduler && \
+    go version -m /bb_scheduler | grep -q "=>.*/deps"
 
 FROM ghcr.io/buildbarn/bb-scheduler@sha256:50789bdae47ee83905c059f88adbf22c9253139883723f76fbed27def8b0c566
 COPY --from=build /bb_scheduler /usr/local/bin/z8-bb-scheduler

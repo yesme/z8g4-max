@@ -11,6 +11,7 @@ python3 -B tests/cold-scan.py
 python3 -B tests/cold-health.py
 python3 -B tests/cold-cas-smoke.py --help >/dev/null
 python3 -B tests/cold-sequential-fill.py
+python3 -B tests/scheduler-image.py
 bash tests/cas-aging.sh
 bash tests/buildbarn-jsonnet.sh
 bash tests/pmem.sh
