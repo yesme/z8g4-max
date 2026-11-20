@@ -17,9 +17,9 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 
 **llama.cpp 首装每路 6 核，共 12 个工作线程，CPU 份额 0.9。** 专家默认不锁页，上传慢；显卡缓存未命中的专家有九成由 CPU 直接从主机内存算。这条路的速度随线程数涨，直到内存带宽用满。上游合并这项功能时的实测里，8–22 线程的 CPU 路径是 30–85 GiB/s，上传只有 6.5–11.6 GiB/s；内存带宽不够的机器上它帮不上忙。本机是 12 通道 DDR4，上传却只有 Gen3 x8，所以限制它的是线程数。缓存够大、上传够快时开份额反而变慢，上游也有这样的结果，所以 I6 用[上游调参脚本](../inference/README.md#i6-推理放行)按 12 线程定份额，再用 4 线程测一次：4 线程的推荐速度不低于 12 线程的 95% 就退回每路 2 核，把核还给编译。 [上游的 CPU 份额实测](https://github.com/ggml-org/llama.cpp/pull/30966) 改核数前停服务，按本页重生成，保持同一推理档再验证。
 
-`z8-infer.service` 先把 `system.slice`、`user.slice` 和 `machine.slice` 缩到编译集合，把 `z8build.slice` 缩到编译集合加推理主线程，再启动模型。停止或启动失败时恢复普通任务的空闲集合，推理主线程和同核 HT 伙伴全部归还。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。CPU 集合只跟服务的启停走，中间不再变动：服务运行期间，推理的 12 个 HT 伙伴一直留空，12 个主线程在推理线程睡着时由编译使用。不用本地模型时停掉服务，HT 伙伴才归还。OMP/Pi/DSH 直连云端 API 不启动该服务。
+`z8-infer.service` 先把 `system.slice`、`user.slice` 和 `machine.slice` 缩到编译集合，把 `z8build.slice` 缩到编译集合加推理主线程并改成 idle 调度，再启动模型。停止或启动失败时恢复普通任务的空闲集合和编译的权重，推理主线程和同核 HT 伙伴全部归还。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。CPU 集合只跟服务的启停走，中间不再变动：服务运行期间，推理的 12 个 HT 伙伴一直留空，12 个主线程在推理线程睡着时由编译使用。不用本地模型时停掉服务，HT 伙伴才归还。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
-`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，推理服务设普通调度的 `Nice=-5`。构建 slice 设 `CPUWeight=idle`，不参与按权重分配：同一个 CPU 上有别的 slice 的任务要跑时它几乎不拿时间，对方一醒就被抢占，对方睡着时才运行。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享同一个集合，两个子 slice 之间的权重是 200 和 100。默认推理运行时普通任务共享 80 个逻辑 CPU，编译是 92 个。runner 配 72 个活动 action，不设 CPU 时间配额：配额用尽时整个 runner cgroup 在该周期剩余时间停转，多线程的链接和编译最先受影响。系统、存储和协调进程靠同级 slice 的权重取得份额。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
+`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，推理服务设普通调度的 `Nice=-5`。构建 slice 平时权重 100。只在推理服务运行、并且编译共用推理核的期间，启动脚本把它改成 `CPUWeight=idle`：同一个 CPU 上有别的 slice 的任务要跑时它几乎不拿时间，对方一醒就被抢占，对方睡着时才运行。服务停止或关掉共用后恢复 100。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享同一个集合，两个子 slice 之间的权重是 200 和 100。默认推理运行时普通任务共享 80 个逻辑 CPU，编译是 92 个。runner 配 72 个活动 action，不设 CPU 时间配额：配额用尽时整个 runner cgroup 在该周期剩余时间停转，多线程的链接和编译最先受影响。系统、存储和协调进程靠同级 slice 的权重取得份额。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
 
 推理 slice 与 service 都设 `MemoryLow=90G`，等于不在显存里的专家加引擎自己的工作内存。专家共 123 GiB，默认 36 GiB 的显存缓存里那部分在主机上的副本不会被读，剩下约 87 GiB 才需要留在 DDR4，另留约 3 GiB 给引擎。这是给常驻服务挑的起点，之后调显存缓存时不跟着逐 GiB 重算；要改时对 `z8infer.slice` 和 `z8-infer.service` 各执行一次 `sudo systemctl set-property 单元名 MemoryLow=…`。`MemoryLow` 按服务的内存总量计，不分 DDR4 和 PMem，也不是下限：占用约 126 GiB、保护 90G 时，内核对这个服务的回收力度降到约 29%，被挪走的先是最久没读的页，也就是显存里已有的那些专家的副本。llama.cpp 的专家默认是普通内存，绑定在两路 DDR4 上分配，之后可以下沉，也可以被提升回来。 [按比例减轻回收](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L2458-L2520)`EXPERT_MEMORY=pinned` 时这 123 GiB 是 CUDA 锁页内存，不回收也不下沉，其余任务每路能用的 DDR4 约 30 GiB。 [三种放法](../inference/README.md#llamacpp-v100-主服务) 两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
 
@@ -32,13 +32,14 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 让路用 idle 调度，不用权重。按 200 对 100 分时，推理线程持续计算的核上只能拿到三分之二。开发环境的 Linux 6.18 上，一个 CPU 放两个忙循环，对手是权重 100 的组时推理拿到约 66%，是 idle 组时拿到约 99%。Z8 上的实际影响由 I7 对照。 [非 idle 任务唤醒时抢占 idle 任务](https://github.com/torvalds/linux/blob/v7.0/kernel/sched/fair.c#L8856-L8866) · [只跑 idle 任务的 CPU 按空闲选核](https://github.com/torvalds/linux/blob/v7.0/kernel/sched/fair.c#L6893-L6902) · [决定与实测](../../discussion/build-idle-priority.md)
 
 - **代价一**：一次请求中间，推理线程短暂睡眠时编译会插进来，推理线程醒来要先把它换下去。
-- **代价二**：编译相对全机其他任务都是最低优先级。被别的任务占满的核上如果滞留一个持锁的编译进程，等这把锁的进程会被拖住，直到负载均衡把它挪到空闲的核。
-- **长期关掉**：把 `/etc/z8-infer-cpu.env` 里的 `Z8_BUILD_SHARED_CPUS` 改成和 `Z8_BUILD_CPUS` 相同，重启推理服务。
+- **代价二**：共用期间，编译相对全机其他任务都是最低优先级，例如不在 `z8build.slice` 里的本地构建会压住 runner。被别的任务占满的核上如果滞留一个持锁的编译进程，等这把锁的进程会被拖住，直到负载均衡把它挪到空闲的核。
+- **长期关掉**：把 `/etc/z8-infer-cpu.env` 里的 `Z8_BUILD_SHARED_CPUS` 改成和 `Z8_BUILD_CPUS` 相同，重启推理服务。编译回到 80 个逻辑 CPU 和权重 100，和没有这项功能时一样。
+- **核对**：`cat /sys/fs/cgroup/z8build.slice/cpu.idle` 在共用期间是 1，其余时候是 0。
 - **临时关掉**：执行下面的命令，到下次启动推理服务为止。
 
 ```bash
 source /etc/z8-infer-cpu.env
-sudo systemctl set-property --runtime z8build.slice "AllowedCPUs=$Z8_BUILD_CPUS"
+sudo systemctl set-property --runtime z8build.slice "AllowedCPUs=$Z8_BUILD_CPUS" CPUWeight=100
 ```
 
 ## 运行时的 NUMA 内存策略
