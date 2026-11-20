@@ -1,0 +1,53 @@
+diff --git a/common/arg.cpp b/common/arg.cpp
+--- a/common/arg.cpp
++++ b/common/arg.cpp
+@@ -2405,6 +2405,16 @@
+             params.no_host = true;
+         }
+     ).set_env("LLAMA_ARG_NO_HOST"));
++#ifdef __linux__
++    add_opt(common_arg(
++        {"--z8-interleave-expert-reads"},
++        "first-touch host expert weights across the bound DDR4 nodes during loading",
++        [](common_params &) {
++            if (setenv("Z8_INTERLEAVE_EXPERT_READS", "1", 1) != 0)
++                throw std::runtime_error("could not enable Z8 interleaved expert reads");
++        }
++    ));
++#endif
+     add_opt(common_arg(
+         {"-ctk", "--cache-type-k"}, "TYPE",
+         string_format(
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -3,3 +3,7 @@
+ #include "ggml-alloc.h"
++#ifdef __linux__
++#include "tiered-expert-read.h"
++#endif
++
+ #include "ggml.h"
+ #include "gguf.h"
+@@ -1836,6 +1840,10 @@
+             if (ggml_backend_buffer_is_host(cur->buffer)) {
+                 file->seek(weight->offs, SEEK_SET);
++#ifdef __linux__
++                z8_read_host_tensor(ggml_get_name(cur), [&] { file->read_raw(cur->data, n_size); });
++#else
+                 file->read_raw(cur->data, n_size);
++#endif
+                 if (check_tensors) {
+                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
+                         return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
+@@ -1952,5 +1960,10 @@
+     // check if this is the last call and do final cleanup
+     if (size_done >= size_data) {
++#ifdef __linux__
++        if (std::getenv("Z8_INTERLEAVE_EXPERT_READS")) {
++            LLAMA_LOG_INFO("Host expert load complete; cgroup anonymous bytes by node: %s\n", z8_cgroup_anon_by_node().c_str());
++        }
++#endif
+         // unmap offloaded tensors and metadata
+         if (use_mmap) {
+             for (uint32_t idx = 0; idx < mappings.size(); idx++) {

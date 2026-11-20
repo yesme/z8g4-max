@@ -13,7 +13,7 @@ T5 通过后关机断电，断开 V100、七块 HC620 和 D4800X。保留 DDR4�
 | 设备 | 布局 |
 |---|---|
 | Samsung FIT 128 GB | 1 GiB FAT32 ESP 挂 `/boot/efi`，8 GiB ext4 挂 `/boot`，p3 24 GiB ext4 `Z8TOOLS`，p4 8 GiB ext4 `Z8RECOVERY`，这两卷平时卸载。其余约 78 GiB 留空 |
-| P4618 两个 3.2 TB NVMe | 各取一个等大的成员分区，md RAID0、metadata 1.2、512 KiB chunk。XFS 挂 `/`，显式 `crc=1,reflink=1` 和 `su=512k,sw=2` |
+| P4618 两个 3.2 TB NVMe | 各取一个等大的成员分区，md RAID0、metadata 1.2、512 KiB chunk。XFS 挂 `/`，显式 `crc=1,reflink=1` 和 `su=512k,sw=2,concurrency=104` |
 
 三星 FIT 128 GB 的 H2testw 实测为读取 **315 MB/s**、写入 **60 MB/s**（用户提供）。
 
@@ -113,7 +113,14 @@ sudo xfs_info /
 
 首启应看到主机名 `jackywang-xubuntu-max`、用户 `jackywang`，md 阵列为两个成员、RAID0、512 KiB chunk，根卷为 `reflink=1,sunit=128,swidth=256`（4 KiB XFS 块）。 [Ubuntu 26.04 mkfs.xfs](https://manpages.ubuntu.com/manpages/resolute/man8/mkfs.xfs.8.html)
 
-`xfs_info` 的 `agcount` 应为 104 或 105。Ubuntu 26.04 的 xfsprogs 6.18 在非机械盘上按安装时在线的逻辑 CPU 数划分配组，每个分配组有自己的空间和 inode 锁，并行建删文件时互不排队。若是 33，说明 mkfs 走了按容量的算法（阵列被当成机械盘，或安装器里的 xfsprogs 较旧）。分配组数建好后不能改，此时重装成本最低：把 `root-storage.yaml` 里的 `su=512k,sw=2` 改成 `su=512k,sw=2,agcount=104` 重装，这个写法新旧版本都接受。33 也能用，两者在本机构建负载下的差别没有实测。 [按 CPU 数划分的条件](https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/tree/mkfs/xfs_mkfs.c?h=v6.18.0#n4111) · [计算方法](https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/tree/mkfs/xfs_mkfs.c?h=v6.18.0#n4017)
+P4618 首次格式化使用模板里的 `-d su=512k,sw=2,concurrency=104`。104 来自双路 × 26 核 × 2 个硬件线程。Ubuntu 26.04 的 xfsprogs 6.18 以此选择分配组容量，再把组边界错开一个 512 KiB 条带单元，使相邻分配组从不同的 NVMe 控制器起步。约 6.4 TB 的根卷通常得到 104 或 105 组，末组大小取决于 md 的实际容量。首启的 `xfs_info /` 会记录实际 `agcount` 和 `agsize`。以 6,400,000,000,000 字节作无写盘预演，结果为 104 组、每组 15,024,000 个 4 KiB 块，即 117,375 个条带单元；显式指定 `agcount=104` 在同一容量下会触发各组从同一盘起步的警告。此预演只核验格式化几何，Buck2 构建速度仍取决于实机负载。 [xfsprogs 并发几何](https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/tree/mkfs/xfs_mkfs.c?h=v6.18.0#n4017)
+
+Ubuntu 26.04 的 `mkfs.xfs 6.18.0` 已在临时文件上复核过下面的 `5960g` 示例。输出为 `agcount=104, agsize=15022976`、`sunit=128, swidth=256`。一个完整分配组占 117,367 个 512 KiB 条带单元，所以相邻组起点在两个 md 成员间交替。这个容量下硬写 `agcount=104` 恰好也得到相同结果；上例的 6,400,000,000,000 字节则会暴露两种参数的差异。首装直接用模板，以下命令供查阅。
+
+```bash
+img=$(mktemp) && mkfs.xfs -N -m crc=1,reflink=1 -d "file,name=$img,size=5960g,su=512k,sw=2,concurrency=104"
+rm -f -- "$img"
+```
 
 ### 首启后定稿挂载参数
 

@@ -19,7 +19,7 @@
 |---|---|
 | 操作系统 | 从现有 Ventoy 的 Xubuntu 26.04.1 Desktop ISO 导入本地 YAML，直接安装桌面和 md RAID0。FIT 1 GiB ESP、8 GiB `/boot`、24 GiB `Z8TOOLS`、8 GiB `Z8RECOVERY`，其余约 78 GiB 留空。P4618 512 KiB md chunk + XFS reflink，Dracut 生成 initramfs |
 | 主板与驱动 | 纯 UEFI，Secure Boot、SNC、ASPM 和 SATA 电源管理关，NUMA、HT、VT-x／VT-d 开。`1TB Memory Cap = Auto`。Ubuntu GA 7.0 + R580 专有驱动。P1000 显示，四张 V100 计算 |
-| 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。默认推理绑定两路 DDR4 并轮换装载线程（锁页档与 Xolotl 交错），默认每路 6 核，运行时 HT 伙伴留空，停服后全部归还 |
+| 内存 | 每路 258 GiB fsdax 合并成 2 MiB 条带、XFS DAX。每路剩余 devdax 分别转 kmem，启用冷页下沉和热点提升。默认推理绑定两路 DDR4，读取路由专家时交错分配新页（锁页档与 Xolotl 交错），默认每路 6 核，运行时 HT 伙伴留空，停服后全部归还 |
 | 存储 | SATA0–3 各用 24 GiB 写缓存，裸冷 CS 共 32 片、约 50.9 TiB；p5 是 848 GiB 裸索引。SATA4–6 各用 80 GiB 写缓存，组成约 25 TiB RAIDZ1；p9 约 213 GiB special，承载元数据、小块与 ZIL |
 | 构建 | max 热 CS 1,638 GiB 在 P4618，其 26 GiB 索引在 PMem 模型卷；冷分片 checkpoint 在 P4618。mini 热/冷 256/640 GiB，Mac 为 256/512 GiB，四块 CMR 到货后 Mac 冷层为 12 TiB。max 提供权威 AC/CAS 和唯一调度器，Linux 与 Darwin 由平台属性分流 |
 | 推理 | llama.cpp v1.0.0，ISTA 1017 IQ2_XXS + IQ4_NL Engram，四卡、单槽 128K f16 GPU KV、36 GiB GPU 专家缓存，全部专家另在主机内存留一份，按显存与工具闭环结果降档 |
@@ -127,15 +127,15 @@ bash host/run-step.sh i4-status
 | 层 | 放置 |
 |---|---|
 | 四卡 HBM（64 GiB 标称） | dense、attention、活跃 KV 和 36 GiB 合计热专家缓存 |
-| 两路 DDR4（192 GiB） | 各 96 GiB。llama.cpp 默认绑定这两个 DDR4 节点并在装载期轮换线程，约 123 GiB routed expert 用普通内存，没在读的下沉到 kmem、再用时提升回 DDR4；锁页档与 Xolotl 交错分配。系统、Buck2 保留本地优先 |
+| 两路 DDR4（192 GiB） | 各 96 GiB。llama.cpp 默认绑定这两个 DDR4 节点，装载路由专家时在两路间交错分配新页，约 123 GiB routed expert 用普通内存，没在读的下沉到 kmem、再用时提升回 DDR4；锁页档与 Xolotl 交错分配。系统、Buck2 保留本地优先 |
 | App Direct fsdax（2×258 GiB） | 2 MiB dm-stripe，约 508 GiB 块设备容量，XFS DAX，挂 `/srv/pmem-model`。存一套 GGUF、Engram 与 tokenizer，另放 26 GiB 的 Buildbarn 热 CS 索引 |
 | 两路剩余 App Direct | 各自以可迁移 kmem 上线，启用 memmap on memory 和冷页下沉。活跃推理 KV 由引擎分配 |
 
-**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。推理跨两路 DDR4 摊开（默认绑定加装载轮换，锁页与 Xolotl 交错），避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进主机内存。默认每路留最后 6 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 80 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
+**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。推理跨两路 DDR4 摊开（默认绑定两路，读入专家时按页交错，锁页与 Xolotl 交错），避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进主机内存。默认每路留最后 6 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 80 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
 
 ### 推理上线顺序
 
-1. **部署 llama.cpp v1.0.0。** CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、单槽 128K f16 GPU KV、专家读进主机内存、专家缓存 36864 MiB、ubatch 512，CPU miss share 0.9，12 个推理线程。默认启用槽内前缀复用，以真实工具往返、前缀命中 token 和输出验证。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
+1. **部署 llama.cpp v1.0.0。** 首装构建应用套件的双路 DDR4 专家读入补丁，CUDA 12.9.1 编译 SM70，固定 ISTA IQ2_XXS + IQ4_NL Engram。四卡 layer split、单槽 128K f16 GPU KV、专家读进主机内存、专家缓存 36864 MiB、ubatch 512，CPU miss share 0.9，12 个推理线程。默认启用槽内前缀复用，以真实工具往返、前缀命中 token 和输出验证。 [固定版本与命令](z8-kit/inference/README.md#llamacpp-v100-主服务)
 2. **显存压力按阶梯降档。** 依次试 q8 KV、24 GiB 专家缓存、q4 KV、64K 和主机 KV。128K 目标仍达不到再评估 1Cat。Xolotl Buster 留作短上下文单用户回退，同样使用默认的每路 6 核。 [上下文降档](z8-kit/inference/README.md#上下文降档与验收)
 3. **1Cat 只用于有明确需求的长上下文。** #1277 的 512K 成绩用 4×32 GiB，和本机 4×16 GiB 的预算不同。原版 Strata 的 1017 包未列 SM70，Xolotl 提供 Buster 构建路径。upstream vLLM 1017 公版配方需至少 8×80 GB。 [1Cat 上游实测](https://github.com/1CatAI/1Cat-vLLM/blob/main/benchmarks/deepseek_v41/HANDOFF.md) · [Strata 1017 支持](https://github.com/Niko1221/Strata/blob/main/docs/DEEPSEEK41.md) · [vLLM 1017 配方](https://github.com/vllm-project/vllm/blob/main/recipes/models/deepseek-ai/DeepSeek-V4.1-Flash.yaml)
 
@@ -206,6 +206,6 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 4. **I4–I5 正式存储和服务。** 首次建库时四盘各用 72 GiB 连续覆写，再在每盘相同的 224 GiB 已写窗口对比顺序与 24 路交错覆盖，分别记录前台完成和缓存回落时间。对三盘池单做同步写与 scrub。分别演练冷盘、ZFS 盘和整卡 D4800X 缺席。I5 再验边缘冷/热读、两平台远程执行以及 24 分片下的服务。
 5. **I7 整机。** 8 小时内轮流发 Buck2 冷读、热读和新上传，同时运行指向本机 1017 的探针或 OMP 本地 profile，并使用 SSH 和 RDP。保存启动期和混合负载的 kernel、RAS、NVMe/SMART、ZFS、NUMA 与 TTFT 记录。 [逐条命令与结果判读](z8-kit/host/BURN-IN.md)
 
-在有 `systemctl` 和 `apt-config` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖两条依赖链、分片缺席、索引和数据切片、错误注入扫描、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
+在有 `systemctl` 和 `apt-config` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet`、`g++` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖两条依赖链、分片缺席、索引和数据切片、错误注入扫描、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
 
 此前部署包已在 Ubuntu 26.04 用户空间用占位可执行文件检查 systemd 依赖，也核过官方 Live 包清单、Ubuntu 7.0.0-43 amd64 相关内核配置、NVIDIA 驱动的 APT 优先级及 `ipmctl` 的依赖与启动。实际 Buck2 区段共享、DeepSeek API 登录、整机安装、BIOS、PMem 上线时间、裸冷库、dm-linear 切片、介质错误扫描、三盘池和推理吞吐均需在目标 Z8 上确认。

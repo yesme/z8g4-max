@@ -32,7 +32,7 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 | 工作负载 | 起步配置 | 怎样看分配结果 |
 |---|---|---|
 | 系统、SSH、Xfce、harness 与 Buck2 | 使用两路对称 CPU 集合，Linux 默认本地优先。冷页可下沉到对应 PMem 慢节点 | 查实际构建或服务 cgroup 的 `memory.numa_stat` |
-| llama.cpp 或 Xolotl 四卡 | 按 T3 填 `Z8_DRAM_INTERLEAVE`。llama.cpp 默认的 `tiered` 用 `--balancing --membind` 绑定这两个 DDR4 节点，被挤到 PMem 的页才能提升回来；装载期间启动器让主线程在两路之间轮换，专家页大致各占一半；锁页的 `pinned`、`pmem` 和 Xolotl 在两个节点之间交错。模型文件统一在 PMem 条带 | 查实际进程的 `numastat -p PID`、`numa_maps` 和 `VmPin/VmLck`，与节点预算核对 |
+| llama.cpp 或 Xolotl 四卡 | 按 T3 填 `Z8_DRAM_INTERLEAVE`。llama.cpp 默认的 `tiered` 用 `--balancing --membind` 绑定这两个 DDR4 节点，被挤到 PMem 的页才能提升回来；读入路由专家张量时，专用读线程在这两个节点交错分配新页，计算线程继续使用原有亲和性；锁页的 `pinned`、`pmem` 和 Xolotl 在两个节点之间交错。模型文件统一在 PMem 条带 | 查实际进程的 `numastat -p PID`、`numa_maps` 和 `VmPin/VmLck`，与节点预算核对 |
 
 顶层 slice 的 `AllowedMemoryNodes` 维持默认，构建页可正常回退和下沉。进程级交错申请的页按照应用和驱动实际分配行为核对。只有看到持续的单节点 DRAM 压力或 UPI 饱和时，才检查该 worker 的 first-touch 或 staging。 [Linux 7.0 下沉掩码](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L978)
 
@@ -92,7 +92,7 @@ I5 先完成 [Buildbarn 的软件、目录与单元准备](../storage/README.md#
 
 ## 启停本地模型
 
-以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。只有六对 NVLink 与 NCCL 已在正式默认内核参数下验过才保存 `export Z8_NVLINK_P2P=1`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`KV_TYPE`、`KV_OFFLOAD`、`MOE_CACHE_MIB`、`MOE_CACHE_CPU_SHARE`、`EXPERT_MEMORY`、`LOAD_ROTATE` 或 `CACHE_PROMPT` 覆盖项。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
+以 `jackywang` 建 `~/.config/z8-infer`（0700）。将 I6 已确认的 `LLAMA_BUILD`、`DS41_GGUF`、`CUDA_VISIBLE_DEVICES`、`Z8_DRAM_INTERLEAVE` 写成 `env.sh` 中的 `export NAME=值`，文件设 0600。CUDA 库没有放在默认的 `/srv/work/jackywang/cuda-12.9-runtime` 时，也导出 `Z8_CUDA_RUNTIME`。只有六对 NVLink 与 NCCL 已在正式默认内核参数下验过才保存 `export Z8_NVLINK_P2P=1`。保存 I6 实际使用的 `SLOTS`、`SLOT_CTX`、`KV_TYPE`、`KV_OFFLOAD`、`MOE_CACHE_MIB`、`MOE_CACHE_CPU_SHARE`、`EXPERT_MEMORY`、`INTERLEAVE_EXPERT_READS` 或 `CACHE_PROMPT` 覆盖项。已有 `env.sh` 中的 `LOAD_ROTATE` 继续生效；两者都设置时优先使用 `INTERLEAVE_EXPERT_READS`。systemd 从 `/etc/z8-infer-cpu.env` 自动传入 `Z8_INFER_THREADS`。以下 `launch.sh` 设 0700。
 
 **llama.cpp 的 `launch.sh`**
 
@@ -180,7 +180,7 @@ cat /proc/pressure/memory
 bash host/run-step.sh i5-worker tiered
 ```
 
-I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。另跑一轮“模型预热、并行编译、回到同一段工具对话”，在三个时点各执行一次 `sudo bash host/pmem-numa-report.sh "$(systemctl show -p MainPID --value z8-infer.service)"`，按推理 cgroup 的 `memory.numa_stat` 里 `anon` 一项记两路 DDR4 和两个 kmem 节点的字节数：编译期间 DDR4 上的专家页应让出，回到对话后应回升，同时记同一工具前缀的首字延迟。装载后两路 DDR4 的偏斜也在第一个时点读出。同一份报告按节点列出各内存域的水位和 `numa_*`、`pgdemote_*`、`pgpromote_*` 计数：一路 DDR4 的 `free` 贴近 `low` 而另一路宽裕就是单侧承压，`numa_foreign` 增长的节点是没分到页的一路，`numa_miss` 增长的节点是这些页实际落到的地方。 [计数的含义](https://github.com/torvalds/linux/blob/v7.0/Documentation/admin-guide/numastat.rst)
+I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。另跑一轮“模型预热、并行编译、回到同一段工具对话”，在三个时点各执行一次 `sudo bash host/pmem-numa-report.sh "$(systemctl show -p MainPID --value z8-infer.service)"`，按推理 cgroup 的 `memory.numa_stat` 里 `anon` 一项记两路 DDR4 和两个 kmem 节点的字节数：编译期间 DDR4 上的专家页应让出，回到对话后应回升，同时记同一工具前缀的首字延迟。I6 首次装载就绪时也运行同一条命令，以 `anon` 近似观察专家页的初始分布。它还包含其他匿名分配，`numastat -p` 的总量则另含文件映射；两者都不是逐专家计数。同一份报告按节点列出各内存域的水位和 `numa_*`、`pgdemote_*`、`pgpromote_*` 计数：一路 DDR4 的 `free` 贴近 `low` 而另一路宽裕就是单侧承压，`numa_foreign` 增长的节点是没分到页的一路，`numa_miss` 增长的节点是这些页实际落到的地方。 [计数的含义](https://github.com/torvalds/linux/blob/v7.0/Documentation/admin-guide/numastat.rst)
 
 运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU。停止推理后应还到 104 个。
 

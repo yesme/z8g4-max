@@ -3,6 +3,7 @@ set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 shellcheck -x z8-kit/*/*.sh z8-kit/storage/z8-storage z8-kit/buildbarn/z8-buildbarn-check tests/*.sh
+python3 -B tests/root-xfs.py
 bash tests/storage.sh
 bash tests/partition-optane.sh
 bash tests/buildbarn-layout.sh

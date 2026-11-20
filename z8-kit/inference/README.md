@@ -34,20 +34,31 @@ sudo docker run --rm --user "$(id -u):$(id -g)" \
         done
         cp -L /usr/lib/x86_64-linux-gnu/libnccl.so.2 /runtime/
     '
-git clone --branch v1.0.0 --depth 1 https://github.com/ggml-org/llama.cpp.git
-git -C llama.cpp rev-parse HEAD
-sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-    -v "$PWD/llama.cpp:/src" -w /src nvidia/cuda:12.9.1-devel-ubuntu24.04 bash -euc '
-        apt-get update
-        apt-get install -y build-essential cmake ninja-build git libssl-dev ca-certificates
-        nvcc --version
-        git config --global --add safe.directory /src
-        cmake -S . -B build -G Ninja -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_NATIVE=ON -DCMAKE_CUDA_ARCHITECTURES=70-real \
-            -DCMAKE_INSTALL_RPATH="\$ORIGIN" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
-        cmake --build build --target llama-server llama-fit-params -j 8
-        chown -R "$HOST_UID:$HOST_GID" build
-    '
+(
+    set -e
+    if [[ ! -e llama.cpp ]]; then
+        git clone --branch v1.0.0 --depth 1 https://github.com/ggml-org/llama.cpp.git
+    fi
+    [[ $(git -C llama.cpp rev-parse HEAD) == b1b770d90d94cad9e9ea5b993bdbc383a522fb28 ]] || {
+        echo 'Expected llama.cpp v1.0.0 in this working directory' >&2
+        exit 1
+    }
+    patch="$kit/inference/tiered-expert-read.patch"
+    git -C llama.cpp apply --reverse --check "$patch" 2>/dev/null || git -C llama.cpp apply "$patch"
+    install -m 0644 "$kit/inference/tiered-expert-read.h" llama.cpp/src/tiered-expert-read.h
+    sudo docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+        -v "$PWD/llama.cpp:/src" -w /src nvidia/cuda:12.9.1-devel-ubuntu24.04 bash -euc '
+            apt-get update
+            apt-get install -y build-essential cmake ninja-build git libssl-dev ca-certificates
+            nvcc --version
+            git config --global --add safe.directory /src
+            cmake -S . -B build -G Ninja -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release \
+                -DGGML_NATIVE=ON -DCMAKE_CUDA_ARCHITECTURES=70-real \
+                -DCMAKE_INSTALL_RPATH="\$ORIGIN" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+            cmake --build build --target llama-server llama-fit-params -j 8
+            chown -R "$HOST_UID:$HOST_GID" build
+        '
+)
 export LLAMA_BUILD="$(realpath llama.cpp/build)"
 LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME" ldd "$LLAMA_BUILD/bin/llama-server"
 LD_LIBRARY_PATH="$Z8_CUDA_RUNTIME" ldd "$LLAMA_BUILD/bin/libggml-cuda.so"
@@ -87,7 +98,11 @@ DS41_ENGRAM="$DS41_MODEL_DIR/DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf"
 | `pinned` | CUDA 锁页内存，`--load-mode dio` | 运行期间固定 123 GiB，不回收也不下沉 | 链路速度，Gen3 x8 约 6 GiB/s |
 | `pmem` | DAX 文件映射，`--load-mode mmap` | 0 | 单线程从 PMem 拷贝，估计约 2 GiB/s |
 
-默认用 `tiered`：192 GiB DDR4 要同时给编译用。已经在显存缓存里的专家，主机上那份不会被读，模型空闲时所有专家都不会被读，这些页会随编译的内存压力下沉到 PMem，再用到时由内核提升回来。提升要靠内存策略：Linux 只对带 NUMA balancing 标志的策略做访问时迁移，这个标志只能配绑定策略，交错策略带不了。所以这个模式用 `numactl --balancing --membind` 绑定两路 DDR4，下沉不受绑定限制。绑定下一页内存落在触碰它的线程所在的那一路，而 llama.cpp 用主线程一个人把专家读进内存，不处理的话约 123 GiB 会先填满一路。启动器因此在装载期间每 0.2 秒把主线程在两路的推理核之间换一次，`/health` 报告就绪后给所有线程恢复原来的 CPU，并在日志里打印 `numastat` 的两路分布；两路相差很大说明轮换没起作用，先核对这行输出。调参脚本启动的服务同样会轮换。`LOAD_ROTATE=0` 可以关掉。剩下的代价是新分配只能来自 DDR4，两路都紧张时要等回收。 [主线程读入专家](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model-loader.cpp#L1838) · [装载完成才报告就绪](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/tools/server/server.cpp#L698-L706) · [偏斜的分析与复核](../../discussion/llama-cpp-tiered-socket-skew-review.md)另外两种模式的主机专家不会迁移，仍用交错。推理服务的 `MemoryLow` 设为 90G，[依据见分核手册](../host/CPU-PLACEMENT.md)。上传不走锁页内存。三种模式的速度都是估计，I6 用调参脚本打印的 `uploads` 和 `numastat -p` 看到的各节点页数对照后再定；只跑模型、不在乎编译时用 `pinned`。`pmem` 模式下 Linux 不允许显卡长期锁定 DAX 文件的页，所以没有“放在 PMem 又锁页”的选项。读 123 GiB 进内存要几分钟，`tiered` 和 `pinned` 的启动都是分钟级。 [1017 官方配置](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/main/config.json) · [ISTA 张量分配表](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF/blob/65d53bc8be65123e255ff02f3ded958b6dbf54fd/tensor-allocation/DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS.rco-allocation.txt) · [按需张量始终走映射](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model.cpp#L2049-L2052) · [fsdax 页不可长期锁定](https://github.com/torvalds/linux/blob/v7.0/mm/gup.c#L1213-L1214) · [访问时迁移要求的策略标志](https://github.com/torvalds/linux/blob/v7.0/mm/mempolicy.c#L1721-L1737) · [下沉不看内存策略](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L1021-L1058) · [不锁页的主机缓冲](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model.cpp#L1257-L1271) · [上游实测的锁页与不锁页差别](https://github.com/ggml-org/llama.cpp/pull/31122)
+默认用 `tiered`。192 GiB DDR4 由推理和编译共用。运行时 `numactl --balancing --membind` 绑定两路 DDR4，编译带来的内存压力可以把闲置专家页下沉到 PMem，推理再次访问时可以提升热页。运行线程的新分配受绑定约束，两路 DDR4 都紧张时可能等待回收。 [Linux 内存策略](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)
+
+上游用一个线程首次读入约 123 GiB 的主机专家，容易先填满一路 96 GiB DDR4。首装补丁加了 `--z8-interleave-expert-reads`。每次读取一个路由专家张量，读线程取得父线程绑定的两个 DDR4 节点，临时设 `MPOL_INTERLEAVE`，同步读完后退出。内核在这两路间交错分配新页，在首选节点缺页且空间不足时可以回退。计算线程保留原有绑核和内存策略，DAX 上的 Engram 沿用文件映射。装载完成时日志打印 `cgroup anonymous bytes by node`、cgroup 路径和 `anon N0=…` 等字节数。正式服务的专用 cgroup 便于归因；从终端直接运行时，这个值也包含同组其他进程。I6 就绪后用[分节点报告](../host/CPU-PLACEMENT.md)看 `memory.numa_stat` 中的 `anon` 与两个 DDR4 节点的水位。调参启动也使用同一补丁；旧的服务二进制会报未知参数，须按上面的命令编译。`INTERLEAVE_EXPERT_READS=0` 可关闭，已有环境里的 `LOAD_ROTATE=0` 仍有效。 [上游读入位置](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model-loader.cpp#L1838) · [实现与复核](../../discussion/llama-cpp-tiered-socket-skew-review.md)
+
+另外两种模式的主机专家不会迁移，仍用交错。推理服务的 `MemoryLow` 设为 90G，[依据见分核手册](../host/CPU-PLACEMENT.md)。上传不走锁页内存。三种模式的速度都是估计，I6 用调参脚本打印的 `uploads` 和 `numastat -p` 看到的各节点页数对照后再定；只跑模型、不在乎编译时用 `pinned`。`pmem` 模式下 Linux 不允许显卡长期锁定 DAX 文件的页，所以没有“放在 PMem 又锁页”的选项。读 123 GiB 进内存要几分钟，`tiered` 和 `pinned` 的启动都是分钟级。 [1017 官方配置](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/main/config.json) · [ISTA 张量分配表](https://huggingface.co/ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF/blob/65d53bc8be65123e255ff02f3ded958b6dbf54fd/tensor-allocation/DeepSeek-V4.1-Flash-1017-GSQ-RCO-IQ2_XXS.rco-allocation.txt) · [按需张量始终走映射](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model.cpp#L2049-L2052) · [fsdax 页不可长期锁定](https://github.com/torvalds/linux/blob/v7.0/mm/gup.c#L1213-L1214) · [访问时迁移要求的策略标志](https://github.com/torvalds/linux/blob/v7.0/mm/mempolicy.c#L1721-L1737) · [下沉不看内存策略](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L1021-L1058) · [不锁页的主机缓冲](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-model.cpp#L1257-L1271) · [上游实测的锁页与不锁页差别](https://github.com/ggml-org/llama.cpp/pull/31122)
 
 **提示词按 512 一批处理。** 超过 32 个 token 的微批只读专家缓存，把没缓存到的专家上传一次后整批计算，不会把生成阶段的热专家挤出缓存。微批越大，每个 token 分摊的上传越少。512 微批每次只把一个专家张量的副本放上显卡，算完就复用这块显存；最大的一个张量是 1.25 GiB，计入启动日志的 compute buffer。2048 微批的计算缓冲按模拟分配从约 1.6 GiB 涨到约 5.2 GiB，会挤掉专家缓存，默认不用。 [大批量的缓存行为](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/src/llama-moe-cache.cpp#L693-L696) · [逐个张量复用显存](https://github.com/ggml-org/llama.cpp/blob/v1.0.0/ggml/src/ggml-backend.cpp#L1749-L1756)
 
