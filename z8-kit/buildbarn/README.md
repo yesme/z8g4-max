@@ -27,6 +27,8 @@ P4618 XFS 存工作树、`buck-out`、materializer DB、Buildbarn 热 CS、CMS�
 | 填库中途重启，例如已有 30 个块 | 再开 38 个，共 41 | 3 |
 | 第 51 个块校验失败，释放 22 个 old 和 29 个 current | 再开 29 个，共 32 | 3 |
 
+首装 I4 在同一批已写窗口比较逐窗与 24 路覆盖，按含回收时间的吞吐判定。[I4 操作和日志字段](../storage/README.md#冷库连续覆写)
+
 补丁后 current 块随 new 块写满逐个增加。库填满后两种策略给出相同的判断，轮转方式不变。 [上游的增长策略](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_list_growth_policy.go#L11-L38) · [上游的理由](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/old_current_new_location_blob_map.go#L86-L92) · [补丁](storage-sequential-fill.patch) · [取舍记录](../../discussion/cold-cas-sequential-fill.md)
 
 代价是首批对象不再均匀撒进 65 个 current 块。同一时期上传的对象落在相邻的块里，一起变成 old，被查到时集中复制保活，每次复制是一次 HDD 随机读。总的复制量不变。库填满后上游也只写 3 个 new 块，所以多出来的只是首次填库那一批。

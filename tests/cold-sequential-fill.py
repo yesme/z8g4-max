@@ -102,33 +102,27 @@ def interleaved_plan():
     for line in plan.splitlines():
         phase, slot, name, device, offset, size, flow = line.split("\t")
         jobs[phase, int(slot)].append((name, device, int(offset), int(size), int(flow)))
-    assert set(jobs) == {(phase, slot) for phase in ("baseline", "interleaved") for slot in range(4)}
-
+    phases = ("seed", "baseline", "interleaved")
+    assert set(jobs) == {(phase, slot) for phase in phases for slot in range(4)}
     script = (ROOT / "z8-kit/storage/cas-aging.sh").read_text()
-    first, count = (int(re.search(pattern, script, re.M).group(1))
-                    for pattern in (r"^first_block=(\d+)$", r"^test_blocks=(\d+)$"))
-    window = range(first * block, (first + count) * block)
-    assert window.start >= 128 * GIB, "The window must clear the range the sequential test overwrites."
-    assert window.stop <= shard_bytes
-
+    sequential_gib = int(re.search(r"^sequential_gib=(\d+)$", script, re.M).group(1))
     for slot in range(4):
-        devices = [f"/dev/mapper/z8-cold-sata{slot}-{shard}" for shard in range(shards_per_disk)]
-        baseline, interleaved = jobs["baseline", slot], jobs["interleaved", slot]
-        # One writable position per new block of every shard, in three different blocks, 4:2:1.
-        assert len(interleaved) == shards_per_disk * new == 24
-        assert [job[1] for job in baseline] == devices
-        assert [job[1] for job in interleaved] == [device for device in devices for _ in range(new)]
+        seed, baseline, interleaved = (jobs[phase, slot] for phase in phases)
+        assert seed == baseline
+        assert [job[:4] for job in seed] == [job[:4] for job in interleaved]
+        assert len(seed) == shards_per_disk * new == 24
+        assert all(job[4] == 0 for job in baseline)
         for shard in range(shards_per_disk):
             heads = interleaved[shard * new:(shard + 1) * new]
-            assert [offset // block for _, _, offset, _, _ in heads] == [first, first + 1, first + 2]
-            assert [flow for *_, flow in heads] == [4, 2, 1]
-            assert [size * 4 // heads[0][3] for _, _, _, size, _ in heads] == [4, 2, 1]
-            ranges = sorted((offset, offset + size) for _, _, offset, size, _ in heads + [baseline[shard]])
-            for (start, stop), (following, _) in zip(ranges, ranges[1:] + [(window.stop, 0)]):
-                assert start % ZONE == 0 and (stop - start) % ZONE == 0
-                assert window.start <= start < stop <= following, "Ranges must not overlap or leave the window."
-            assert all(stop - start <= block for start, stop in ranges[:new]), "A head must stay inside its block."
-            assert baseline[shard][4] == 0 and baseline[shard][3] == sum(size for _, _, _, size, _ in heads)
+            assert {device for _, device, *_ in heads} == {f"/dev/mapper/z8-cold-sata{slot}-{shard}"}
+            assert [weight for *_, weight in heads] == [4, 2, 1]
+            assert [(offset, size) for _, _, offset, size, _ in heads] == [
+                ((8 + i) * block, gib * GIB) for i, gib in enumerate((16, 8, 4))]
+            for _, _, offset, size, _ in heads:
+                assert offset >= sequential_gib * GIB and offset + size <= shard_bytes
+                assert offset % ZONE == size % ZONE == 0 and size <= block
+        # Four single-stream passes plus three visits to identical 224 GiB windows.
+        assert 4 * sequential_gib + sum(job[3] for phase in phases for job in jobs[phase, slot]) // GIB == 960
 
 
 if __name__ == "__main__":

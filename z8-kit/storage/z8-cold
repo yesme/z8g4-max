@@ -135,7 +135,7 @@ def main(args):
     config_path = CONFIG / "cold-layout.json"
     if args.action == "init":
         if not config_path.exists():
-            write_json(config_path, {**GEOMETRY, "active": []})
+            write_json(config_path, {**GEOMETRY, "active": [], "i4Eligible": True})
         load(config_path)
         return
 
@@ -158,8 +158,19 @@ def main(args):
         return
 
     layout = load(config_path)
+    if args.action == "i4-list":
+        # The caller holds the scan lock across this check, fio and the final discard.
+        if layout.get("i4Eligible") is not True or layout["active"]:
+            raise ValueError("I4 requires a fresh, never initialized cold layout. Resume normal recovery for an existing store.")
+        if run("findmnt", "-rn", "-o", "TARGET,FSTYPE", "-T", STORE) != "/ xfs":
+            raise ValueError(f"Cannot verify cold checkpoint history: {STORE} must be on P4618 XFS")
+        for shard in SHARDS:
+            if os.path.lexists(STORE / "cold" / shard / "persistent_state"):
+                raise ValueError(f"Cold shard {shard} has checkpoint history. Refusing destructive I4.")
+        require_cache_stopped()
     if args.action == "disable":
         require_cache_stopped()
+        layout["i4Eligible"] = False
         set_active(layout, selected_shards(args.disk), False)
         write_json(config_path, layout)
         print(f"Disabled {args.disk}. Restart z8-cold.service before starting Buildbarn.")
@@ -176,6 +187,7 @@ def main(args):
         if run("findmnt", "-rn", "-o", "TARGET,FSTYPE", "-T", STORE) != "/ xfs":
             raise ValueError(f"{STORE} must be on P4618 XFS")
         # Persist the exclusion first so a partial reset/power loss stays disabled.
+        layout["i4Eligible"] = False
         set_active(layout, selected, False)
         write_json(config_path, layout)
         for shard in selected:
@@ -191,6 +203,8 @@ def main(args):
         print("Restart z8-cold.service before starting Buildbarn.")
         return
 
+    if args.action == "i4-list" and available != list(DISKS):
+        raise ValueError("I4 requires all four verified HDD/Optane pairs")
     check_devices(available, create=args.action == "map")
     active = [s for s in layout["active"] if s.rsplit("-", 1)[0] in available]
     effective = {**GEOMETRY, "active": active}
@@ -200,7 +214,7 @@ def main(args):
     elif effective != load(RUNTIME / "cold-layout.json") or compose_devices(effective) != json.loads((RUNTIME / "compose.json").read_text()):
         raise ValueError("Cold device inventory changed; stop Buildbarn and restart z8-cold.service")
 
-    if args.action == "list":
+    if args.action in {"list", "i4-list"}:
         for disk in available:
             for i in range(SHARDS_PER_DISK):
                 print(f"{disk}-{i}")
@@ -212,7 +226,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["init", "map", "unmap", "list", "check", "disable", "reset"])
+    parser.add_argument("action", choices=["init", "map", "unmap", "list", "i4-list", "check", "disable", "reset"])
     parser.add_argument("disk", choices=[*DISKS, *SHARDS, "all"], nargs="?")
     options = parser.parse_args()
     if (options.action in {"disable", "reset"}) != (options.disk is not None):

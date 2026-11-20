@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import importlib.machinery
 import importlib.util
+import io
 import json
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -37,7 +39,39 @@ with TemporaryDirectory() as temp:
     args = lambda action, disk=None: SimpleNamespace(action=action, disk=disk)
 
     cold.main(args("init"))
-    assert cold.load(layout)["active"] == []
+    fresh = cold.load(layout)
+    assert fresh["active"] == [] and fresh["i4Eligible"] is True
+
+    def refused():
+        try:
+            cold.main(args("i4-list"))
+        except ValueError as exc:
+            assert "I4" in str(exc), exc
+        else:
+            raise AssertionError("A commissioned or legacy store passed the destructive I4 guard")
+
+    with mock.patch.object(cold, "available_disks", return_value=list(cold.DISKS)), \
+            mock.patch.object(cold, "check_devices"), mock.patch.object(cold, "require_cache_stopped"), \
+            mock.patch.object(cold, "run", return_value="/ xfs"):
+        cold.main(args("map"))
+        with redirect_stdout(io.StringIO()) as output:
+            cold.main(args("i4-list"))
+        assert output.getvalue().splitlines() == list(cold.SHARDS)
+        # A restored fresh manifest cannot authorize a disk with checkpoint history.
+        checkpoint = cold.STORE / "cold/sata3-7/persistent_state"
+        checkpoint.mkdir(parents=True)
+        refused()
+        checkpoint.rmdir()
+        # Even a legacy store that has been disabled on all disks stays ineligible.
+        cold.write_json(layout, {**cold.GEOMETRY, "active": []})
+        cold.main(args("init"))
+        refused()
+        cold.write_json(layout, {**cold.GEOMETRY, "active": list(cold.SHARDS)})
+        cold.main(args("disable", "all"))
+        cold.main(args("init"))
+        assert cold.load(layout)["active"] == [] and cold.load(layout)["i4Eligible"] is False
+        refused()
+
     cold.write_json(layout, {**cold.GEOMETRY, "active": list(cold.SHARDS)})
     cold.main(args("init"))
     assert cold.load(layout)["active"] == list(cold.SHARDS)
@@ -73,8 +107,20 @@ with TemporaryDirectory() as temp:
             cold.main(args("reset", "sata2"))
         except OSError:
             assert all(not s.startswith("sata2-") for s in cold.load(layout)["active"])
+            assert cold.load(layout)["i4Eligible"] is False
         else:
             raise AssertionError("Interrupted reset unexpectedly succeeded")
+
+        # The first reset also closes the gate durably before the first destructive I/O.
+        cold.write_json(layout, fresh)
+        try:
+            cold.main(args("reset", "sata0-0"))
+        except OSError:
+            assert cold.load(layout)["i4Eligible"] is False and cold.load(layout)["active"] == []
+            cold.main(args("init"))
+            refused()
+        else:
+            raise AssertionError("Interrupted first reset unexpectedly succeeded")
 
     table = "0 3413114880 linear 253:2 0"
     with mock.patch.object(cold, "backing_name", return_value="253:2"), \

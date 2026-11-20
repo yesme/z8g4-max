@@ -139,20 +139,22 @@ bash host/run-step.sh i4-status
 
 ### 冷库连续覆写
 
-首次初始化索引前做，要求四块冷盘齐备、缓存服务停止且持久启用清单为空。命令会提示输入 `EMPTY-COLD`，四路各写 `sataN-0` 开头 128 GiB，再覆盖三遍。每 5 秒记录写入量和 cache 区水位，最后两遍各至少 150 MB/s（合计、含 flush）。额外检查 NVMe 温度/节流、I/O 错误，记录首次采到 70% 水位的每盘写入量。结束时对这 128 GiB 发一次 discard，把区交还成未写状态；留着的话，首次填库覆盖到这些区时每个区都要先从 HDD 读回合并。discard 失败只给出提示，不影响判定。使用 P4618 上现有日志目录。
+**只在冷库首次初始化索引前跑这两项覆写。** `z8-cold init` 只给新建的持久清单写入 `i4Eligible=true`。两条命令都先持有扫描锁，由 `z8-cold i4-list` 核对四路设备、持久空清单、停服及裸设备无人打开，并检查 P4618 上全部 32 片的 checkpoint 目录。第一次 `reset` 在清零任何一个索引前就把资格持久关掉，`disable` 也会关闭资格。旧清单缺此字段、执行过 `disable all`、或恢复了首装清单但旧 checkpoint 目录仍在时，守卫都会拒绝覆写。复用、升级与故障恢复跳到相应恢复步骤。保留旧清单，避免手改资格字段。
+
+从 `z8-kit` 目录运行，日志放 P4618。提示时输入 `EMPTY-COLD`。四盘各预写 `sataN-0` 开头 72 GiB，再原址覆盖三遍，每 5 秒采样缓存水位。最后两遍各要求合计至少 150 MB/s，计时含最终 flush。完成后释放这 72 GiB 的测试范围。查看 NVMe 温度、节流和 I/O 错误。
 
 ```bash
 mkdir -p ~/z8-burnin
 bash host/run-step.sh i4-cold-aging "$HOME/z8-burnin"
 ```
 
-再测 Buildbarn 实际的写入形态。带补丁的 bb-storage 每片只写 3 个 new 块，每盘 8 片共 24 个追加位置，按 4:2:1 推进。下面的命令在 32 个分片的第 8–12 块上做两段缓冲写，每段每盘 224 GiB：先逐片顺序写作基线，再 24 路同时追加。这段范围避开了上一步覆写过的 128 GiB。每段开始前等缓存区回收完，测试前后各对这段范围发一次 discard，把区交还成未写状态，重跑不受上次残留影响。 [dm-zoned 的 discard 处理](https://github.com/torvalds/linux/blob/v7.0/drivers/md/dm-zoned-target.c#L357-L390)
+下一条命令模拟冷 CAS 轮转复用旧块。每片在块 8、9、10 的开头各选 16、8、4 GiB，即每盘 24 个窗口、224 GiB。第一遍逐窗口预写，第二遍在相同偏移逐窗口顺序覆盖，第三遍在原处按 4∶2∶1 做 24 路交错覆盖。四盘并行，每遍的窗口和字节数相同，每盘从数据缓存区全部空闲开始。三遍之间保留已写映射，三遍完成且缓存回落后只 discard 写过的窗口。两项合计每盘写入 `4 × 72 + 3 × 224 = 960 GiB`。 [Buildbarn 复用块的实现](https://github.com/buildbarn/bb-storage/blob/ca3d8b49a5/pkg/blobstore/local/block_device_backed_block_allocator.go#L177-L189)
 
 ```bash
 bash host/run-step.sh i4-cold-interleaved "$HOME/z8-burnin"
 ```
 
-结果在日志目录的 `interleaved-summary.tsv`，每盘一行：两段的吞吐、比值和各自采到的最低空闲缓存区。门槛是每盘交错吞吐不低于同盘顺序写的 70%。这个比例是起点，没有实测依据，首次跑完按结果用 `Z8_INTERLEAVED_MIN_RATIO` 调整并回写到这里。两段都写满过缓存，测的是回收跟得上的持续吞吐。 [bb-storage 的补丁](../buildbarn/README.md#冷库只写三个-new-块)
+每盘在终端分别打印 `foreground_s`（fio 返回，含最终 fsync）、`reclaim_s`（随后等到 dm-zoned 报告全部可用缓存区空闲）和 `total_s`（两者之和）。`watermark-*.tsv` 每 5 秒采样。`interleaved-summary.tsv` 按盘列出两遍覆盖的三个时间、含回收吞吐、比值和最低空闲区数。等量写入时，`total_ratio = baseline_total_s / interleaved_total_s`；四盘分别达到 0.70 才通过。这个门槛是工程目标。单盘回收超过 900 秒会标失败，终端留下最后的空闲区数，日志保留已取得的前台时间。先查该盘水位、介质和温控。 [缓存增长策略](../buildbarn/README.md#冷库只写三个-new-块)
 
 通过后清零索引、建立空 checkpoint、启用已初始化分片。`reset all` 只用于首次或全量重建，整张索引分区约 848 GiB 会被清零，终端逐个报告。未达到门槛时先按盘看 `watermark.tsv` 与 NVMe 温控，必要时走[全 XFS 回退](../buildbarn/README.md#全-xfs-回退)。该回退和 `/data/other` 可以同时运行。
 
@@ -221,7 +223,7 @@ sudo zpool status -gP z8data
 
 等待 resilver 完成。临时掉线的原盘保持原配对，按需用 `zpool online` 恢复。只丢 p5 内容或 P4618 的 checkpoint 时，停 cache 和 worker，用 `z8-cold disable all` 后重新初始化索引及状态。若冷盘不足四块，就对已接盘逐个运行 `reset sataN`。几何记录的备份只能恢复清单。
 
-若整张 D4800X 永久损坏，原冷库和池需重建。停 cache 和 worker，先用 `sudo z8-cold disable all` 清空持久有效清单，`init` 不会替换既有清单。按 I4 重建 GPT，更新 `/etc/z8-storage/storage.env` 的整卡 by-id，**七个 mapper 均以 `z8-storage format N --replace` 重新格式化**。重建三盘池后回填新 `Z8_POOL_GUID`，从外部备份恢复 `/data/other`。持久清单为空后才能跑 I4 覆写，再运行 `reset all` 装回冷分片。保留 P4618 的有效热 CS 与 AC，退役 CMS。恢复后留一份 [FIT 与机器外记录](../host/FIT-RECOVERY.md#每个阶段留一份到另一台机器)。
+若整张 D4800X 永久损坏，原冷库和池需重建。停 cache 和 worker，先用 `sudo z8-cold disable all` 清空持久有效清单，`init` 不会替换既有清单。按 I4 重建 GPT，更新 `/etc/z8-storage/storage.env` 的整卡 by-id，**七个 mapper 均以 `z8-storage format N --replace` 重新格式化**。重建三盘池后回填新 `Z8_POOL_GUID`，从外部备份恢复 `/data/other`。保留已关闭首装资格的持久清单，跳过两项 I4 冷库覆写，直接运行 `reset all` 装回冷分片。保留 P4618 的有效热 CS 与 AC，退役 CMS。恢复后留一份 [FIT 与机器外记录](../host/FIT-RECOVERY.md#每个阶段留一份到另一台机器)。
 
 ### 冷库介质扫描
 
