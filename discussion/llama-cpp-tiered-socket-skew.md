@@ -1,5 +1,7 @@
 # `EXPERT_MEMORY=tiered` 的双路 DDR4 装载偏斜与规避方案
 
+> **2026-11-20 起采用做法 2：启动器在装载期间轮换加载线程。** 对两项影响的更正和实现说明见[复核](llama-cpp-tiered-socket-skew-review.md)。
+
 **问题：`EXPERT_MEMORY=tiered` 改用 `numactl --balancing --membind=两路DDR4` 后，单主线程装载会把约 123 GiB 主机专家页优先塞满先触碰的那一路 DDR4（极端约 `90 : 33 GiB`），导致满载那一路在并行编译时过早触及低水位下沉，并把 12 线程 CPU 未命中计算的有效内存控制器带宽上限从 12 通道对半拉低到单路 6 通道主导。**
 
 本文接着[专家内存分层评审](llama-cpp-dram-pmem-tiering.md)和[分层评审复核](llama-cpp-dram-pmem-tiering-review.md)。基线为 `a92710a`。以下是按源码与硬件拓扑的推导，尚无 Z8 实机测量。
