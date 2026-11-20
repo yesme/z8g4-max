@@ -131,7 +131,7 @@ bash host/run-step.sh i4-status
 | App Direct fsdax（2×258 GiB） | 2 MiB dm-stripe，约 508 GiB 块设备容量，XFS DAX，挂 `/srv/pmem-model`。存一套 GGUF、Engram 与 tokenizer，另放 26 GiB 的 Buildbarn 热 CS 索引 |
 | 两路剩余 App Direct | 各自以可迁移 kmem 上线，启用 memmap on memory 和冷页下沉。活跃推理 KV 由引擎分配 |
 
-**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。推理跨两路 DDR4 摊开（默认绑定两路，读入专家时按页交错，锁页与 Xolotl 交错），避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进主机内存。默认每路留最后 6 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 80 个逻辑 CPU，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
+**NUMA 固定开、SNC 关。** Z8 G4 主板有两条 UPI，最高 10.4 GT/s/条。推理跨两路 DDR4 摊开（默认绑定两路，读入专家时按页交错，锁页与 Xolotl 交错），避免单侧 96 GiB 先耗尽。Engram 按行从 DAX 读，routed expert 启动时读进主机内存。默认每路留最后 6 个物理核的主线程给推理，运行时同核 HT 留空。普通任务可用 80 个逻辑 CPU，编译在推理线程睡着时还能用这 12 个主线程，推理停止后恢复全部 104 个。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [PMem 配置](z8-kit/host/PMEM.md) · [CPU 分核](z8-kit/host/CPU-PLACEMENT.md)
 
 ### 推理上线顺序
 
@@ -174,7 +174,7 @@ I6 放行看近满上下文时每卡至少余 1 GiB、20 次连续工具往返�
 
 Buildbarn `readCaching` 将首次冷读回填 P4618，重复读直接走热层。上传由 Buildbarn 写冷 CS，D4800X 先吸收下层写入。冷块轮转由 Buildbarn 管，ZFS 回收由 `autotrim` 通知 mapper。 [Buildbarn readCaching 实现](https://github.com/buildbarn/bb-storage/blob/main/pkg/blobstore/readcaching/read_caching_blob_access.go)
 
-I5 默认启用 max 的 Linux worker，首装 72 并发、512 GiB runner 上限，CPU 由 cpuset 和 slice 权重约束，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。本机 worker 与 scheduler 经 UNIX socket 访问 cache，各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
+I5 默认启用 max 的 Linux worker，首装 72 并发、512 GiB runner 上限，CPU 由 cpuset 和 idle 调度约束，两路 kmem 上线后启动 worker。项目 execution platform 固定 runner 镜像和工具链。本机 worker 与 scheduler 经 UNIX socket 访问 cache，各客户端连本机 8980，边缘读缓存经 SSH 与 max 通信。共享 `hardlinking` 实例内，Linux 和 Darwin 用平台属性分流。RE 结果由 Deferred Materialization 按需拉取。 [Buck2 延迟物化](https://buck2.build/docs/users/advanced/deferred_materialization/) · [上游 Linux worker](https://github.com/buildbarn/bb-deployments/tree/main/docker-compose)
 
 Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 状态独立。P4618 XFS 支持 reflink，本地已有的产物在同一文件系统内可以共享区段。需要共享区段时，对已物化的产物用 `cp --reflink=always` 显式导出，再用 `filefrag -sv` 确认。跨树复用构建结果走 Buildbarn，同一 blob 各次 RPC 下载分别写入各自工作树。 [Git 与 reflink 操作](z8-kit/buildbarn/README.md#git-worktree-与-xfs-reflink) · [Buck2 CAS 下载实现](https://github.com/facebook/buck2/blob/main/app/buck2_execute_impl/src/materializers/deferred/io_handler.rs#L199)
 

@@ -75,7 +75,9 @@ def main():
         args.output.mkdir()
         for name, desc, mask, weight in (
             ("z8infer", "DeepSeek inference", infer, 200),
-            ("z8build", "Buck2 and Buildbarn execution", None, 100),
+            # An idle group runs only while the CPU has nothing else to do and is preempted at once,
+            # so builds can also be allowed on the inference CPUs while the model runs.
+            ("z8build", "Buck2 and Buildbarn execution", None, "idle"),
             ("z8build-local", "Interactive Buck2 builds", None, 200),
             ("z8build-remote", "Buildbarn remote execution", None, 100),
         ):
@@ -87,7 +89,8 @@ def main():
                 encoding="utf-8",
             )
         (args.output / "z8-infer-cpu.env").write_text(
-            f"Z8_BUILD_CPUS={cpu_list(build)}\nZ8_IDLE_CPUS={cpu_list(idle)}\n"
+            f"Z8_BUILD_CPUS={cpu_list(build)}\nZ8_BUILD_SHARED_CPUS={cpu_list(build | infer)}\n"
+            f"Z8_IDLE_CPUS={cpu_list(idle)}\n"
             f"Z8_INFER_THREADS={len(infer)}\nZ8_IRQ_BANNED_CPUS={cpu_list(infer | infer_siblings)}\n"
             f"Z8_XOLOTL_POOL_CPUS={cpu_list(xolotl_pool)}\n",
             encoding="utf-8",
@@ -97,7 +100,8 @@ def main():
         )
         print(f"Inference CPUs: {cpu_list(infer)}")
         print(f"Reserved inference siblings: {cpu_list(infer_siblings)}")
-        print(f"Build and general CPUs with local inference running: {cpu_list(build)}")
+        print(f"General CPUs with local inference running: {cpu_list(build)}")
+        print(f"Build CPUs with local inference running, at idle priority: {cpu_list(build | infer)}")
         print(f"Build and general CPUs with local inference stopped: {cpu_list(idle)}")
         print(f"Xolotl CPU expert workers: {cpu_list(xolotl_pool)}")
     except (OSError, ValueError) as exc:
