@@ -180,6 +180,8 @@ cat /proc/pressure/memory
 bash host/run-step.sh i5-worker tiered
 ```
 
-I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。另跑一轮“模型预热、并行编译、回到同一段工具对话”，在三个时点各执行一次 `sudo bash host/pmem-numa-report.sh "$(systemctl show -p MainPID --value z8-infer.service)"`，按推理 cgroup 的 `memory.numa_stat` 里 `anon` 一项记两路 DDR4 和两个 kmem 节点的字节数：编译期间 DDR4 上的专家页应让出，回到对话后应回升，同时记同一工具前缀的首字延迟。装载后两路 DDR4 的偏斜也在第一个时点读出。运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU。停止推理后应还到 104 个。
+I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。另跑一轮“模型预热、并行编译、回到同一段工具对话”，在三个时点各执行一次 `sudo bash host/pmem-numa-report.sh "$(systemctl show -p MainPID --value z8-infer.service)"`，按推理 cgroup 的 `memory.numa_stat` 里 `anon` 一项记两路 DDR4 和两个 kmem 节点的字节数：编译期间 DDR4 上的专家页应让出，回到对话后应回升，同时记同一工具前缀的首字延迟。装载后两路 DDR4 的偏斜也在第一个时点读出。同一份报告按节点列出各内存域的水位和 `numa_*`、`pgdemote_*`、`pgpromote_*` 计数：一路 DDR4 的 `free` 贴近 `low` 而另一路宽裕就是单侧承压，`numa_foreign` 增长的节点是没分到页的一路，`numa_miss` 增长的节点是这些页实际落到的地方。 [计数的含义](https://github.com/torvalds/linux/blob/v7.0/Documentation/admin-guide/numastat.rst)
+
+运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU。停止推理后应还到 104 个。
 
 平时停 `z8-infer.service` 即归还推理主线程和 HT 伙伴。若日志报告恢复失败，停服务后手动执行 `sudo /usr/local/libexec/z8-cpu-mode restore` 再核 CPU mask。完全撤销时，先停推理以及已启用的 worker，删除本节安装的 slice、服务与专用 drop-in，执行 `sudo systemctl daemon-reload` 后重启主机。普通任务恢复使用 104 个逻辑 CPU，已启用的 Buildbarn worker 按原 I5 配置启动。

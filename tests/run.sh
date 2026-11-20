@@ -15,6 +15,7 @@ python3 -B tests/scheduler-image.py
 bash tests/cas-aging.sh
 bash tests/buildbarn-jsonnet.sh
 bash tests/pmem.sh
+bash tests/numa-report.sh
 bash tests/serve-llama.sh
 python3 tests/cpu-layout.py
 python3 -B tests/inference-probe.py

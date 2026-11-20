@@ -27,7 +27,18 @@ for path in /sys/devices/virtual/memory_tiering/memory_tier*/nodelist \
             /sys/kernel/mm/numa/demotion_enabled /proc/sys/kernel/numa_balancing; do
     [[ -r "$path" ]] && printf '%s %s\n' "$path" "$(cat "$path")"
 done
-awk '/^(pgdemote_|pgpromote_|pgmajfault|numa_|nr_foll_pin_|nr_mlock|nr_unevictable|pswp)/' /proc/vmstat
+awk '/^(pgdemote_|pgpromote_|pgmajfault|numa_|nr_foll_pin_|nr_mlock|nr_unevictable|pswp|allocstall_|kswapd_(low|high)_wmark_hit_quickly)/' /proc/vmstat
+
+# One socket can run short while the machine-wide sums look fine.
+printf '\n[Zone watermarks per node, in pages]\n'
+awk '/^Node / { sub(",", "", $2); zone = "node" $2 " " $4 }
+     $1 == "pages" && $2 == "free" { free = $3 }
+     NF == 2 && $1 ~ /^(min|low|high|promo)$/ { mark[$1] = $2 }
+     NF == 2 && $1 == "managed" && $2 > 0 {
+         print zone, "free=" free, "min=" mark["min"], "low=" mark["low"], "high=" mark["high"],
+               "promo=" mark["promo"], "managed=" $2 }' /proc/zoneinfo
+printf '\n[Allocation, demotion and promotion counters per node]\n'
+(cd /sys/devices/system/node && grep -HE '^(numa_(hit|miss|foreign|local|other)|pgdemote_|pgpromote_)' node[0-9]*/vmstat) || true
 for resource in memory io cpu; do
     [[ ! -r "/proc/pressure/$resource" ]] || show cat "/proc/pressure/$resource"
 done
