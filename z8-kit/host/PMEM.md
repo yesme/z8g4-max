@@ -392,9 +392,9 @@ I4 完成上述安装后重启。回到正式系统后用 `sudo daxctl list`、`
 
 ## 四卡 pinned DMA 验收
 
-两条 UPI 由 Z8 G4 主板布线决定，最高 10.4 GT/s/条。DDR4 交错是推理服务的固定策略，两个 DDR4 节点各有标称 96 GiB。PCIe Gen3 x8 每卡理论约 7.88 GB/s。按均匀交错和四卡同时传输估算，GPU 的净 H→D payload 在每个 UPI 方向约 7.88 GB/s 上限。DAX 文件的 CPU 跨路读取是另一项流量。当前方案在 CPU 侧从 PMem 取权重，按引擎需要用 DDR4 作 DMA staging。Linux 7.0 的 GUP 会拒绝对 fsdax 映射的长时间页 pin。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [Linux 7.0 GUP](https://github.com/torvalds/linux/blob/v7.0/mm/gup.c#L1200)
+两条 UPI 由 Z8 G4 主板布线决定，最高 10.4 GT/s/条。两个 DDR4 节点各有标称 96 GiB，PCIe Gen3 x8 每卡理论约 7.88 GB/s。按两路 DDR4 均匀交错和四卡同时传输估算，GPU 的净 H→D payload 在每个 UPI 方向约 7.88 GB/s 上限。DAX 文件的 CPU 跨路读取是另一项流量。llama.cpp 的 `EXPERT_MEMORY=pinned` 与 Xolotl 在两路 DDR4 交错分配锁页缓冲（默认 `tiered` 用普通内存绑定两路 DDR4，不锁页）。Linux 7.0 的 GUP 会拒绝对 fsdax 映射的长时间页 pin。 [HP 白皮书，第 3 页](https://www.workstation4u.de/hp-z8-g4-technichalwhitepaper.pdf#page=3) · [Linux 7.0 GUP](https://github.com/torvalds/linux/blob/v7.0/mm/gup.c#L1200)
 
-T5 只测正式使用的交错策略。先按[算力坞验收](INSTALL.md#算力坞验收)构建工具，再按 `numactl -H` 设置实际两个 DDR4 节点，按验机记录填四张 GPU UUID。
+T5 用双路交错锁页测四卡同时 H→D 的硬件上限，也直接验证 `pinned` 和 Xolotl 的传输路径。先按[算力坞验收](INSTALL.md#算力坞验收)构建工具，再按 `numactl -H` 设置实际两个 DDR4 节点，按验机记录填四张 GPU UUID。
 
 ```bash
 bash host/run-step.sh t5-pinned 0,1 GPU-REPLACE0,GPU-REPLACE1,GPU-REPLACE2,GPU-REPLACE3

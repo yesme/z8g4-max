@@ -29,7 +29,13 @@ cat > "$tmp/bin/taskset" <<'EOF'
 pid=${*: -1}
 [[ -n "${Z8_TEST_ROTATE:-}" ]] && kill -0 "$pid" 2>/dev/null || exit 1
 echo "$*" >> "$Z8_TEST_ROTATE/taskset.log"
-if [[ "$1" == -pc && $# == 2 ]]; then echo "pid $pid's current affinity list: ${Z8_TEST_ALLOWED:-4-9,30-35}"; fi
+if [[ "$1" == -pc && $# == 2 ]]; then
+    if [[ "${LC_ALL:-}" == C ]]; then
+        echo "pid $pid's current affinity list: ${Z8_TEST_ALLOWED:-4-9,30-35}"
+    else
+        echo "pid $pid 的当前亲和力列表：${Z8_TEST_ALLOWED:-4-9,30-35}"
+    fi
+fi
 EOF
 cat > "$tmp/bin/lscpu" <<'EOF'
 #!/usr/bin/env bash
@@ -89,7 +95,7 @@ tuner=$(Z8_INFER_THREADS=4 bash "$tmp/serve.sh" --tune --max-mib 16384)
 # keeps its process ID through the wrapper, and every thread gets the full CPU list back at the end.
 rotation="$tmp/rotation"
 mkdir "$rotation"
-Z8_TEST_ROTATE="$rotation" Z8_TEST_WAIT=rotation bash "$tmp/serve.sh" > "$rotation/out" 2> "$rotation/err"
+env -u LC_ALL LANG=zh_CN.UTF-8 Z8_TEST_ROTATE="$rotation" Z8_TEST_WAIT=rotation bash "$tmp/serve.sh" > "$rotation/out" 2> "$rotation/err"
 for _ in {1..50}; do grep -q '^Total' "$rotation/err" && break; sleep 0.1; done
 [[ $(< "$rotation/out") == "p2p=unset --balancing --membind=0,1 $tmp/build/bin/llama-server "* ]]
 pid=$(< "$rotation/server.pid")

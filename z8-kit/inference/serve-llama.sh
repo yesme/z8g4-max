@@ -6,6 +6,7 @@ set -euo pipefail
 # the main thread between the two sockets every 0.2 s until /health reports the model as loaded, then
 # gives every thread its original CPUs back and prints where the memory ended up.
 rotate_load() {
+    export LC_ALL=C
     local pid=$1 port=18000 allowed range cpu socket_of list ready=0 started=$SECONDS
     local -a ranges sockets=() cpus=()
     shift

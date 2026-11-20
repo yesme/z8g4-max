@@ -95,7 +95,7 @@ Secure Boot 关闭作为日常配置。保留 UEFI Boot Order，F9 用 Ventoy �
 | `Non-Uniform Memory Access = Disabled` | HP 另列 Memory Node Interleave 模式。对称 DDR4 下预期将双路交错呈现成一个 DRAM 节点，实际用 `numactl -H` 核对。两颗 CPU 和 UPI 仍在，跨路访问延迟也仍在，Linux 的 socket 级绑内存会失去原有边界。 |
 | `Sub-NUMA Clustering = Enabled` | SNC 是 Sub-NUMA Clustering。启用两簇模式后，每颗 CPU 内部的两套内存控制器分别与附近的核心和 L3 切片组成一个 NUMA 域，每域三个 DDR4 通道。双路预期可见四个带 CPU 的 DRAM 域，适合将线程与数据一起绑到同一域做延迟优化。混插 PMem 后的 region 与 PCIe 归属需另验。 |
 
-**从 T1 起固定开 NUMA、关 SNC。** T2 可逐路对 96 GiB DDR4 施压，T3 可按 socket 核 PMem 归属和慢层去向。正式运行时由推理启动器在两路 DDR4 之间交错分配，CPU/HT 分核按物理 socket 与同核线程生成。 [T3 拓扑验收](PMEM.md#核对双路-numa-拓扑) · [运行时内存策略](CPU-PLACEMENT.md#运行时的-numa-内存策略) · [Z8 G4 F10 菜单实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [HP QuickSpecs，第 21 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=21)
+**从 T1 起固定开 NUMA、关 SNC。** T2 可逐路对 96 GiB DDR4 施压，T3 可按 socket 核 PMem 归属和慢层去向。正式运行时推理跨两路 DDR4 分配（默认绑定加装载轮换，锁页与 Xolotl 交错），CPU/HT 分核按物理 socket 与同核线程生成。 [T3 拓扑验收](PMEM.md#核对双路-numa-拓扑) · [运行时内存策略](CPU-PLACEMENT.md#运行时的-numa-内存策略) · [Z8 G4 F10 菜单实例](https://medwrks.com/servicedocs/ge-ct/optima/5366638-8ENDiscoveryandOptimaRTServiceMethods/t_Z8G4-Host-PC-BIOS-Setup-and-CMOS-Battery-Replacement_BJ_210315_Y02.html) · [HP QuickSpecs，第 21 页](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/44704/1/Z8%20G4%20Quickspecs%20v67.pdf#page=21)
 
 ## 内网主机的安全与虚拟化设置
 
