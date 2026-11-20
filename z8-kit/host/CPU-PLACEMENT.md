@@ -32,7 +32,7 @@ Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对
 | 工作负载 | 起步配置 | 怎样看分配结果 |
 |---|---|---|
 | 系统、SSH、Xfce、harness 与 Buck2 | 使用两路对称 CPU 集合，Linux 默认本地优先。冷页可下沉到对应 PMem 慢节点 | 查实际构建或服务 cgroup 的 `memory.numa_stat` |
-| llama.cpp 或 Xolotl 四卡 | 按 T3 填 `Z8_DRAM_INTERLEAVE`。llama.cpp 默认的 `tiered` 用 `--balancing --membind` 绑定这两个 DDR4 节点，被挤到 PMem 的页才能提升回来；锁页的 `pinned`、`pmem` 和 Xolotl 在两个节点之间交错。模型文件统一在 PMem 条带 | 查实际进程的 `numastat -p PID`、`numa_maps` 和 `VmPin/VmLck`，与节点预算核对 |
+| llama.cpp 或 Xolotl 四卡 | 按 T3 填 `Z8_DRAM_INTERLEAVE`。llama.cpp 默认的 `tiered` 用 `--balancing --membind` 绑定这两个 DDR4 节点，被挤到 PMem 的页才能提升回来；装载期间启动器让主线程在两路之间轮换，专家页大致各占一半；锁页的 `pinned`、`pmem` 和 Xolotl 在两个节点之间交错。模型文件统一在 PMem 条带 | 查实际进程的 `numastat -p PID`、`numa_maps` 和 `VmPin/VmLck`，与节点预算核对 |
 
 顶层 slice 的 `AllowedMemoryNodes` 维持默认，构建页可正常回退和下沉。进程级交错申请的页按照应用和驱动实际分配行为核对。只有看到持续的单节点 DRAM 压力或 UPI 饱和时，才检查该 worker 的 first-touch 或 staging。 [Linux 7.0 下沉掩码](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L978)
 
