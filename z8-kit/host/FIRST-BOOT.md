@@ -72,7 +72,7 @@
 
 1. 在正式系统安装 PMem 两份 env 和两个单元，设置 T3 用过的启动参数，重启，确认 `/srv/pmem-model` 仍挂为 XFS DAX、两个 kmem 节点上线。PMem 已有的 goal、namespace、XFS 和权重直接沿用。 [正式系统恢复 PMem](PMEM.md#i4-在正式系统复用-pmem)
 2. 先装存储工具并运行[介质错误演练](../storage/README.md#i4-介质错误演练)。关机断电接回 D4800X 和七块 HC620，光驱留 SATA7。启动后按 T4 序列号核盘，从 D4800X 整盘 by-id 新建九分区。按 `hybrid.tsv` 逐组初始化映射；SATA0–3 用 24 GiB 缓存，SATA4–6 用 80 GiB。仅后三个 mapper 加 p9 建 RAIDZ1，保存池 GUID。p5 留作 848 GiB 裸索引。 [I4 磁盘配置与建池](../storage/README.md#1-列出实体设备)
-3. 启用 `data-other.mount` 和 `z8-cold.service`。先跑 `bash host/run-step.sh i4-cold-aging "$HOME/z8-burnin"` 和 `bash host/run-step.sh i4-cold-interleaved "$HOME/z8-burnin"`，再清零 32 个索引并启用分片。另对三盘 ZFS 做同步写和 scrub。分别冷启验证少一块冷盘、少一块 ZFS 盘、整卡 D4800X 缺席，每轮用 `bash host/run-step.sh i4-status` 收日志，恢复后确认 32 个分片和三盘池 ONLINE。冷库持续写不达门槛可用全 XFS 回退。I4 配好后运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I4 单元和演练](../storage/README.md#4-i4-安装存储依赖链) · [全 XFS 回退](../buildbarn/README.md#全-xfs-回退)
+3. 启用 `data-other.mount` 和 `z8-cold.service`。仅在全新冷库首次初始化索引前跑 `bash host/run-step.sh i4-cold-aging "$HOME/z8-burnin"` 和 `bash host/run-step.sh i4-cold-interleaved "$HOME/z8-burnin"`，核对四盘已写窗口交错覆盖的含回收吞吐均达到各自顺序基线的 70%，再清零 32 个索引并启用分片。旧库复用或换盘走恢复流程。另对三盘 ZFS 做同步写和 scrub。分别冷启验证少一块冷盘、少一块 ZFS 盘、整卡 D4800X 缺席，每轮用 `bash host/run-step.sh i4-status` 收日志，恢复后确认 32 个分片和三盘池 ONLINE。冷库持续写不达门槛可用全 XFS 回退。I4 配好后运行 `sudo z8-recovery-backup` 并[取一份机器外备份](FIT-RECOVERY.md#每个阶段留一份到另一台机器)。 [I4 单元和演练](../storage/README.md#4-i4-安装存储依赖链) · [全 XFS 回退](../buildbarn/README.md#全-xfs-回退)
 
 ### I5 · Buildbarn 与 Buck2
 

@@ -27,8 +27,8 @@ Usage: bash host/run-step.sh STEP [ARGS...]
   i2-remote                    Check active networking and local SSH/xrdp listeners
   i3-cuda GPU-UUID,...          Run P2P and all-reduce on the four V100s (also used at T5)
   i4-status                    Collect pool, cold slices and boot journal, including failed units
-  i4-cold-aging LOG_DIRECTORY  Test four empty cold disks with 128 GiB each and three overwrites
-  i4-cold-interleaved LOG_DIRECTORY  Compare 24 interleaved appends per cold disk with sequential writes
+  i4-cold-aging LOG_DIRECTORY  Test four empty cold disks with 72 GiB each and three overwrites
+  i4-cold-interleaved LOG_DIRECTORY  Compare serial and 24-way overwrites of the same seeded windows, including reclaim
   i5-cold-watermark           Watch cold cache watermarks; Ctrl+C prints the minima (also used at I7)
   i5-worker tiered|xfs         Inspect the selected Buildbarn runner and CPU assignment
   i6-probe [PROBE_ARGS...]      Run the inference probe and print GPU/error evidence

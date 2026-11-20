@@ -203,7 +203,7 @@ Git worktree 共享 `.git` 对象库，每棵树的 `buck-out` 和 materializer 
 1. **T1–T3 主机。** 两颗 CPU 都跑负载。DDR4-only 用 Memtest86+ 四个 pass 和 Linux 144 GiB、4 小时压力测试。随后插 PMem，应用 App Direct goal，重跑一轮混插内存测试。正式条带写一份 400 GiB 文件并在切 AC 后复核 SHA-256。devdax 每路先测 8 GiB，再测约 448 GiB 并验 CRC32C。留独立日志，再转 kmem。
 2. **T4 裸盘。** 七块 HC620 冷启稳定后并行跑 SMART 长检。按每盘报告的 ETA 预留一晚到一天以上，每块都要有最新的成功结果。
 3. **T5 算力坞。** GPU Burn 依次跑单卡 15 分钟、每槽双卡 15 分钟、四卡 60 分钟。测每对 NVLink P2P、NCCL、PCIe Gen3 x8，查 Xid/ECC/AER，最后跑 1017 冒烟。
-4. **I4–I5 正式存储和服务。** 四盘各写 128 GiB 并原址覆盖三遍，采样回收水位；对三盘池单做同步写与 scrub。分别演练冷盘、ZFS 盘和整卡 D4800X 缺席。I5 再验边缘冷/热读、两平台远程执行以及 24 分片下的服务。
+4. **I4–I5 正式存储和服务。** 首次建库时四盘各用 72 GiB 连续覆写，再在每盘相同的 224 GiB 已写窗口对比顺序与 24 路交错覆盖，分别记录前台完成和缓存回落时间。对三盘池单做同步写与 scrub。分别演练冷盘、ZFS 盘和整卡 D4800X 缺席。I5 再验边缘冷/热读、两平台远程执行以及 24 分片下的服务。
 5. **I7 整机。** 8 小时内轮流发 Buck2 冷读、热读和新上传，同时运行指向本机 1017 的探针或 OMP 本地 profile，并使用 SSH 和 RDP。保存启动期和混合负载的 kernel、RAS、NVMe/SMART、ZFS、NUMA 与 TTFT 记录。 [逐条命令与结果判读](z8-kit/host/BURN-IN.md)
 
 在有 `systemctl` 和 `apt-config` 的 Linux 环境准备 `bash`、`jq`、`shellcheck`、`jsonnet` 和 `python3`，从仓库根目录运行 `bash tests/run.sh`。GitHub Actions 在 push 和 PR 上运行同一入口。`tests/storage.sh` 用 `systemctl --root` 核对临时目录中的单元启用链接。模拟覆盖两条依赖链、分片缺席、索引和数据切片、错误注入扫描、PMem 异步枚举、kmem 部分上线恢复和双路 HT 分核。
