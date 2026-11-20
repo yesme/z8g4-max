@@ -113,6 +113,8 @@ sudo xfs_info /
 
 首启应看到主机名 `jackywang-xubuntu-max`、用户 `jackywang`，md 阵列为两个成员、RAID0、512 KiB chunk，根卷为 `reflink=1,sunit=128,swidth=256`（4 KiB XFS 块）。 [Ubuntu 26.04 mkfs.xfs](https://manpages.ubuntu.com/manpages/resolute/man8/mkfs.xfs.8.html)
 
+`xfs_info` 的 `agcount` 应为 104 或 105。Ubuntu 26.04 的 xfsprogs 6.18 在非机械盘上按安装时在线的逻辑 CPU 数划分配组，每个分配组有自己的空间和 inode 锁，并行建删文件时互不排队。若是 33，说明 mkfs 走了按容量的算法（阵列被当成机械盘，或安装器里的 xfsprogs 较旧）。分配组数建好后不能改，此时重装成本最低：把 `root-storage.yaml` 里的 `su=512k,sw=2` 改成 `su=512k,sw=2,agcount=104` 重装，这个写法新旧版本都接受。33 也能用，两者在本机构建负载下的差别没有实测。 [按 CPU 数划分的条件](https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/tree/mkfs/xfs_mkfs.c?h=v6.18.0#n4111) · [计算方法](https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/tree/mkfs/xfs_mkfs.c?h=v6.18.0#n4017)
+
 ### 首启后定稿挂载参数
 
 按 [全机挂载表](MOUNTS.md) 和 [fstab 样例](fstab-boot.example) 修改安装器写好的三行。保留实际文件系统 UUID 及其他行，完成 `findmnt --verify` 后更新 initramfs 和 GRUB。另在 `/etc/mdadm/mdadm.conf` 核对目标阵列 UUID，避免重复写入 ARRAY 项。将 `mdraid` 模块和 `nvme`、`raid0`、`xfs` 驱动写入 Dracut 的持久配置，供本次和以后构建 initramfs 使用。 [Dracut 26.04 配置手册](https://manpages.ubuntu.com/manpages/resolute/man5/dracut.conf.5.html)
