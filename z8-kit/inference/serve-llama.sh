@@ -1,62 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Under a bind policy a page lands on the socket whose CPU touches it first, and llama.cpp reads all
-# host experts from its main thread. Left alone, that fills one DDR4 node before the other. This moves
-# the main thread between the two sockets every 0.2 s until /health reports the model as loaded, then
-# gives every thread its original CPUs back and prints where the memory ended up.
-rotate_load() {
-    export LC_ALL=C
-    local pid=$1 port=18000 allowed range cpu socket_of list ready=0 started=$SECONDS
-    local -a ranges sockets=() cpus=()
-    shift
-    while (( $# > 1 )); do
-        # The tuner appends its own port to the command; the last one wins.
-        if [[ "$1" == --port ]]; then port=$2; fi
-        shift
-    done
-    command -v curl > /dev/null || { echo 'Not rotating the loader: curl is missing.'; return 0; }
-    allowed=$(taskset -pc "$pid" 2> /dev/null) || return 0
-    allowed=${allowed##*: }
-    while IFS=, read -r cpu socket_of; do
-        [[ "$cpu" =~ ^[0-9]+$ ]] && cpus[cpu]=$socket_of
-    done < <(lscpu --online --parse=CPU,SOCKET)
-    IFS=, read -ra ranges <<< "$allowed"
-    for range in "${ranges[@]}"; do
-        for (( cpu = ${range%-*}; cpu <= ${range#*-}; cpu++ )); do
-            socket_of=${cpus[cpu]:-}
-            [[ -n "$socket_of" ]] || { echo "Not rotating the loader: CPU $cpu is not online."; return 0; }
-            sockets[socket_of]+=${sockets[socket_of]:+,}$cpu
-        done
-    done
-    (( ${#sockets[@]} == 2 )) || {
-        echo "Not rotating the loader: CPUs $allowed are on ${#sockets[@]} socket(s)."
-        return 0
-    }
-    until (( ready )); do
-        (( SECONDS - started < 1800 )) || { echo 'The model is still loading after 30 min; the loader stays where it is.'; break; }
-        for list in "${sockets[@]}"; do
-            # Fails once the server has exited.
-            taskset -pc "$list" "$pid" > /dev/null 2>&1 || return 0
-            sleep 0.2
-            # Polling after every move gives both sockets the same share of the time.
-            if curl --silent --fail --max-time 1 --output /dev/null "http://127.0.0.1:$port/health"; then
-                ready=1
-                break
-            fi
-        done
-    done
-    # Threads created during the load inherited one socket's CPUs.
-    taskset -a -pc "$allowed" "$pid" > /dev/null 2>&1 || return 0
-    echo "Loader rotation ended after $((SECONDS - started)) s. Memory of the server per NUMA node, in MiB:"
-    numastat -p "$pid" | awk '$1 == "Node" || $1 == "Total"' || true
-}
-# Internal: run COMMAND under this process ID with the rotation beside it.
-if [[ ${1:-} == --rotate-load ]]; then
-    shift
-    rotate_load $$ "$@" >&2 &
-    exec "$@"
-fi
+# Only the local build's tiered command-line option enables its temporary reader policy.
+unset Z8_INTERLEAVE_EXPERT_READS
 
 : "${LLAMA_BUILD:?Set the absolute path to the llama.cpp build directory}"
 : "${DS41_GGUF:?Set the first 1017 GGUF shard on the PMem model volume}"
@@ -88,17 +34,16 @@ cache_mib=${MOE_CACHE_MIB:-36864}
 # The kernel promotes a page back from PMem only under a policy that carries the NUMA balancing
 # flag, which Linux accepts for a bind but not for interleaving. Demotion ignores the policy, so
 # tiered binds to the DDR4 nodes; interleaving is kept where the host memory cannot move.
-# The bind fills the DDR4 node of the loading thread first, so tiered also rotates that thread
-# between the sockets while the model loads. LOAD_ROTATE=0 leaves it alone.
+# The tiered reader first-touches routed experts using an interleaved thread-local policy.
 expert_memory=${EXPERT_MEMORY:-tiered}
-rotate=()
+reader=()
 case "$expert_memory" in
     tiered)
         placement=(--load-mode dio --no-host) policy=(--balancing --membind="$Z8_DRAM_INTERLEAVE")
-        case ${LOAD_ROTATE:-1} in
-            1) rotate=(bash "$(realpath -e -- "${BASH_SOURCE[0]}")" --rotate-load) ;;
+        case ${INTERLEAVE_EXPERT_READS:-${LOAD_ROTATE:-1}} in
+            1) reader=(--z8-interleave-expert-reads) ;;
             0) ;;
-            *) echo 'LOAD_ROTATE must be 0 or 1' >&2; exit 2 ;;
+            *) echo 'INTERLEAVE_EXPERT_READS (formerly LOAD_ROTATE) must be 0 or 1' >&2; exit 2 ;;
         esac
         ;;
     pinned) placement=(--load-mode dio) policy=(--interleave="$Z8_DRAM_INTERLEAVE") ;;
@@ -150,9 +95,9 @@ case ${Z8_NVLINK_P2P:-0} in
     *) echo 'Z8_NVLINK_P2P must be 0 or 1' >&2; exit 2 ;;
 esac
 
-server=("${rotate[@]}" numactl "${policy[@]}" "$LLAMA_BUILD/bin/llama-server"
+server=(numactl "${policy[@]}" "$LLAMA_BUILD/bin/llama-server"
     --host 127.0.0.1 --port 18000 -m "$model" --alias deepseek-v4.1-flash-1017
-    "${placement[@]}" --lazy-mode on --split-mode layer --tensor-split '1,1,1,1'
+    "${placement[@]}" --lazy-mode on "${reader[@]}" --split-mode layer --tensor-split '1,1,1,1'
     --n-gpu-layers all --cpu-moe --fit off --no-mmproj
     --moe-cache-mib "$cache_mib" --moe-cache-cpu-share "$cpu_share"
     --threads "$threads" --threads-batch "$threads_batch" --batch-size "$batch" --ubatch-size "$ubatch"

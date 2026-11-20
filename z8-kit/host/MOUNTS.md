@@ -36,7 +36,7 @@ done
 sudo xfs_info /
 ```
 
-用 `sudo mdadm --detail "$(findmnt -n -M / -o SOURCE)"` 与 `xfs_info /` 核对 XFS 条带几何。512 KiB md chunk 对应 `mkfs.xfs -d su=512k,sw=2`，4 KiB XFS block 在 `xfs_info` 中显示 `sunit=128,swidth=256`。 [Ubuntu 26.04 mkfs.xfs](https://manpages.ubuntu.com/manpages/resolute/man8/mkfs.xfs.8.html)
+用 `sudo mdadm --detail "$(findmnt -n -M / -o SOURCE)"` 与 `xfs_info /` 核对 XFS 条带几何。512 KiB md chunk 对应 `mkfs.xfs -d su=512k,sw=2,concurrency=104`，4 KiB XFS block 在 `xfs_info` 中显示 `sunit=128,swidth=256`。 [Ubuntu 26.04 mkfs.xfs](https://manpages.ubuntu.com/manpages/resolute/man8/mkfs.xfs.8.html)
 
 用 `lsblk -D` 查 P4618 两个成员和 md 根卷的 `DISC-MAX`，以 **md 根卷**实际向上暴露的能力为准。有 discard 支持时，安排一次空闲时的 `sudo fstrim -v /` 并看日志，成功后保持每周 `fstrim.timer`。检查 `systemctl cat fstrim.service` 的 `ExecStart` 是否从 fstab 优先取挂载点，例如 `--listed-in /etc/fstab:/proc/self/mountinfo`，这样两条 FIT 的 `X-fstrim.notrim` 生效。若本机定时任务被改过且会扫描所有卷，可把其 `ExecStart` 覆盖为 `/usr/sbin/fstrim --verbose /`，然后启用 timer。md 根卷未透出 discard 时，保留 `nodiscard` 并以本机探测结果记录。 [Ubuntu 26.04 fstrim 选项](https://manpages.ubuntu.com/manpages/resolute/man8/fstrim.8.html)
 

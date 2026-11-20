@@ -44,7 +44,7 @@ with TemporaryDirectory() as directory:
     (infer / "env.sh").write_text(
         'export SLOTS=2\nexport KV_TYPE="q8_0"\nexport KV_OFFLOAD=0\n'
         "export DS41_GGUF='/srv/pmem-model/file name.gguf'\n"
-        'export UBATCH_SIZE=256\nexport LOAD_ROTATE=0\nexport DEEPSEEK_API_KEY=fixture-secret\n'
+        'export UBATCH_SIZE=256\nexport LOAD_ROTATE=0\nexport INTERLEAVE_EXPERT_READS=1\nexport DEEPSEEK_API_KEY=fixture-secret\n'
         'export MOE_CACHE_CPU_SHARE="$(false)"\n'
     )
     launch = infer / "launch.sh"
@@ -215,7 +215,7 @@ esac
         assert archive.extractfile(env_file).read() == (
             b"export SLOTS=2\nexport KV_TYPE=q8_0\nexport KV_OFFLOAD=0\n"
             b"export DS41_GGUF=/srv/pmem-model/file\\ name.gguf\nexport UBATCH_SIZE=256\n"
-            b"export LOAD_ROTATE=0\n"
+            b"export LOAD_ROTATE=0\nexport INTERLEAVE_EXPERT_READS=1\n"
         )
         launch_file = next(name for name in archive.getnames() if name.endswith("z8-infer/launch.sh"))
         assert b"XOL_TOKENIZER_DIR=" in archive.extractfile(launch_file).read()
