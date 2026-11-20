@@ -2,28 +2,44 @@
 
 F10 → Advanced → Performance Options 固定 NUMA 开、SNC 关，保持 HT、所有核心和 Turbo 开启。I5 启用 Buildbarn worker 前先[生成并安装分核配置](#生成并安装)。I6 通过手动推理验收后再[配置并启动推理服务](#启停本地模型)，I7 验证启停和混合负载。生成器从 Linux sysfs 读取每个逻辑 CPU 所属的 socket 和同核 HT 线程，按每路独立分配。DDR4 节点号用 [T3 拓扑报告](PMEM.md#核对双路-numa-拓扑) 确认。
 
-| 每路推理预留 | 双路可运行的推理线程 | 双路系统与编译可用线程 | Xolotl CPU expert worker 起点 |
-|---|---:|---:|---:|
-| 每路 2 核 | 4 | 96 | — |
-| 每路 4 核 | 8 | 88 | 6 |
-| **每路 6 核（llama.cpp 首装，Xolotl 回退相同）** | **12** | **80** | 10 |
-| **推理服务已停止** | — | **104** | — |
+| 每路推理预留 | 双路可运行的推理线程 | 双路系统与编译可用线程 | 编译另可借用的推理主线程 | Xolotl CPU expert worker 起点 |
+|---|---:|---:|---:|---:|
+| 每路 2 核 | 4 | 96 | 4 | — |
+| 每路 4 核 | 8 | 88 | 8 | 6 |
+| **每路 6 核（llama.cpp 首装，Xolotl 回退相同）** | **12** | **80** | **12** | 10 |
+| **推理服务已停止** | — | **104** | — | — |
 
-按双路各 26 核、每核两个 HT 线程计算。每路默认预留最后 6 颗物理核，运行时连同它们的 HT 伙伴共 24 个逻辑 CPU 不给普通任务。 [8269CY 实机实验平台](https://www.vldb.org/pvldb/vol17/p4827-li.pdf)
+按双路各 26 核、每核两个 HT 线程计算。每路默认预留最后 6 颗物理核，运行时连同它们的 HT 伙伴共 24 个逻辑 CPU 不给普通任务。其中 12 个主线程在推理线程睡着时借给 `z8build.slice` 里的编译，12 个 HT 伙伴对所有任务留空。 [8269CY 实机实验平台](https://www.vldb.org/pvldb/vol17/p4827-li.pdf)
 
-用每路内部的示意编号 `0↔26、1↔27、…、25↔51`，默认推理占 20–25 的主线程。运行时其 HT 伙伴 46–51 留空，普通任务用 0–19 和 26–45。停止后普通任务用 0–51。
+用每路内部的示意编号 `0↔26、1↔27、…、25↔51`，默认推理占 20–25 的主线程。运行时其 HT 伙伴 46–51 留空，普通任务用 0–19 和 26–45，编译另可在 20–25 上插空。停止后普通任务用 0–51。
 
 Linux 的 CPU 号全机唯一。脚本按 `thread_siblings_list` 配对，每对取编号较小的 CPU 作“主线程”，每路按这个编号排序取最后 K 对。这样 CPU0 所在物理核留给普通任务和系统。cgroup 的 CPU 集合约束其中的进程。硬件 IRQ 与内核线程有自己的亲和性，用 `/proc/interrupts` 和 `ps -eLo pid,tid,psr,comm` 核正在跑的网卡、存储和推理负载。CPU 核的执行资源分开，socket 的 Turbo、功耗、末级缓存、DDR4、PMem 和 UPI 仍然共享。 [Linux CPU 拓扑](https://docs.kernel.org/admin-guide/cputopology.html) · [Linux cgroup v2 cpuset](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpuset) · [Linux IRQ 亲和性](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
 **llama.cpp 首装每路 6 核，共 12 个工作线程，CPU 份额 0.9。** 专家默认不锁页，上传慢；显卡缓存未命中的专家有九成由 CPU 直接从主机内存算。这条路的速度随线程数涨，直到内存带宽用满。上游合并这项功能时的实测里，8–22 线程的 CPU 路径是 30–85 GiB/s，上传只有 6.5–11.6 GiB/s；内存带宽不够的机器上它帮不上忙。本机是 12 通道 DDR4，上传却只有 Gen3 x8，所以限制它的是线程数。缓存够大、上传够快时开份额反而变慢，上游也有这样的结果，所以 I6 用[上游调参脚本](../inference/README.md#i6-推理放行)按 12 线程定份额，再用 4 线程测一次：4 线程的推荐速度不低于 12 线程的 95% 就退回每路 2 核，把核还给编译。 [上游的 CPU 份额实测](https://github.com/ggml-org/llama.cpp/pull/30966) 改核数前停服务，按本页重生成，保持同一推理档再验证。
 
-`z8-infer.service` 先把 `system.slice`、`user.slice`、`machine.slice` 和 `z8build.slice` 缩到编译集合，再启动模型。停止或启动失败时恢复普通任务的空闲集合，推理主线程和同核 HT 伙伴全部归还。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。核心的归还只跟服务的启停走：服务停止时自动归还，服务运行但没有 API 请求时仍然占着这 24 个逻辑 CPU。不用本地模型时停掉服务。OMP/Pi/DSH 直连云端 API 不启动该服务。
+`z8-infer.service` 先把 `system.slice`、`user.slice` 和 `machine.slice` 缩到编译集合，把 `z8build.slice` 缩到编译集合加推理主线程，再启动模型。停止或启动失败时恢复普通任务的空闲集合，推理主线程和同核 HT 伙伴全部归还。cgroup 更新会作用到正在运行的 Buck2 与 runner，已有进程主动设过的 affinity 也要一并核对。CPU 集合只跟服务的启停走，中间不再变动：服务运行期间，推理的 12 个 HT 伙伴一直留空，12 个主线程在推理线程睡着时由编译使用。不用本地模型时停掉服务，HT 伙伴才归还。OMP/Pi/DSH 直连云端 API 不启动该服务。
 
-`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，构建 slice 权重 100，推理服务设普通调度的 `Nice=-5`。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享编译集合，子 slice 权重分别为 200 和 100。默认推理运行时普通任务共享 80 个逻辑 CPU。runner 配 72 个活动 action，不设 CPU 时间配额：配额用尽时整个 runner cgroup 在该周期剩余时间停转，多线程的链接和编译最先受影响。系统、存储和协调进程靠同级 slice 的权重取得份额。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
+`AllowedCPUs` 定运行位置。`CPUWeight` 决定同级 cgroup 争抢共同 CPU 时的相对份额。推理 slice 权重 200，推理服务设普通调度的 `Nice=-5`。构建 slice 设 `CPUWeight=idle`，不参与按权重分配：同一个 CPU 上有别的 slice 的任务要跑时它几乎不拿时间，对方一醒就被抢占，对方睡着时才运行。已显式放入 `z8build.slice` 的本地构建和远程 runner 共享同一个集合，两个子 slice 之间的权重是 200 和 100。默认推理运行时普通任务共享 80 个逻辑 CPU，编译是 92 个。runner 配 72 个活动 action，不设 CPU 时间配额：配额用尽时整个 runner cgroup 在该周期剩余时间停转，多线程的链接和编译最先受影响。系统、存储和协调进程靠同级 slice 的权重取得份额。并发数包括等待 I/O 和排队取输入的动作。runner 的 `mem_limit: 512g` 跨 DDR4 和 PMem kmem 计费。 [Ubuntu 26.04 systemd 资源控制](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
 
 推理 slice 与 service 都设 `MemoryLow=90G`，等于不在显存里的专家加引擎自己的工作内存。专家共 123 GiB，默认 36 GiB 的显存缓存里那部分在主机上的副本不会被读，剩下约 87 GiB 才需要留在 DDR4，另留约 3 GiB 给引擎。这是给常驻服务挑的起点，之后调显存缓存时不跟着逐 GiB 重算；要改时对 `z8infer.slice` 和 `z8-infer.service` 各执行一次 `sudo systemctl set-property 单元名 MemoryLow=…`。`MemoryLow` 按服务的内存总量计，不分 DDR4 和 PMem，也不是下限：占用约 126 GiB、保护 90G 时，内核对这个服务的回收力度降到约 29%，被挪走的先是最久没读的页，也就是显存里已有的那些专家的副本。llama.cpp 的专家默认是普通内存，绑定在两路 DDR4 上分配，之后可以下沉，也可以被提升回来。 [按比例减轻回收](https://github.com/torvalds/linux/blob/v7.0/mm/vmscan.c#L2458-L2520)`EXPERT_MEMORY=pinned` 时这 123 GiB 是 CUDA 锁页内存，不回收也不下沉，其余任务每路能用的 DDR4 约 30 GiB。 [三种放法](../inference/README.md#llamacpp-v100-主服务) 两路 kmem 以 `ZONE_MOVABLE` 上线，承接可移动的匿名页和文件页。页表、其他不可移动内核内存、ARC 预算及长期锁页仍需给 DDR4 留空间。启动值沿用内核的 `vm.watermark_scale_factor=10`，I7 记录两路 `Normal` 水位、内存 PSI、`allocstall_normal` 和 `kswapd_low_wmark_hit_quickly`，用于定位直接回收和慢层下沉。可迁移页的下沉还取决于慢层是否可用和迁移是否成功。
 
 如果 I7 的多个采样窗口里 `allocstall_normal` 持续增长，同时可见 `Normal` 水位紧张、PSI 或推理尾延迟抬升，在 `/etc/sysctl.d/90-z8-tiering.conf` 加入 `vm.watermark_scale_factor = 100`，执行 `sudo sysctl -p /etc/sysctl.d/90-z8-tiering.conf` 后重复同一负载。只有直接回收或尾延迟改善且构建吞吐可接受时保留该值。无改善时从配置移除该项并执行 `sudo sysctl -w vm.watermark_scale_factor=10` 恢复运行值。服务的 `OOMScoreAdjust=-900` 降低被选作 OOM victim 的优先级。 [Linux cgroup v2 memory.low](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) · [Linux ZONE_MOVABLE](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html#zone-movable) · [Linux 7.0 水位与直接回收计数](https://github.com/torvalds/linux/blob/v7.0/Documentation/admin-guide/sysctl/vm.rst#L1096-L1111)
+
+### 编译共用推理核
+
+推理线程不是一直在算：没有请求时全部睡着，一次请求里显卡在算时也会短暂睡着。这些空档里编译可以用推理的 12 个物理核。按一对 HT 线程约合 1.25 个核、72 个并发动作估算，模型空闲时编译能力多约两成。
+
+让路用 idle 调度，不用权重。按 200 对 100 分时，推理线程持续计算的核上只能拿到三分之二。开发环境的 Linux 6.18 上，一个 CPU 放两个忙循环，对手是权重 100 的组时推理拿到约 66%，是 idle 组时拿到约 99%。Z8 上的实际影响由 I7 对照。 [非 idle 任务唤醒时抢占 idle 任务](https://github.com/torvalds/linux/blob/v7.0/kernel/sched/fair.c#L8856-L8866) · [只跑 idle 任务的 CPU 按空闲选核](https://github.com/torvalds/linux/blob/v7.0/kernel/sched/fair.c#L6893-L6902) · [决定与实测](../../discussion/build-idle-priority.md)
+
+- **代价一**：一次请求中间，推理线程短暂睡眠时编译会插进来，推理线程醒来要先把它换下去。
+- **代价二**：编译相对全机其他任务都是最低优先级。被别的任务占满的核上如果滞留一个持锁的编译进程，等这把锁的进程会被拖住，直到负载均衡把它挪到空闲的核。
+- **长期关掉**：把 `/etc/z8-infer-cpu.env` 里的 `Z8_BUILD_SHARED_CPUS` 改成和 `Z8_BUILD_CPUS` 相同，重启推理服务。
+- **临时关掉**：执行下面的命令，到下次启动推理服务为止。
+
+```bash
+source /etc/z8-infer-cpu.env
+sudo systemctl set-property --runtime z8build.slice "AllowedCPUs=$Z8_BUILD_CPUS"
+```
 
 ## 运行时的 NUMA 内存策略
 
@@ -72,7 +88,7 @@ cat "$layout"/{z8infer.slice,z8-infer-cpu.env,10-z8-cpu.conf}
 )
 ```
 
-安装到这一步，四个 slice 的 `AllowedCPUs` 应与 `Z8_IDLE_CPUS` 一致，共 104 个。四份 drop-in 让重启后也应用空闲集合；启动默认推理时再用运行时属性缩到 80 个。若已有其它 CPU 限制，先用 `systemctl cat` 和 `EffectiveCPUs` 核对合并结果。
+安装到这一步，四个 slice 的 `AllowedCPUs` 应与 `Z8_IDLE_CPUS` 一致，共 104 个。四份 drop-in 让重启后也应用空闲集合；启动默认推理时再用运行时属性把普通任务缩到 80 个、`z8build.slice` 缩到 92 个。若已有其它 CPU 限制，先用 `systemctl cat` 和 `EffectiveCPUs` 核对合并结果。
 
 I5 先完成 [Buildbarn 的软件、目录与单元准备](../storage/README.md#i51-软件目录与单元准备)，再完成上面的 CPU slice 安装。使用 tiered Buildbarn 时，启用 worker 前继续给 runner 加下面的分核配置。走全 XFS 回退时，这里只安装 CPU slice，按回退 Compose 命令应用 runner 分核。Docker 应报告 `systemd 2`，对应 systemd cgroup 驱动和 cgroup v2。runner 启动真正的编译动作。scheduler、worker 协调进程和 CAS 继续由普通服务 CPU 集合管理。
 
@@ -157,7 +173,7 @@ buck2 --isolation-dir z8-build build --local-only -j 8 //path:target
 
 用户态 slice 的 CPU 集合与 IRQ／内核线程亲和性独立。只有推理尾延迟异常且 `mpstat -P ALL 1` 或 `/proc/interrupts` 显示存储／网卡 IRQ 持续落在推理核时，才按实际向量检查 `/proc/irq/<IRQ>/effective_affinity_list`。需迁移时用 irqbalance 的 `IRQBALANCE_BANNED_CPULIST` 排开推理 CPU 和 HT 伙伴，屏蔽值取生成的 `/etc/z8-infer-cpu.env` 中 `Z8_IRQ_BANNED_CPUS`。全局 workqueue、CAT/MBA 保持默认。 [Ubuntu irqbalance](https://manpages.ubuntu.com/manpages/resolute/man1/irqbalance.1.html) · [Linux IRQ affinity](https://docs.kernel.org/core-api/irq/irq-affinity.html)
 
-启动前、运行中、停止后分别检查。对实际 `llama-server` 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。停止模型后，继续跑的 Buck2 或 runner 应恢复到包含推理核及其 HT 伙伴的 104 个逻辑 CPU。构建并发仍由 Buck2 的 `-j` 和 runner 的活动 action 数限制，runner 没有 CPU 时间配额。
+启动前、运行中、停止后分别检查。对实际 `llama-server` 或 Xolotl `ds41_generate`，以及同一个 Buck2 daemon，分别查以下 PID。模型运行中，`z8build.slice` 里的 Buck2 或 runner 应是 92 个逻辑 CPU：编译集合加推理主线程，不含推理的 HT 伙伴。停止模型后，继续跑的 Buck2 或 runner 应恢复到包含推理核及其 HT 伙伴的 104 个逻辑 CPU。构建并发仍由 Buck2 的 `-j` 和 runner 的活动 action 数限制，runner 没有 CPU 时间配额。
 
 ```bash
 systemctl show z8infer.slice z8build.slice z8build-local.slice user.slice \
@@ -182,6 +198,8 @@ bash host/run-step.sh i5-worker tiered
 
 I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时间。另跑一轮“模型预热、并行编译、回到同一段工具对话”，在三个时点各执行一次 `sudo bash host/pmem-numa-report.sh "$(systemctl show -p MainPID --value z8-infer.service)"`，按推理 cgroup 的 `memory.numa_stat` 里 `anon` 一项记两路 DDR4 和两个 kmem 节点的字节数：编译期间 DDR4 上的专家页应让出，回到对话后应回升，同时记同一工具前缀的首字延迟。I6 首次装载就绪时也运行同一条命令，以 `anon` 近似观察专家页的初始分布。它还包含其他匿名分配，`numastat -p` 的总量则另含文件映射；两者都不是逐专家计数。同一份报告按节点列出各内存域的水位和 `numa_*`、`pgdemote_*`、`pgpromote_*` 计数：一路 DDR4 的 `free` 贴近 `low` 而另一路宽裕就是单侧承压，`numa_foreign` 增长的节点是没分到页的一路，`numa_miss` 增长的节点是这些页实际落到的地方。 [计数的含义](https://github.com/torvalds/linux/blob/v7.0/Documentation/admin-guide/numastat.rst)
 
-运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU。停止推理后应还到 104 个。
+运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU、`z8build.slice` 仍为 92 个。停止推理后都应还到 104 个。
+
+**I7 对照编译共用推理核的影响。** 下面三个数各取两遍，一遍按默认，一遍按[上面的命令](#编译共用推理核)临时关掉共用：构建满载时的 decode tok/s，构建满载时长提示词的 `prompt_ms`，模型空闲时同一次构建的墙钟时间。推理低于关掉时的 95%，或者构建没有改善，就长期关掉。
 
 平时停 `z8-infer.service` 即归还推理主线程和 HT 伙伴。若日志报告恢复失败，停服务后手动执行 `sudo /usr/local/libexec/z8-cpu-mode restore` 再核 CPU mask。完全撤销时，先停推理以及已启用的 worker，删除本节安装的 slice、服务与专用 drop-in，执行 `sudo systemctl daemon-reload` 后重启主机。普通任务恢复使用 104 个逻辑 CPU，已启用的 Buildbarn worker 按原 I5 配置启动。
