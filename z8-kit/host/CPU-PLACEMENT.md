@@ -184,4 +184,17 @@ I7 跑固定的正式配置，记录 decode tok/s、TTFT p95 和构建墙钟时�
 
 运行中执行一次 `sudo systemctl daemon-reload`，核默认档普通任务仍为 80 个逻辑 CPU。停止推理后应还到 104 个。
 
+**I7 基线之后可试：模型空闲时让编译用推理核。** 服务在跑但没有请求时，12 个推理主线程空着。不做“有请求就收回、空闲就借出”的守护进程：每次交接都要改 `system.slice` 和 `user.slice` 的 CPU 集合，全机进程跟着迁移一遍。要试就用内核的 idle 调度，把 `z8build.slice` 设成 `CPUWeight=idle`，同时允许它使用推理主线程。推理线程睡着时编译用这些核，推理线程一醒就抢占，没有交接的窗口；推理的 HT 伙伴照旧留空。72 个并发动作用不满 92 个逻辑 CPU，所以借出的物理核和停服后全部归还时一样，都是 12 个。 [非 idle 任务唤醒时抢占 idle 任务](https://github.com/torvalds/linux/blob/v7.0/kernel/sched/fair.c#L8856-L8866) · [只跑 idle 任务的 CPU 按空闲选核](https://github.com/torvalds/linux/blob/v7.0/kernel/sched/fair.c#L6893-L6902) · [Ubuntu 26.04 的 `CPUWeight=idle`](https://manpages.ubuntu.com/manpages/resolute/man5/systemd.resource-control.5.html)
+
+```bash
+# 在推理服务启动之后执行。只在本次开机内有效，服务重启会把 CPU 集合改回去。
+source /etc/z8-infer-cpu.env
+infer=$(systemctl show -p AllowedCPUs --value z8infer.slice)
+sudo systemctl set-property --runtime z8build.slice CPUWeight=idle "AllowedCPUs=$Z8_BUILD_CPUS $infer"
+# 恢复。
+sudo systemctl set-property --runtime z8build.slice CPUWeight=100 "AllowedCPUs=$Z8_BUILD_CPUS"
+```
+
+对照两组数：模型空闲时同一次构建的墙钟时间，构建满载时的 decode tok/s 和长提示词的 `prompt_ms`。推理不低于基线的 95% 且构建确有改善，才把这两项写进生成器。已知的两个代价都要在这次对照里看：一次请求中间 CPU 线程短暂睡眠时，编译会插进来；编译相对全机其他任务都变成最低优先级，被推理占满的核上如果滞留一个持锁的编译进程，等这把锁的进程会被拖住，直到负载均衡把它挪走。
+
 平时停 `z8-infer.service` 即归还推理主线程和 HT 伙伴。若日志报告恢复失败，停服务后手动执行 `sudo /usr/local/libexec/z8-cpu-mode restore` 再核 CPU mask。完全撤销时，先停推理以及已启用的 worker，删除本节安装的 slice、服务与专用 drop-in，执行 `sudo systemctl daemon-reload` 后重启主机。普通任务恢复使用 104 个逻辑 CPU，已启用的 Buildbarn worker 按原 I5 配置启动。
